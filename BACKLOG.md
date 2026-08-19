@@ -2,15 +2,14 @@
 
 ## Next
 
-**M4: fileio IOP service (SID 0x80000001).**
-The game binds and calls; no service answers. PS2Recomp does not emulate the IOP
-CPU or load IRX binaries. It high-level-emulates services per game, and three
-profiles exist (RE Code Veronica X, LOTR Two Towers, Fatal Frame). GH2 needs one.
+**M4 fileio IOP service (SID 0x80000001).** In progress, see `notes/m4-progress.md`.
 
-- Verify RPC numbers against ps2sdk. Observed so far: `rpc=0xff` (8 bytes, two
-  guest pointers) and `rpc=0xc` (39 bytes, leading command selector). Two samples.
-- Route to the runtime's existing host file I/O. `fioOpen` and related calls
-  worked during M2.
+An instrumented service is registered and absorbing the calls
+(`patches/0004`). GH2's request layout is captured: a 16-byte header followed by
+an inline path. The game is asking for `cdrom0:\GEN\MAIN.HDR;1`.
+
+- Implement fn=0x0c as open, with cdrom0 path translation.
+- Identify read, lseek and close by observing subsequent calls.
 - Done when the game reads `GEN/MAIN.HDR`, then `MAIN_0.ARK`.
 
 ## Subsequent
