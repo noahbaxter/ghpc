@@ -78,6 +78,29 @@ t=p.read_text()
 t=re.sub(r'^output\s*=.*$', f'output = "{out}/"', t, flags=re.M)
 p.write_text(t)
 PY
+  # Drop stubs we refuse to let the analyzer bind (see config/stub-denylist.txt)
+  python3 - "$WORK/gh2.toml" "$ROOT/config/stub-denylist.txt" <<'PYDENY'
+import sys,re,pathlib
+toml,deny = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+names = {l.strip() for l in deny.read_text().splitlines()
+         if l.strip() and not l.startswith('#')}
+t = toml.read_text()
+m = re.search(r'^(stubs\s*=\s*\[)(.*?)(\])', t, re.S|re.M)
+if m and names:
+    kept, dropped = [], []
+    for item in m.group(2).split(','):
+        s = item.strip()
+        if not s: continue
+        (dropped if s.strip('"').split('@')[0] in names else kept).append(s)
+    block = m.group(1) + "\n  " + ",\n  ".join(kept) + "\n" + m.group(3)
+    # no_reloc_bind also stops callsite relocation auto-binding, which the
+    # stubs list alone does not cover.
+    block += "\nno_reloc_bind = [\n  " + ",\n  ".join(f'"{n}"' for n in sorted(names)) + "\n]"
+    t = t[:m.start()] + block + t[m.end():]
+    toml.write_text(t)
+    print(f"  denylist: dropped {len(dropped)} stub(s), kept {len(kept)}, no_reloc_bind={len(names)}")
+    for d in dropped: print(f"    - {d}")
+PYDENY
   rm -rf "$GEN"; mkdir -p "$GEN"
   "$BUILD/ps2xRecomp/ps2_recomp" "$WORK/gh2.toml" > "$WORK/recomp.log" 2>&1 || {
     warn "recompiler failed, tail of work/recomp.log:"; tail -20 "$WORK/recomp.log"; exit 1; }

@@ -1,0 +1,141 @@
+diff --git a/ps2xRecomp/include/ps2recomp/code_generator.h b/ps2xRecomp/include/ps2recomp/code_generator.h
+index 1bdf0f6..6e1fddb 100644
+--- a/ps2xRecomp/include/ps2recomp/code_generator.h
++++ b/ps2xRecomp/include/ps2recomp/code_generator.h
+@@ -51,6 +51,7 @@ namespace ps2recomp
+         void setRenamedFunctions(const std::unordered_map<uint32_t, std::string> &renames);
+         void setBootstrapInfo(const BootstrapInfo &info);
+         void setRelocationCallNames(const std::unordered_map<uint32_t, std::string> &callNames);
++        void setNoRelocBind(const std::vector<std::string> &names);
+         void setConfiguredJumpTables(const std::vector<JumpTable> &jumpTables);
+         void setResumeEntryTargets(const std::unordered_map<uint32_t, std::vector<uint32_t>> &resumeTargetsByOwner);
+         void setEmitInstructionComments(bool emitInstructionComments);
+@@ -64,6 +65,7 @@ namespace ps2recomp
+         std::unordered_map<uint32_t, Symbol> m_symbols;
+         std::unordered_map<uint32_t, std::string> m_renamedFunctions;
+         std::unordered_map<uint32_t, std::string> m_relocationCallNames;
++        std::unordered_set<std::string> m_noRelocBind;
+         std::unordered_map<uint32_t, std::vector<uint32_t>> m_configJumpTableTargetsByAddress;
+         std::unordered_map<uint32_t, std::vector<uint32_t>> m_resumeEntryTargetsByOwner;
+         const std::vector<Section>& m_sections;
+diff --git a/ps2xRecomp/include/ps2recomp/types.h b/ps2xRecomp/include/ps2recomp/types.h
+index 39adf9a..38fc79e 100644
+--- a/ps2xRecomp/include/ps2recomp/types.h
++++ b/ps2xRecomp/include/ps2recomp/types.h
+@@ -187,6 +187,7 @@ namespace ps2recomp
+         std::vector<std::string> skipFunctions;
+         std::unordered_map<uint32_t, std::string> patches;
+         std::vector<std::string> stubImplementations;
++        std::vector<std::string> noRelocBind;
+         std::unordered_map<uint32_t, uint32_t> mmioByInstructionAddress;
+         std::vector<JumpTable> jumpTables;
+     };
+diff --git a/ps2xRecomp/src/lib/code_generator.cpp b/ps2xRecomp/src/lib/code_generator.cpp
+index 68b0984..a875ca5 100644
+--- a/ps2xRecomp/src/lib/code_generator.cpp
++++ b/ps2xRecomp/src/lib/code_generator.cpp
+@@ -120,6 +120,12 @@ namespace ps2recomp
+         m_relocationCallNames = callNames;
+     }
+ 
++    void CodeGenerator::setNoRelocBind(const std::vector<std::string> &names)
++    {
++        m_noRelocBind.clear();
++        m_noRelocBind.insert(names.begin(), names.end());
++    }
++
+     void CodeGenerator::setConfiguredJumpTables(const std::vector<JumpTable> &jumpTables)
+     {
+         m_configJumpTableTargetsByAddress.clear();
+diff --git a/ps2xRecomp/src/lib/config_manager.cpp b/ps2xRecomp/src/lib/config_manager.cpp
+index b6f382d..02086b8 100644
+--- a/ps2xRecomp/src/lib/config_manager.cpp
++++ b/ps2xRecomp/src/lib/config_manager.cpp
+@@ -74,6 +74,15 @@ namespace ps2recomp
+                 config.stubImplementations = toml::find<std::vector<std::string>>(data, "stubs");
+             }
+ 
++            if (general.contains("no_reloc_bind") && general.at("no_reloc_bind").is_array())
++            {
++                config.noRelocBind = toml::find<std::vector<std::string>>(general, "no_reloc_bind");
++            }
++            else if (data.contains("no_reloc_bind") && data.at("no_reloc_bind").is_array())
++            {
++                config.noRelocBind = toml::find<std::vector<std::string>>(data, "no_reloc_bind");
++            }
++
+             if (general.contains("skip") && general.at("skip").is_array())
+             {
+                 config.skipFunctions = toml::find<std::vector<std::string>>(general, "skip");
+diff --git a/ps2xRecomp/src/lib/control_flow_emitter.cpp b/ps2xRecomp/src/lib/control_flow_emitter.cpp
+index 4bf8dc5..cd59738 100644
+--- a/ps2xRecomp/src/lib/control_flow_emitter.cpp
++++ b/ps2xRecomp/src/lib/control_flow_emitter.cpp
+@@ -295,6 +295,17 @@ namespace ps2recomp
+         const bool isSyscall = !resolvedSyscallName.empty();
+         const std::string_view handlerName = isSyscall ? resolvedSyscallName : resolvedStubName;
+ 
++        // A symbolized ELF statically links SDK code, so a relocation symbol can name a
++        // real function with a real body rather than an SDK import. Redirecting those
++        // callsites throws away working behaviour, so let the configured denylist win
++        // over the name match.
++        if (!m_gen.m_noRelocBind.empty() &&
++            (m_gen.m_noRelocBind.count(std::string(relocIt->second)) != 0 ||
++             m_gen.m_noRelocBind.count(std::string(handlerName)) != 0))
++        {
++            return false;
++        }
++
+         m_ss << indent << "{\n";
+         if (kind == StaticBranchKind::Call)
+         {
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index ab779a4..3451d06 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -913,6 +913,7 @@ namespace ps2recomp
+                 }
+             }
+             m_codeGenerator->setRelocationCallNames(relocationCallNames);
++            m_codeGenerator->setNoRelocBind(m_config.noRelocBind);
+             m_codeGenerator->setBootstrapInfo(m_bootstrapInfo);
+             m_codeGenerator->setConfiguredJumpTables(m_config.jumpTables);
+             m_codeGenerator->setEmitInstructionComments(true);
+@@ -2022,6 +2023,17 @@ namespace ps2recomp
+ 
+     bool PS2Recompiler::isStubFunction(const Function &function) const
+     {
++        // A denied name keeps its real recompiled body. With a symbolized ELF a
++        // function named sceFsSemInit is the game's own statically linked SDK code,
++        // not an import that a runtime handler should stand in for. Checked first so
++        // the denylist wins over the address bindings and the bare name match alike.
++        if (!m_config.noRelocBind.empty() &&
++            std::find(m_config.noRelocBind.begin(), m_config.noRelocBind.end(), function.name) !=
++                m_config.noRelocBind.end())
++        {
++            return false;
++        }
++
+         if (m_stubFunctionStarts.contains(function.start))
+         {
+             return true;
+@@ -2065,6 +2077,19 @@ namespace ps2recomp
+         const auto bindingIt = m_stubHandlerBindingsByStart.find(function.start);
+         if (bindingIt != m_stubHandlerBindingsByStart.end() && !bindingIt->second.empty())
+             handlerName = bindingIt->second;
++        // A denied name keeps its real recompiled body. Our ELF is symbolized, so a
++        // function called sceFsSemInit is the game's own statically linked SDK code,
++        // not an import that a runtime handler should stand in for.
++        if (!m_config.noRelocBind.empty())
++        {
++            const auto &denied = m_config.noRelocBind;
++            if (std::find(denied.begin(), denied.end(), function.name) != denied.end() ||
++                std::find(denied.begin(), denied.end(), handlerName) != denied.end())
++            {
++                return false;
++            }
++        }
++
+         return resolveStubTarget(handlerName) != StubTarget::Unknown;
+     }
+ 

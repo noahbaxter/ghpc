@@ -1,0 +1,18 @@
+# Symbols the analyzer wants to stub but that we refuse to replace.
+#
+# The analyzer binds stubs by matching game symbols against runtime handler
+# names. Our ELF is symbolized, so it offers 12,663 names to collide with.
+# When the game already contains a working implementation, replacing it with a
+# runtime handler deletes real behaviour. GetRomName was the first case; this
+# is the second.
+#
+# One symbol per line. Matched against the name before the "@address".
+
+# Sony CDVD filesystem client, statically linked into the ELF.
+# sceFsInit is where the SIF RPC bind happens. Stubbing it left the game
+# calling sceFsSifCallRpc (real code) against an unbound client, so every call
+# returned an error and the game spun in its retry loop forever.
+sceFsInit
+sceFsReset
+_sceFsSemInit
+_sceFsSigSema
