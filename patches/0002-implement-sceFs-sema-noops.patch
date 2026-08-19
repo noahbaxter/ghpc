@@ -1,0 +1,55 @@
+--- /tmp/FileIO.cpp.orig	2026-08-19 00:21:06
++++ third_party/PS2Recomp/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp	2026-08-19 00:21:06
+@@ -5,27 +5,47 @@
+ {
+     void sceFsDbChk(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        TODO_NAMED("sceFsDbChk", rdram, ctx, runtime);
++        // CDVD filesystem lock helpers. The runtime services file I/O
++        // synchronously on the host, so there is nothing to serialise and
++        // success is the correct answer rather than a hard stop.
++        (void)rdram; (void)runtime;
++        setReturnS32(ctx, 0);
+     }
+ 
+     void sceFsIntrSigSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        TODO_NAMED("sceFsIntrSigSema", rdram, ctx, runtime);
++        // CDVD filesystem lock helpers. The runtime services file I/O
++        // synchronously on the host, so there is nothing to serialise and
++        // success is the correct answer rather than a hard stop.
++        (void)rdram; (void)runtime;
++        setReturnS32(ctx, 0);
+     }
+ 
+     void sceFsSemExit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        TODO_NAMED("sceFsSemExit", rdram, ctx, runtime);
++        // CDVD filesystem lock helpers. The runtime services file I/O
++        // synchronously on the host, so there is nothing to serialise and
++        // success is the correct answer rather than a hard stop.
++        (void)rdram; (void)runtime;
++        setReturnS32(ctx, 0);
+     }
+ 
+     void sceFsSemInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        TODO_NAMED("sceFsSemInit", rdram, ctx, runtime);
++        // CDVD filesystem lock helpers. The runtime services file I/O
++        // synchronously on the host, so there is nothing to serialise and
++        // success is the correct answer rather than a hard stop.
++        (void)rdram; (void)runtime;
++        setReturnS32(ctx, 0);
+     }
+ 
+     void sceFsSigSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        TODO_NAMED("sceFsSigSema", rdram, ctx, runtime);
++        // CDVD filesystem lock helpers. The runtime services file I/O
++        // synchronously on the host, so there is nothing to serialise and
++        // success is the correct answer rather than a hard stop.
++        (void)rdram; (void)runtime;
++        setReturnS32(ctx, 0);
+     }
+ 
+     void close(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

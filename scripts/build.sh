@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Build pipeline: GH2 PS2 ELF -> recompiled C++ -> native binary.
+#
+#   ./scripts/build.sh              # full pipeline
+#   ./scripts/build.sh --from=build # skip recompile, just rebuild
+#   ./scripts/build.sh --run        # build then launch
+#   ./scripts/build.sh --no-unity   # one TU per function (slow, better errors)
+#   ./scripts/build.sh --to=stage   # stop before the long compile
+#   ./scripts/build.sh --restore    # put PS2Recomp's stock runner back
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PS2R="$ROOT/third_party/PS2Recomp"
+BUILD="$PS2R/build"
+RUNNER="$PS2R/ps2xRuntime/src/runner"
+WORK="$ROOT/work"
+GEN="$WORK/output"
+ELF="$WORK/GH2_debug.elf"
+SRC_ELF="$ROOT/third_party/milo-executable-library/gh2/PS2 Final Debug/SLUS_214.47"
+JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"
+
+FROM=all; TO=build; RUN=0; UNITY=ON; RESTORE=0
+for a in "$@"; do case "$a" in
+  --from=*)   FROM="${a#*=}" ;;
+  --to=*)     TO="${a#*=}" ;;
+  --run)      RUN=1 ;;
+  --no-unity) UNITY=OFF ;;
+  --restore)  RESTORE=1 ;;
+  -h|--help)  sed -n '2,9p' "$0"; exit 0 ;;
+  *) echo "unknown arg: $a" >&2; exit 2 ;;
+esac; done
+
+b(){ printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+ok(){ printf '\033[1;32m    %s\033[0m\n' "$*"; }
+warn(){ printf '\033[1;33m    %s\033[0m\n' "$*"; }
+t0=$SECONDS; stage_t(){ printf '\033[2m    [%ds]\033[0m\n' "$((SECONDS-t0))"; }
+
+if [ "$RESTORE" = 1 ]; then
+  b "Restoring stock runner"
+  rm -rf "$RUNNER"; mkdir -p "$RUNNER"
+  git -C "$PS2R" checkout -- ps2xRuntime/src/runner 2>/dev/null || true
+  ok "done"; exit 0
+fi
+
+idx(){ local order="tools recomp stage build" i=0 s
+  for s in $order; do [ "$s" = "$1" ] && { echo $i; return; }; i=$((i+1)); done; echo -1; }
+want(){
+  local cur; cur=$(idx "$1")
+  local lo=0; [ "$FROM" != all ] && lo=$(idx "$FROM")
+  local hi; hi=$(idx "$TO")
+  [ "$cur" -ge "$lo" ] && [ "$cur" -le "$hi" ]
+}
+
+command -v ccache >/dev/null && LAUNCHER="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache" || LAUNCHER=""
+
+# ---------------------------------------------------------------- tools
+if want tools; then
+  b "1/4  Building recompiler + analyzer"
+  cmake -S "$PS2R" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=ON \
+    -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
+    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY $LAUNCHER
+  cmake --build "$BUILD" --target ps2_recomp ps2_analyzer -j "$JOBS"
+  ok "ps2_recomp + ps2_analyzer ready"; stage_t
+fi
+
+# ---------------------------------------------------------------- recomp
+if want recomp; then
+  b "2/4  Recompiling GH2 ELF -> C++"
+  mkdir -p "$WORK"
+  [ -f "$ELF" ] || { cp "$SRC_ELF" "$ELF"; ok "staged $(basename "$SRC_ELF")"; }
+  "$BUILD/ps2xAnalyzer/ps2_analyzer" "$ELF" "$WORK/gh2.toml" | tail -8
+  # analyzer writes absolute-ish paths; make sure output lands in $GEN
+  python3 - "$WORK/gh2.toml" "$GEN" <<'PY'
+import sys,re,pathlib
+p,out=pathlib.Path(sys.argv[1]),sys.argv[2]
+t=p.read_text()
+t=re.sub(r'^output\s*=.*$', f'output = "{out}/"', t, flags=re.M)
+p.write_text(t)
+PY
+  rm -rf "$GEN"; mkdir -p "$GEN"
+  "$BUILD/ps2xRecomp/ps2_recomp" "$WORK/gh2.toml" > "$WORK/recomp.log" 2>&1 || {
+    warn "recompiler failed, tail of work/recomp.log:"; tail -20 "$WORK/recomp.log"; exit 1; }
+  tail -3 "$WORK/recomp.log"
+  ok "$(find "$GEN" -name '*.cpp' | wc -l | tr -d ' ') .cpp files, $(du -sh "$GEN" | cut -f1)"
+  warn "$(grep -c 'unresolved JR/JALR' "$WORK/recomp.log" || true) unresolved-indirect-jump sites -> work/recomp.log"
+  stage_t
+fi
+
+# ---------------------------------------------------------------- stage
+if want stage; then
+  b "3/4  Staging generated code into runner"
+  [ -d "$RUNNER.stock" ] || { cp -r "$RUNNER" "$RUNNER.stock"; ok "backed up stock runner"; }
+  mkdir -p "$RUNNER"
+  rsync -a --delete --include='*.cpp' --include='*.h' --exclude='*' "$GEN/" "$RUNNER/"
+  ok "$(find "$RUNNER" -type f | wc -l | tr -d ' ') files staged"; stage_t
+fi
+
+# ---------------------------------------------------------------- build
+if want build; then
+  b "4/4  Building ps2EntryRunner  (unity=$UNITY, -j$JOBS)"
+  warn "this is the long one: ~12.7k generated files"
+  cmake -S "$PS2R" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=ON \
+    -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
+    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY $LAUNCHER > /dev/null
+  cmake --build "$BUILD" --target ps2EntryRunner -j "$JOBS"
+  ok "binary: $BUILD/ps2xRuntime/ps2EntryRunner"
+  ls -lh "$BUILD/ps2xRuntime/ps2EntryRunner" | awk '{print "    size: "$5}'
+  stage_t
+fi
+
+command -v ccache >/dev/null && ccache -s 2>/dev/null | grep -iE 'hits|misses' | head -3 || true
+
+if [ "$RUN" = 1 ]; then
+  b "Launching"
+  cd "$WORK" && "$BUILD/ps2xRuntime/ps2EntryRunner" "$ELF" 2>&1 | tee "$WORK/run.log"
+fi
+
+b "Done in $((SECONDS-t0))s"

@@ -1,0 +1,9 @@
+third_party/
+build/
+out/
+*.ELF
+*.elf
+*.iso
+*.chd
+work/
+.DS_Store
