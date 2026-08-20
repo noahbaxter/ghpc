@@ -278,6 +278,12 @@ public:
     void postEvent(EeEvent event);
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
     void accountCycles(uint32_t cycles) noexcept;
+    // True from the moment checkpointDue() decides to yield until the scheduler
+    // regains control. The host stack unwinds through arbitrarily many frames in
+    // between, and those frames must not interpret ctx->pc as a call result.
+    [[nodiscard]] bool yieldInFlight() const noexcept;
+    void clearYieldInFlight() noexcept;
+
     [[nodiscard]] bool isExecutingGuest() const noexcept;
 
     // Kernel object API. All calls except postEvent/requestStop execute on the
@@ -428,6 +434,7 @@ private:
     std::atomic<bool> m_guestExecuting{false};
     std::atomic<bool> m_stopRequested{false};
     std::atomic<bool> m_checkpointPending{false};
+    std::atomic<bool> m_yieldInFlight{false};
     uint32_t m_debugPublishCountdown = 0u;
 
     mutable std::mutex m_eventMutex;

@@ -289,6 +289,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_sliceEndCycle = kDefaultTimeSliceCycles;
     m_stopRequested.store(false, std::memory_order_release);
     m_checkpointPending.store(false, std::memory_order_release);
+    m_yieldInFlight.store(false, std::memory_order_release);
     m_debugPublishCountdown = 0u;
     {
         std::lock_guard lock(m_eventMutex);
@@ -506,6 +507,9 @@ void EeScheduler::run()
             continue;
         }
 
+        // The unwind is over and context.pc is the real resume point again.
+        clearYieldInFlight();
+
         try
         {
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
@@ -598,6 +602,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     if (m_checkpointPending.load(std::memory_order_acquire) ||
         m_stopRequested.load(std::memory_order_acquire))
     {
+        m_yieldInFlight.store(true, std::memory_order_release);
         return true;
     }
 
@@ -605,6 +610,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     if (nextEventCycle != 0u && m_eeCycle >= nextEventCycle)
     {
         m_checkpointPending.store(true, std::memory_order_release);
+        m_yieldInFlight.store(true, std::memory_order_release);
         return true;
     }
 
@@ -618,6 +624,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
     {
         m_rescheduleRequested = true;
         m_timeSliceExpired = true;
+        m_yieldInFlight.store(true, std::memory_order_release);
         return true;
     }
 
@@ -643,6 +650,16 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
     {
         m_checkpointPending.store(true, std::memory_order_release);
     }
+}
+
+bool EeScheduler::yieldInFlight() const noexcept
+{
+    return m_yieldInFlight.load(std::memory_order_acquire);
+}
+
+void EeScheduler::clearYieldInFlight() noexcept
+{
+    m_yieldInFlight.store(false, std::memory_order_release);
 }
 
 bool EeScheduler::isExecutingGuest() const noexcept

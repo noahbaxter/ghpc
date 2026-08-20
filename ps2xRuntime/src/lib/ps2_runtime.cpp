@@ -1482,6 +1482,19 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         return false;
     }
 
+    // A checkpoint can fire before the callee runs a single instruction, which
+    // unwinds the host stack with ctx->pc parked on the callee entry so the
+    // scheduler can resume it. That is indistinguishable by pc alone from a
+    // stub that returned without touching pc, and the two collide whenever the
+    // parked address equals this frame's own target -- the recursive
+    // DataArray::Load / DataNode::Load parser hits it. Rewriting pc there
+    // discards the resume point and swallows the call, leaving the element
+    // unwritten. Let the unwind through untouched instead.
+    if (m_eeScheduler && m_eeScheduler->yieldInFlight())
+    {
+        return false;
+    }
+
     if (ctx->pc == entryPc)
     {
         ctx->pc = fallthroughPc;

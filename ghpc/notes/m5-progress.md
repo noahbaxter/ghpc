@@ -364,3 +364,97 @@ furthest this port has run.
 Consequence to watch: the save persists and changes the next boot. See the
 BACKLOG entry on `checkrun.sh`'s baseline depending on `work/mc0`. The save from
 this session is preserved at `work/mc0.saved-by-autopad`.
+
+## `Debug::Fail` at `ui/ui.dtb:54` traced to a `DataArray::Load` splice defect
+
+The clean-source build dies on an assert whose text was truncated to `Data (`.
+The message is formatted at runtime into `gBuf` (`0x5a5c80`, `.bss`), so it does
+not exist in the ELF and only a live dump recovers it. The truncation was the
+probe stopping at the first non-printable byte, which is the newline after
+`Data (`. Full text:
+
+    Data ('screen_back' {'helpbar' 'set_display' {$this 'get_help_text' ( )}} invalid)
+     is not Command (file ui/ui.dtb, line 54)
+
+`invalid` is the print name for a type 6 `unhandled` node. That is a legitimate
+DTA keyword and is exactly what the disc contains, not corruption.
+
+### Verified
+
+- All 179 DTBs in the ARK parse byte-exact with zero trailing bytes. The data is
+  not at fault.
+- The assert is raised by `DataNode::Command` (`0x3058d0`), called from
+  `DataArray::ExecuteScript+0x24c`, which runs `Node(i)->Command(parent)->Execute()`.
+  One rejection in 79 calls.
+- The executed array is `ui/ui.dtb:54` after `#include` splicing, 241 nodes.
+  On disc that array holds 2 nodes (`symbol 'init'`, `include 'init.dta'`).
+  Modelling recursive include splicing plus `#define` name+body pair consumption
+  reproduces 241 exactly, which validates the model.
+- Exactly 2 of the 241 elements are wrong. Index 14 should be the command at
+  `manage_bands.dta:234`; it holds the array at `:225`, which is the last child
+  of index 13 (`{new GHScreen nameprof_screen ...}` at `:131`). Index 15 is
+  shifted by one and the real last root element, `:239`, is dropped. Net count is
+  unchanged, which is why the size looked correct.
+- The splice lives inside `DataArray::Load` (`0x2fc9d0`). `InsertNodes` is reached
+  only from `DataInsertElems` (the DTA `insert_elems` function) and is not on the
+  include path.
+- `Load`'s include branch computes `newTotal = oldTotal - 1 + incSize`, which is
+  correct, then copies with a `Node(i)` / `DataNode::operator=` loop at
+  `0x2fce88..0x2fceb8`. The branch-likely at the loop back edge is translated
+  correctly (delay slot annulled when not taken).
+
+### Ruled out
+
+- Corrupt ARK data, corrupt DTB, or a bogus type tag.
+- `host0:` as a data path. `cdrom0:` serves `GEN/MAIN.HDR` in full (5 reads
+  totalling 78602 bytes, the exact file size). The two `host0:` probes occur
+  after the assert and come from the crash handler looking for an ELF to
+  symbolicate its trace, which the on-screen "Couldn't find ELF for trace"
+  confirms.
+- The `file ui/ui.dtb, line 54` provenance being wrong. It is the include site,
+  and the single-frame data stack trace is consistent. Correct behavior, and a
+  trap worth not chasing.
+
+### Root cause (fixed)
+
+Not the include splice. The splice copy loop is lockstep on `$s2`/`$s4`, so it
+cannot shift by one mid-copy, and the corruption is the same shape at every
+nesting level. Tracing `DataArray::Load` per element against the on-disc tree
+puts the innermost divergence at `manage_bands.dta:156`, whose 3 elements load
+as `[symbol, int, array(:156)]` instead of `[symbol, array(:156),
+command(:157)]`. A byte counter on `BinStream::Read` shows the stream never
+desyncs: element 0 is read at 142943, element 2 at 142966, exactly 23 bytes
+later. Element 1 is simply never written, and reads back as allocator garbage
+that happens to look like a type 0 `int`. `command(:157)` then falls out of the
+array and the parent picks it up, and that shift propagates up six levels to
+`ui.dtb:54`.
+
+The skipped write is `PS2Runtime::dispatchGuestBranch`:
+
+    const uint32_t entryPc = ctx->pc;
+    targetFn(rdram, ctx, this);
+    ...
+    if (ctx->pc == entryPc) { ctx->pc = fallthroughPc; }
+
+`entryPc` is just `targetPc`. The rewrite exists so a stub that returns without
+touching `pc` still reads as a completed call. But a checkpoint can fire before
+the callee runs an instruction, which unwinds the host stack with `ctx->pc`
+parked on the callee entry so the scheduler can resume it. By `pc` alone the two
+are identical, and they collide whenever the parked address equals the frame's
+own target. The recursive `DataArray::Load` / `DataNode::Load` parser is exactly
+that: an inner `Load` yields on its call to `0x306258` while an outer frame is
+mid-call to `0x306258`. The outer frame rewrites `pc` to its fallthrough, the
+resume point is gone, and the element is never loaded.
+
+It fires once in 80756 dispatches of `DataNode::Load`, which is why the damage
+was a single node.
+
+Fix: an explicit `yieldInFlight` latch on `EeScheduler`, set on every yielding
+return from `checkpointDue` and cleared when the scheduler is about to run guest
+code again. `dispatchGuestBranch` returns false while it is set rather than
+interpreting `ctx->pc`. After the fix the assert is gone, `DataNode::Command`
+rejects nothing in 79 calls, and boot reaches the VIF1 render loop.
+
+Reading `pc` to infer what a guest call did is unsound in general: any frame in
+the unwind can alias a resume point. Other sites that guess at control flow from
+`ctx->pc` are worth auditing on the same grounds.
