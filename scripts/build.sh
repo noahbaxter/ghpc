@@ -6,12 +6,14 @@
 #   ./scripts/build.sh --run        # build then launch
 #   ./scripts/build.sh --no-unity   # one TU per function (slow, better errors)
 #   ./scripts/build.sh --to=stage   # stop before the long compile
+#   ./scripts/build.sh --fast       # drop LTO, ~90s off every relink
+#   ./scripts/build.sh --debug      # bring-up diagnostics: thread census, GS/CD/ARK tracing
 #   ./scripts/build.sh --restore    # put PS2Recomp's stock runner back
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PS2R="$ROOT/third_party/PS2Recomp"
-BUILD="$PS2R/build"
+BUILD="$PS2R/build"   # recomputed after arg parsing (see DIAG)
 RUNNER="$PS2R/ps2xRuntime/src/runner"
 WORK="$ROOT/work"
 GEN="$WORK/output"
@@ -19,16 +21,22 @@ ELF="$WORK/GH2_debug.elf"
 SRC_ELF="$ROOT/third_party/milo-executable-library/gh2/PS2 Final Debug/SLUS_214.47"
 JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"
 
-FROM=all; TO=build; RUN=0; UNITY=ON; RESTORE=0
+FROM=all; TO=build; RUN=0; UNITY=ON; RESTORE=0; LTO=ON; DIAG=OFF
 for a in "$@"; do case "$a" in
   --from=*)   FROM="${a#*=}" ;;
   --to=*)     TO="${a#*=}" ;;
   --run)      RUN=1 ;;
   --no-unity) UNITY=OFF ;;
+  --fast)     LTO=OFF ;;
+  --debug)    DIAG=ON ;;
   --restore)  RESTORE=1 ;;
-  -h|--help)  sed -n '2,9p' "$0"; exit 0 ;;
+  -h|--help)  sed -n '2,11p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
+
+# Debug and release live in separate build trees so they coexist and neither
+# forces a full recompile of the other when you switch.
+[ "$DIAG" = ON ] && BUILD="$PS2R/build-debug"
 
 b(){ printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok(){ printf '\033[1;32m    %s\033[0m\n' "$*"; }
@@ -59,7 +67,7 @@ if want tools; then
   cmake -S "$PS2R" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=ON \
     -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
-    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY $LAUNCHER
+    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY -DPS2X_ENABLE_LTO=$LTO -DPS2X_GHPC_DIAG=$DIAG $LAUNCHER
   cmake --build "$BUILD" --target ps2_recomp ps2_analyzer -j "$JOBS"
   ok "ps2_recomp + ps2_analyzer ready"; stage_t
 fi
@@ -121,12 +129,12 @@ fi
 
 # ---------------------------------------------------------------- build
 if want build; then
-  b "4/4  Building ps2EntryRunner  (unity=$UNITY, -j$JOBS)"
+  b "4/4  Building ps2EntryRunner  (unity=$UNITY, lto=$LTO, diag=$DIAG, -j$JOBS)"
   warn "this is the long one: ~12.7k generated files"
   cmake -S "$PS2R" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=ON \
     -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
-    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY $LAUNCHER > /dev/null
+    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY -DPS2X_ENABLE_LTO=$LTO -DPS2X_GHPC_DIAG=$DIAG $LAUNCHER > /dev/null
   cmake --build "$BUILD" --target ps2EntryRunner -j "$JOBS"
   ok "binary: $BUILD/ps2xRuntime/ps2EntryRunner"
   ls -lh "$BUILD/ps2xRuntime/ps2EntryRunner" | awk '{print "    size: "$5}'

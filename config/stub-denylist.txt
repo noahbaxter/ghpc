@@ -16,3 +16,17 @@ sceFsInit
 sceFsReset
 _sceFsSemInit
 _sceFsSigSema
+
+# The rest of Sony's libfileio. The runtime stubs six of the nine entry points
+# (sceOpen, sceClose, sceRead, sceWrite, sceLseek, sceIoctl) and forwards them
+# to its own fioOpen/fioRead family, but has no stub for sceGetstat, sceMkdir or
+# sceLseek64. That split the filesystem in half: getstat ran the game's real
+# code and reached the fileio RPC service, while open was redirected into the
+# runtime's own descriptor table and called fioOpen with a path it never
+# supplied. Let all nine run for real so one service owns the descriptors.
+sceOpen
+sceClose
+sceRead
+sceWrite
+sceLseek
+sceIoctl
