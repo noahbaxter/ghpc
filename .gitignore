@@ -1,10 +1,14 @@
+# Build output
 /bin/
 /intermediate/
-.vs/
-out
-.vscode
 build
-
+build/
+build-debug/
+out
+out/
+.vs/
+.vscode
+.idea/
 *.exe
 *.ilk
 *.exp
@@ -12,14 +16,35 @@ build
 *.tlog
 *.ipch
 
-# Now we can place the dump code here and test while expand the Runtime
+# Generated from the game ELF. Never commit any of this.
+# Note gitignore does NOT apply to files git already tracks, so anything added
+# here must also be untracked with `git rm --cached` if it was tracked before.
 ps2xRuntime/include/ps2_recompiled_functions.h
 ps2xRuntime/include/ps2_recompiled_stubs.h
 ps2xRuntime/src/runner/ps2_recompiled_functions.cpp
 ps2xRuntime/src/runner/register_functions.cpp
-ps2xRuntime/output
 ps2xRuntime/src/runner
+ps2xRuntime/src/runner.stock/
+ps2xRuntime/output
+
+# Disc-derived: ELFs, extracted game data, recompiled C++, memory cards
+work/
+
+# Reference clones, all re-clonable
+third_party/
+
+# Stills captured from the game
+reference/
+
+# Discs and executables
+*.ELF
+*.elf
+*.iso
+*.chd
+
+# Android
 android/app/.cxx/
 android/local.properties
-android/.gradle/ 
-.idea/
+android/.gradle/
+
+.DS_Store
