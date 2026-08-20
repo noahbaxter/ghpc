@@ -1,3 +1,4 @@
+#include <chrono>
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_cpu_backend.h"
 #include "ps2_log.h"
@@ -8,6 +9,18 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <iomanip>
+#include <cstdlib>
+#if GHPC_DIAG
+int g_ghpcGifPath = 0;
+uint64_t g_ghpcCurTagLo = 0, g_ghpcCurTagHi = 0;
+uint32_t g_ghpcCurNreg = 0, g_ghpcCurFlg = 0;
+unsigned long long g_ghpcBogusTags = 0;
+uint32_t g_ghpcCurReg = 0, g_ghpcCurLoop = 0, g_ghpcCurR = 0;
+uint64_t g_ghpcCurHi = 0;
+uint32_t g_ghpcCurTagOff = 0, g_ghpcCurPktSize = 0;
+unsigned long long g_ghpcTagIndex = 0;
+#endif
 #include <sstream>
 
 namespace
@@ -526,11 +539,33 @@ GSPresentationRequest GS::buildPresentationRequestUnlocked() const
 
 void GS::latchHostPresentationFrame()
 {
+#if GHPC_DIAG
+    {
+        static auto tStat = std::chrono::steady_clock::now();
+        const auto nowStat = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(nowStat - tStat).count() >= 3.0)
+        {
+            tStat = nowStat;
+            std::cerr << "[gs/stat] gifPackets=" << m_nativePackedGIFPacketCount
+                      << " imageUploads=" << m_nativeImageUploadCount << std::endl;
+        }
+    }
+#endif
+
     GSPresentationRequest request{};
     {
         std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
         if (!m_backend || !m_privRegs)
         {
+#if GHPC_DIAG
+            static uint32_t noBackendLogs = 0u;
+            if (noBackendLogs < 3u)
+            {
+                ++noBackendLogs;
+                std::cerr << "[gs/latch] no frame: backend=" << (m_backend ? 1 : 0)
+                          << " privRegs=" << (m_privRegs ? 1 : 0) << std::endl;
+            }
+#endif
             std::lock_guard<std::mutex> presentationLock(m_presentationMutex);
             m_hostPresentationFrame.clear();
             m_hasHostPresentationFrame = false;
@@ -552,8 +587,32 @@ void GS::latchHostPresentationFrame()
     }
 
     const bool hasFrame = static_cast<bool>(frame);
+#if GHPC_DIAG
+    {
+        static uint32_t latchLogs = 0u;
+        static bool lastHasFrame = false;
+        if (latchLogs < 6u || hasFrame != lastHasFrame)
+        {
+            ++latchLogs;
+            lastHasFrame = hasFrame;
+            std::cerr << "[gs/latch] present hasFrame=" << (hasFrame ? 1 : 0)
+                      << " size=" << frame.width << "x" << frame.height
+                      << " displayFbp=" << frame.displayFbp
+                      << " sourceFbp=" << frame.sourceFbp
+                      << " pixels=" << frame.pixels.size() << std::endl;
+        }
+    }
+#endif
+
     const uint32_t displayFbp = frame.displayFbp;
     const uint32_t sourceFbp = frame.sourceFbp;
+#if GHPC_DIAG
+    if (hasFrame)
+    {
+        extern void ghpcNotePresent(uint32_t fbp);
+        ghpcNotePresent(sourceFbp);
+    }
+#endif
     const uint32_t width = frame.width;
     const uint32_t height = frame.height;
     const bool usedPreferred = frame.usedPreferred;
@@ -684,7 +743,36 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
             nreg = 16;
 
         recordGifTagDebugEventUnlocked(sizeBytes, nloop, flg, nreg);
+#if GHPC_DIAG
+        {
+            // Counters on the path actually taken. gifPackets/imageUploads live on
+            // fast paths this build never enters, so they read 0 regardless.
+            static unsigned long long tagsByFlg[4] = {0,0,0,0};
+            static unsigned long long imageQwords = 0ull;
+            ++tagsByFlg[flg & 3u];
+            if ((flg & 3u) == GIF_FMT_IMAGE)
+                imageQwords += nloop;
+            static auto tTag = std::chrono::steady_clock::now();
+            const auto nowTag = std::chrono::steady_clock::now();
+            if (std::chrono::duration<double>(nowTag - tTag).count() >= 3.0)
+            {
+                tTag = nowTag;
+                std::cerr << "[gs/tags] packed=" << tagsByFlg[0]
+                          << " reglist=" << tagsByFlg[1]
+                          << " image=" << tagsByFlg[2]
+                          << " disable=" << tagsByFlg[3]
+                          << " imageQw=" << imageQwords << std::endl;
+            }
+        }
+#endif
 
+#if GHPC_DIAG
+        { extern uint64_t g_ghpcCurTagLo, g_ghpcCurTagHi; extern uint32_t g_ghpcCurNreg, g_ghpcCurFlg;
+          g_ghpcCurTagLo = tagLo; g_ghpcCurTagHi = tagHi; g_ghpcCurNreg = nreg; g_ghpcCurFlg = flg;
+          extern uint32_t g_ghpcCurTagOff, g_ghpcCurPktSize; extern unsigned long long g_ghpcTagIndex;
+          g_ghpcCurTagOff = offset - 16u; g_ghpcCurPktSize = sizeBytes;
+          g_ghpcTagIndex = (offset == 16u) ? 0ull : (g_ghpcTagIndex + 1ull); }
+#endif
         bool pre = ((tagLo >> 46) & 1) != 0;
         if (pre)
         {
@@ -706,6 +794,10 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
                     uint64_t lo = loadLE64(data + offset);
                     uint64_t hi = loadLE64(data + offset + 8);
                     offset += 16;
+#if GHPC_DIAG
+                    { extern uint32_t g_ghpcCurReg, g_ghpcCurLoop, g_ghpcCurR; extern uint64_t g_ghpcCurHi;
+                      g_ghpcCurReg = regs[r]; g_ghpcCurLoop = loop; g_ghpcCurR = r; g_ghpcCurHi = hi; }
+#endif
                     writeRegisterPacked(regs[r], lo, hi);
                 }
             }
@@ -730,6 +822,44 @@ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
             uint32_t imageBytes = nloop * 16;
             if (offset + imageBytes > sizeBytes)
                 imageBytes = sizeBytes - offset;
+#if GHPC_DIAG
+            { extern void ghpcNoteImageFeed(int site, uint32_t bytes); ghpcNoteImageFeed(1, imageBytes); }
+            {
+                // How common are all-zero image payloads overall?
+                extern void ghpcNoteImagePayload(uint32_t bytes, bool allZero);
+                size_t nzAll = 0;
+                for (uint32_t k = 0; k < imageBytes && offset + k < sizeBytes; ++k)
+                    if (data[offset + k]) { nzAll = 1; break; }
+                ghpcNoteImagePayload(imageBytes, nzAll == 0);
+            }
+            if (imageBytes == 512u)
+            {
+                static int shown = 0;
+                size_t nz = 0;
+                for (uint32_t k = 0; k < imageBytes && offset + k < sizeBytes; ++k)
+                    if (data[offset + k]) ++nz;
+                if (shown < 4)
+                {
+                    ++shown;
+                    std::cerr << "[gs/img512] packetBytes=" << sizeBytes
+                              << " tagOffset=" << (offset - 16u)
+                              << " payloadNonZero=" << nz
+                              << " tagLo=0x" << std::hex << tagLo
+                              << " tagHi=0x" << tagHi << std::dec << std::endl;
+                    std::cerr << "[gs/img512] first 32 payload bytes:";
+                    for (uint32_t k = 0; k < 32u && offset + k < sizeBytes; ++k)
+                        std::cerr << " " << std::hex << std::setw(2) << std::setfill('0')
+                                  << (unsigned)data[offset + k] << std::dec << std::setfill(' ');
+                    std::cerr << std::endl;
+                    std::cerr << "[gs/img512] 48 bytes BEFORE the tag:";
+                    const uint32_t from = (offset >= 64u) ? (offset - 64u) : 0u;
+                    for (uint32_t k = from; k + 1u < offset - 16u; ++k)
+                        std::cerr << " " << std::hex << std::setw(2) << std::setfill('0')
+                                  << (unsigned)data[k] << std::dec << std::setfill(' ');
+                    std::cerr << std::endl;
+                }
+            }
+#endif
             processImageData(data + offset, imageBytes);
             offset += imageBytes;
         }
@@ -801,6 +931,9 @@ void GS::uploadImageNativeUnlocked(uint64_t bitbltbuf,
     writeRegisterUnlocked(GS_REG_TRXPOS, trxpos);
     writeRegisterUnlocked(GS_REG_TRXREG, trxreg);
     writeRegisterUnlocked(GS_REG_TRXDIR, trxdir);
+#if GHPC_DIAG
+    { extern void ghpcNoteImageFeed(int site, uint32_t bytes); ghpcNoteImageFeed(2, sizeBytes); }
+#endif
     processImageData(data, sizeBytes);
     ++m_nativeImageUploadCount;
 }
@@ -1067,6 +1200,76 @@ void GS::writeRegister(uint8_t regAddr, uint64_t value)
 
 void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
 {
+#if GHPC_DIAG
+    {
+        static unsigned long long bitblt = 0ull, trxdir = 0ull, tex0 = 0ull, trxpos = 0ull;
+        static uint64_t lastBitblt = 0ull;
+        if (regAddr == GS_REG_TEX0_1 || regAddr == GS_REG_TEX0_2)
+        {
+            // Which TEX0 writes carry an invalid PSM, and what do they look like?
+            const uint32_t psm = (uint32_t)((value >> 20) & 0x3Fu);
+            const uint32_t tbp = (uint32_t)(value & 0x3FFFu);
+            static unsigned long long good = 0, bad = 0;
+            static unsigned long long goodByPath[4] = {0,0,0,0}, badByPath[4] = {0,0,0,0};
+            static int shown = 0;
+            bool ok = false;
+            switch (psm) {
+            case 0x00: case 0x01: case 0x02: case 0x0A:
+            case 0x13: case 0x14: case 0x1B: case 0x24: case 0x2C:
+            case 0x30: case 0x31: case 0x32: case 0x3A: ok = true; break;
+            default: ok = false; break; }
+            if (ok) { ++good; ++goodByPath[::g_ghpcGifPath & 3]; }
+            else {
+                ++bad; ++badByPath[::g_ghpcGifPath & 3];
+                if (shown < 8) { ++shown;
+                    std::cerr << "[gs/tex0bad] raw=0x" << std::hex << value
+                              << " tbp=" << std::dec << tbp
+                              << " psm=0x" << std::hex << psm << std::dec
+                              << " | path=" << ::g_ghpcGifPath
+                              << " tagLo=0x" << std::hex << ::g_ghpcCurTagLo
+                              << " regs=0x" << ::g_ghpcCurTagHi << std::dec
+                              << " nreg=" << ::g_ghpcCurNreg
+                              << " flg=" << ::g_ghpcCurFlg
+                              << " nloop=" << (uint32_t)(::g_ghpcCurTagLo & 0x7FFFu)
+                              << " | regDesc=0x" << std::hex << ::g_ghpcCurReg << std::dec
+                              << " loop=" << ::g_ghpcCurLoop << " r=" << ::g_ghpcCurR
+                              << " hi=0x" << std::hex << ::g_ghpcCurHi << std::dec
+                              << " | tagOff=" << ::g_ghpcCurTagOff
+                              << " pktSize=" << ::g_ghpcCurPktSize
+                              << " tagIdx=" << ::g_ghpcTagIndex
+                              << std::endl; }
+            }
+            static auto tT = std::chrono::steady_clock::now();
+            const auto nT = std::chrono::steady_clock::now();
+            if (std::chrono::duration<double>(nT - tT).count() >= 3.0) {
+                tT = nT;
+                std::cerr << "[gs/tex0] bogusTagsRejected=" << ::g_ghpcBogusTags << std::endl;
+                std::cerr << "[gs/tex0] validPsm=" << good << " invalidPsm=" << bad << " byPath good/bad:";
+                for (int pi = 0; pi < 4; ++pi)
+                    std::cerr << " p" << pi << "=" << goodByPath[pi] << "/" << badByPath[pi];
+                std::cerr << std::endl;
+            }
+        }
+        if (regAddr == GS_REG_BITBLTBUF) { ++bitblt; lastBitblt = value; }
+        else if (regAddr == GS_REG_TRXDIR) ++trxdir;
+        else if (regAddr == GS_REG_TRXPOS) ++trxpos;
+        else if (regAddr == GS_REG_TEX0_1 || regAddr == GS_REG_TEX0_2) ++tex0;
+        static auto tReg = std::chrono::steady_clock::now();
+        const auto nowReg = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(nowReg - tReg).count() >= 3.0)
+        {
+            tReg = nowReg;
+            std::cerr << "[gs/tex] bitbltbuf=" << bitblt
+                      << " trxpos=" << trxpos
+                      << " trxdir=" << trxdir
+                      << " tex0=" << tex0
+                      << std::hex << " lastDBP=0x" << ((lastBitblt >> 32) & 0x3FFFu)
+                      << " lastDPSM=0x" << ((lastBitblt >> 56) & 0x3Fu)
+                      << " lastSBP=0x" << (lastBitblt & 0x3FFFu)
+                      << std::dec << std::endl;
+        }
+    }
+#endif
     const bool interestingReg =
         regAddr == GS_REG_PRIM ||
         regAddr == GS_REG_RGBAQ ||
@@ -1398,6 +1601,9 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
     {
         uint8_t buf[8];
         std::memcpy(buf, &value, 8);
+#if GHPC_DIAG
+        { extern void ghpcNoteImageFeed(int site, uint32_t bytes); ghpcNoteImageFeed(3, 8); }
+#endif
         processImageData(buf, 8);
         break;
     }

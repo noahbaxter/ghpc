@@ -56,6 +56,11 @@ void GifArbiter::drain()
         auto &pkt = m_queue[i];
         if (!pkt.data.empty())
         {
+#if GHPC_DIAG
+            // The queue decouples submit from process, so the path has to be
+            // published here to attribute a packet correctly.
+            { extern int g_ghpcGifPath; g_ghpcGifPath = static_cast<int>(pkt.pathId); }
+#endif
             m_processFn(pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
         }
     }

@@ -7,6 +7,12 @@
 #include "runtime/gs/ps2_gs_memory.h"
 #include "ps2_log.h"
 #include <atomic>
+#include <chrono>
+#include <iomanip>
+#include <map>
+#include <set>
+#include <tuple>
+#include <vector>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -468,6 +474,259 @@ namespace
     }
 }
 
+#if GHPC_DIAG
+// Texture-path evidence. Question: do the regions the guest uploads to line up
+// with the regions draws sample from? Counts live on BeginTransfer/UploadImage/
+// DrawPrimitive, which are the only paths that reach VRAM.
+extern int g_ghpcLastFeedSite;
+namespace GhpcTexDiag
+{
+    struct UpKey { uint32_t dbp, dbw, dpsm, rrw, rrh; 
+        bool operator<(const UpKey &o) const {
+            return std::tie(dbp,dbw,dpsm,rrw,rrh) < std::tie(o.dbp,o.dbw,o.dpsm,o.rrw,o.rrh); } };
+    struct TexKey { uint32_t tbp0, tbw, psm, tw, th, tfx;
+        bool operator<(const TexKey &o) const {
+            return std::tie(tbp0,tbw,psm,tw,th,tfx) < std::tie(o.tbp0,o.tbw,o.psm,o.tw,o.th,o.tfx); } };
+
+    std::map<UpKey, unsigned long long> g_uploads;
+    std::map<TexKey, unsigned long long> g_texDraws;
+    // One bit per 256-byte GS block, set when an upload actually wrote a texel.
+    std::vector<bool> g_blockWritten(16384, false);
+    unsigned long long g_armDir[4] = {0,0,0,0};
+    unsigned long long g_upBytesIn = 0ull;      // bytes handed to UploadImage
+    unsigned long long g_upBytesUnarmed = 0ull; // dropped: no transfer armed
+    unsigned long long g_upBytesBadPsm = 0ull;  // dropped: dpsm has no handler
+    unsigned long long g_texelWrites = 0ull;    // WriteVram calls from uploads
+    unsigned long long g_drawsTme = 0ull, g_drawsNoTme = 0ull;
+    unsigned long long g_sampleHit = 0ull, g_sampleMiss = 0ull; // tbp0 block written?
+
+    inline bool psmHandled(uint32_t psm)
+    {
+        switch (psm) {
+        case GS_PSM_CT32: case GS_PSM_CT24: case GS_PSM_CT16: case GS_PSM_CT16S:
+        case GS_PSM_T8: case GS_PSM_T8H: case GS_PSM_T4: case GS_PSM_T4HL: case GS_PSM_T4HH:
+        case GS_PSM_Z32: case GS_PSM_Z24: case GS_PSM_Z16: case GS_PSM_Z16S:
+            return true;
+        default: return false; }
+    }
+
+    inline void markBlocks(uint32_t dbp, uint32_t bytes)
+    {
+        const uint32_t blocks = (bytes + 255u) / 256u;
+        for (uint32_t b = 0u; b < blocks && (dbp + b) < 16384u; ++b)
+            g_blockWritten[dbp + b] = true;
+    }
+
+    // Per dominant texture: distribution of the RAW index read from VRAM and of
+    // the POST-CLUT colour. Separates "texture data is uniform" from
+    // "CLUT collapses every index to one colour".
+    std::map<uint32_t, unsigned long long> g_rawIdx;   // key: (tbp0<<16)|index
+    std::map<uint32_t, unsigned long long> g_outColor; // key: post-CLUT RGBA
+    unsigned long long g_clutReads = 0ull;
+    std::map<uint32_t, unsigned long long> g_t4Color, g_t4Idx, g_t4UV;
+    uint32_t g_t4Cbp = 0u, g_t4Cpsm = 0u, g_t4Csa = 0u, g_t4Tbp = 0u;
+    const uint8_t *g_t4Vram = nullptr; size_t g_t4VramSize = 0u;
+    bool g_t4Rescanned = false;
+    uint32_t g_t4PosShown = 0u;
+    unsigned long long g_t4RescanSeq = 0ull;
+    uint32_t g_t4ChunkLogs = 0u;
+    std::set<uint32_t> g_texDumped;
+    unsigned long long g_t4HwregChunks = 0ull, g_t4HwregBytes = 0ull;
+    unsigned long long g_t4ImageChunks = 0ull, g_t4ImageBytes = 0ull;
+    unsigned long long g_t4SrcBytes = 0ull, g_t4SrcNonZero = 0ull;
+    unsigned long long g_ghpcT4UploadWrites = 0ull;
+    unsigned long long g_t4RoundTripOk = 0ull, g_t4RoundTripBad = 0ull;
+    uint32_t g_ghpcT4UploadDbp = 0u;
+    unsigned long long g_primType[8] = {0,0,0,0,0,0,0,0};      // tme draws by PRIM type
+    unsigned long long g_samplesByPsm[64] = {0};               // SampleTexture texel fetches
+    unsigned long long g_sampleCalls = 0ull;
+    // Where do textured draws actually land, and does anyone present that buffer?
+    std::map<uint32_t, unsigned long long> g_drawFbp;   // key: (fbp<<8)|psm
+    std::map<uint32_t, unsigned long long> g_primPsm;   // key: (primType<<8)|tex0.psm
+    std::map<uint32_t, unsigned long long> g_presentFbp;
+    unsigned long long g_fragments = 0ull;
+    std::map<uint32_t, unsigned long long> g_fragByFbp; // key: (fbp<<8)|fpsm
+    // Why do 32M fragments produce 4 visible pixels? Count each early-out.
+    unsigned long long g_rejScissor = 0ull, g_rejAlpha = 0ull, g_rejDstAlpha = 0ull,
+                       g_rejZ = 0ull, g_wroteFb = 0ull;
+    unsigned long long g_wroteZeroPixel = 0ull;
+
+    // Attribution: who painted the striped band? Record the last writer of each
+    // pixel on one probe scanline, then dump the run structure once.
+    struct PixRec { uint32_t tbp0, tbw, psm, tw, th, tfx, primType, tme; uint32_t rgba; };
+    PixRec g_row[64] = {};
+    bool g_rowSeen[64] = {};
+    unsigned long long g_rowWrites = 0ull;
+    bool g_rowDumped = false;
+
+    inline void dumpRow()
+    {
+        static auto tRow = std::chrono::steady_clock::now();
+        const auto nowRow = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(nowRow - tRow).count() < 10.0)
+            return;
+        tRow = nowRow;
+        std::cerr << "[gs/row] writes=" << g_rowWrites << " last writer of y=300, x=0..47:" << std::endl;
+        for (uint32_t x = 0u; x < 48u; ++x)
+        {
+            if (!g_rowSeen[x]) { std::cerr << "  x=" << x << " (never written)" << std::endl; continue; }
+            const PixRec &p = g_row[x];
+            std::cerr << "  x=" << x << " rgba=0x" << std::hex << p.rgba << std::dec
+                      << " prim=" << p.primType << " tme=" << p.tme
+                      << " tex0(tbp0=" << p.tbp0 << ",tbw=" << p.tbw
+                      << ",psm=0x" << std::hex << p.psm << std::dec
+                      << ",tw=" << p.tw << ",th=" << p.th << ",tfx=" << p.tfx << ")" << std::endl;
+        }
+    }
+    uint32_t g_lastCbp = 0u, g_lastCpsm = 0u, g_lastCsm = 0u, g_lastCsa = 0u;
+    uint32_t g_lastCbw = 0u, g_lastCou = 0u, g_lastCov = 0u;
+
+    void notePresent(uint32_t fbp) { ++g_presentFbp[fbp]; }
+
+    inline void reportTexels()
+    {
+        std::cerr << "[gs/texel] clutReads=" << g_clutReads
+                  << " lastCLUT cbp=" << g_lastCbp
+                  << " cpsm=0x" << std::hex << g_lastCpsm << std::dec
+                  << " csm=" << g_lastCsm << " csa=" << g_lastCsa
+                  << " texclut(cbw=" << g_lastCbw << ",cou=" << g_lastCou
+                  << ",cov=" << g_lastCov << ")" << std::endl;
+        std::cerr << "[gs/t4] uploadWrites=" << g_ghpcT4UploadWrites
+                  << " roundTripOk=" << g_t4RoundTripOk
+                  << " roundTripBad=" << g_t4RoundTripBad
+                  << " | tbp6956 srcBytes=" << g_t4SrcBytes
+                  << " srcNonZero=" << g_t4SrcNonZero
+                  << " | hwreg=" << g_t4HwregChunks << "chunks/" << g_t4HwregBytes << "B"
+                  << " image=" << g_t4ImageChunks << "chunks/" << g_t4ImageBytes << "B" << std::endl;
+        std::cerr << "[gs/t4] tbp0=" << g_t4Tbp << " cbp=" << g_t4Cbp
+                  << " cpsm=0x" << std::hex << g_t4Cpsm << std::dec << " csa=" << g_t4Csa
+                  << " uvDistinct=" << g_t4UV.size()
+                  << " idxDistinct=" << g_t4Idx.size()
+                  << " colorDistinct=" << g_t4Color.size() << " topColors:";
+        {
+            std::vector<std::pair<unsigned long long, uint32_t>> v;
+            for (const auto &kv : g_t4Color) v.push_back({kv.second, kv.first});
+            std::sort(v.rbegin(), v.rend());
+            for (size_t i = 0; i < v.size() && i < 6; ++i)
+                std::cerr << " 0x" << std::hex << v[i].second << std::dec << "x" << v[i].first;
+        }
+        std::cerr << std::endl;
+        std::cerr << "[gs/texel] rawIdx distinct=" << g_rawIdx.size() << " top:";
+        {
+            std::vector<std::pair<unsigned long long, uint32_t>> v;
+            for (const auto &kv : g_rawIdx) v.push_back({kv.second, kv.first});
+            std::sort(v.rbegin(), v.rend());
+            for (size_t i = 0; i < v.size() && i < 8; ++i)
+                std::cerr << " tbp" << (v[i].second >> 16) << ":idx" << (v[i].second & 0xFFFFu)
+                          << "x" << v[i].first;
+        }
+        std::cerr << std::endl;
+        std::cerr << "[gs/texel] outColor distinct=" << g_outColor.size() << " top:";
+        {
+            std::vector<std::pair<unsigned long long, uint32_t>> v;
+            for (const auto &kv : g_outColor) v.push_back({kv.second, kv.first});
+            std::sort(v.rbegin(), v.rend());
+            for (size_t i = 0; i < v.size() && i < 8; ++i)
+                std::cerr << " 0x" << std::hex << v[i].second << std::dec << "x" << v[i].first;
+        }
+        std::cerr << std::endl;
+    }
+
+    inline void report()
+    {
+        static auto tLast = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(now - tLast).count() < 3.0)
+            return;
+        tLast = now;
+        std::cerr << "[gs/xfer] arms h2l=" << g_armDir[0] << " l2h=" << g_armDir[1]
+                  << " l2l=" << g_armDir[2] << " none=" << g_armDir[3]
+                  << " bytesIn=" << g_upBytesIn
+                  << " dropUnarmed=" << g_upBytesUnarmed
+                  << " dropBadPsm=" << g_upBytesBadPsm
+                  << " texelWrites=" << g_texelWrites << std::endl;
+        std::cerr << "[gs/xfer] upload dests (dbp,dbw,dpsm,rrw,rrh)xN:";
+        for (const auto &kv : g_uploads)
+            std::cerr << " (" << kv.first.dbp << "," << kv.first.dbw
+                      << ",0x" << std::hex << kv.first.dpsm << std::dec
+                      << "," << kv.first.rrw << "x" << kv.first.rrh << ")x" << kv.second;
+        std::cerr << std::endl;
+        GhpcTexDiag::g_t4Rescanned = false;
+        reportTexels();
+        std::cerr << "[gs/draw] fragments=" << g_fragments << " drawFbp(fbp,fpsm)xN:";
+        for (const auto &kv : g_drawFbp)
+            std::cerr << " (" << (kv.first >> 8) << ",0x" << std::hex << (kv.first & 0xFFu) << std::dec << ")x" << kv.second;
+        std::cerr << " | reject scissor=" << g_rejScissor
+                  << " alpha=" << g_rejAlpha
+                  << " dstAlpha=" << g_rejDstAlpha
+                  << " ztest=" << g_rejZ
+                  << " wroteFb=" << g_wroteFb
+                  << " ofWhichBlack=" << g_wroteZeroPixel;
+        std::cerr << " | fragByFbp:";
+        for (const auto &kv : g_fragByFbp)
+            std::cerr << " (fbp" << (kv.first >> 16)
+                      << ",fbw" << ((kv.first >> 8) & 0xFFu)
+                      << ",psm0x" << std::hex << (kv.first & 0xFFu) << std::dec << ")x" << kv.second;
+        std::cerr << " | presentedFbp:";
+        for (const auto &kv : g_presentFbp)
+            std::cerr << " " << kv.first << "x" << kv.second;
+        std::cerr << std::endl;
+        std::cerr << "[gs/prim] (primType,texPsm)xN:";
+        for (const auto &kv : g_primPsm)
+            std::cerr << " (t" << (kv.first >> 8) << ",0x" << std::hex << (kv.first & 0xFFu) << std::dec << ")x" << kv.second;
+        std::cerr << std::endl;
+        std::cerr << "[gs/prim] tme draws by type:";
+        for (uint32_t i = 0u; i < 8u; ++i)
+            if (g_primType[i]) std::cerr << " t" << i << "=" << g_primType[i];
+        std::cerr << " | sampleCalls=" << g_sampleCalls << " texelsByPsm:";
+        for (uint32_t i = 0u; i < 64u; ++i)
+            if (g_samplesByPsm[i]) std::cerr << " 0x" << std::hex << i << std::dec << "=" << g_samplesByPsm[i];
+        std::cerr << std::endl;
+        std::cerr << "[gs/draw] tme=" << g_drawsTme << " notme=" << g_drawsNoTme
+                  << " tbpWritten=" << g_sampleHit << " tbpNeverWritten=" << g_sampleMiss
+                  << " | tex0 (tbp0,tbw,psm,tw,th,tfx)xN:";
+        for (const auto &kv : g_texDraws)
+            std::cerr << " (" << kv.first.tbp0 << "," << kv.first.tbw
+                      << ",0x" << std::hex << kv.first.psm << std::dec
+                      << "," << kv.first.tw << "," << kv.first.th
+                      << ",tfx" << kv.first.tfx << ")x" << kv.second;
+        std::cerr << std::endl;
+    }
+}
+#endif
+
+#if GHPC_DIAG
+// Which code path feeds image data: 1 = GIF IMAGE tag, 2 = uploadImageNative,
+// 3 = HWREG register write.
+int g_ghpcLastFeedSite = 0;
+void ghpcNoteImagePayload(uint32_t bytes, bool allZero)
+{
+    static unsigned long long total = 0, zero = 0, zeroBytes = 0, okBytes = 0;
+    ++total; if (allZero) { ++zero; zeroBytes += bytes; } else okBytes += bytes;
+    if ((total % 5ull) == 0ull)
+        std::cerr << "[gs/imgstat] payloads=" << total << " allZero=" << zero
+                  << " zeroBytes=" << zeroBytes << " nonZeroBytes=" << okBytes << std::endl;
+}
+void ghpcNoteImageFeed(int site, uint32_t bytes)
+{
+    g_ghpcLastFeedSite = site;
+    static unsigned long long n[4] = {0,0,0,0}, b[4] = {0,0,0,0};
+    static int shown = 0;
+    if (site >= 0 && site < 4) { ++n[site]; b[site] += bytes; }
+    if (shown < 12 && bytes >= 256u)
+    {
+        ++shown;
+        std::cerr << "[gs/feed] site=" << site << " bytes=" << bytes << std::endl;
+    }
+    static unsigned long long t = 0;
+    if ((++t % 20000ull) == 0ull)
+        std::cerr << "[gs/feed] totals gifImage=" << n[1] << "/" << b[1]
+                  << " native=" << n[2] << "/" << b[2]
+                  << " hwreg=" << n[3] << "/" << b[3] << std::endl;
+}
+void ghpcNotePresent(uint32_t fbp) { GhpcTexDiag::notePresent(fbp); }
+#endif
+
 GSCpuBackend::GSCpuBackend()
 {
     using namespace GSMem;
@@ -639,6 +898,50 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
 {
     const GSDrawState &state = batch.state;
     const auto &ctx = state.context;
+#if GHPC_DIAG
+    {
+        using namespace GhpcTexDiag;
+        if (state.prim.tme)
+        {
+            ++g_drawsTme;
+            ++g_primType[state.prim.type & 7u];
+            // Draws bound to the later logo textures never sample. Are their
+            // vertices degenerate?
+            if (ctx.tex0.tbp0 == 6976u || ctx.tex0.tbp0 == 6956u || ctx.tex0.tbp0 == 6432u)
+            {
+                static int shown = 0;
+                if (shown < 12)
+                {
+                    ++shown;
+                    std::cerr << "[gs/geom] tbp0=" << ctx.tex0.tbp0
+                              << " prim=" << (unsigned)state.prim.type
+                              << " fst=" << (unsigned)state.prim.fst
+                              << " fbp=" << ctx.frame.fbp
+                              << " scissor=(" << ctx.scissor.x0 << "," << ctx.scissor.y0
+                              << ")-(" << ctx.scissor.x1 << "," << ctx.scissor.y1 << ")"
+                              << " ofx=" << (ctx.xyoffset.ofx >> 4)
+                              << " ofy=" << (ctx.xyoffset.ofy >> 4);
+                    for (int vi = 0; vi < 3; ++vi)
+                        std::cerr << " v" << vi << "=(" << batch.vertices[vi].x
+                                  << "," << batch.vertices[vi].y << ")"
+                                  << "uv=(" << (batch.vertices[vi].u >> 4)
+                                  << "," << (batch.vertices[vi].v >> 4) << ")";
+                    std::cerr << std::endl;
+                }
+            }
+            ++g_primPsm[((state.prim.type & 7u) << 8) | (ctx.tex0.psm & 0xFFu)];
+            ++g_drawFbp[((ctx.frame.fbp & 0xFFFFFFu) << 8) | (ctx.frame.psm & 0xFFu)];
+            ++g_texDraws[TexKey{ctx.tex0.tbp0, ctx.tex0.tbw, ctx.tex0.psm,
+                                ctx.tex0.tw, ctx.tex0.th, ctx.tex0.tfx}];
+            if (ctx.tex0.tbp0 < 16384u && g_blockWritten[ctx.tex0.tbp0])
+                ++g_sampleHit;
+            else
+                ++g_sampleMiss;
+        }
+        else
+            ++g_drawsNoTme;
+    }
+#endif
     PS2_IF_AGRESSIVE_LOGS({
         const uint32_t primitiveIndex = s_debugPrimitiveCount.fetch_add(1u, std::memory_order_relaxed);
         if (primitiveIndex < 64u)
@@ -775,9 +1078,32 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
 
 void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog)
 {
+#if GHPC_DIAG
+    ++GhpcTexDiag::g_fragments;
+    ++GhpcTexDiag::g_fragByFbp[((state.context.frame.fbp & 0xFFFFu) << 16) |
+                               ((state.context.frame.fbw & 0xFFu) << 8) |
+                               (state.context.frame.psm & 0xFFu)];
+    if (y == 300 && x >= 0 && x < 48)
+    {
+        using namespace GhpcTexDiag;
+        const auto &t = state.context.tex0;
+        g_row[x] = PixRec{t.tbp0, t.tbw, t.psm, t.tw, t.th, t.tfx,
+                          state.prim.type, state.prim.tme,
+                          static_cast<uint32_t>(r) | (static_cast<uint32_t>(g) << 8) |
+                          (static_cast<uint32_t>(b) << 16) | (static_cast<uint32_t>(a) << 24)};
+        g_rowSeen[x] = true;
+        ++g_rowWrites;
+        dumpRow();
+    }
+#endif
     const auto &ctx = state.context;
     if (x < ctx.scissor.x0 || x > ctx.scissor.x1 || y < ctx.scissor.y0 || y > ctx.scissor.y1)
+    {
+#if GHPC_DIAG
+        ++GhpcTexDiag::g_rejScissor;
+#endif
         return;
+    }
 
     if (state.prim.fge)
     {
@@ -801,6 +1127,9 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     const PixelWriteMask writeMask = classifyAlphaTest(ctx.test, a, static_cast<uint8_t>(fpsm));
     if (!writeMask.writesAnything())
     {
+#if GHPC_DIAG
+        ++GhpcTexDiag::g_rejAlpha;
+#endif
         return;
     }
 
@@ -832,6 +1161,9 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     }
 
     if (!passesDestinationAlphaTest(ctx.test, static_cast<uint8_t>(fpsm), rawFramebufferPixel))
+#if GHPC_DIAG
+        if (++GhpcTexDiag::g_rejDstAlpha)
+#endif
     {
         return;
     }
@@ -858,6 +1190,9 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
 
     if (!zpass)
     {
+#if GHPC_DIAG
+        ++GhpcTexDiag::g_rejZ;
+#endif
         return;
     }
 
@@ -930,6 +1265,12 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
             pixel = Rgba8888ToRgba5551(pixel);
         }
 
+#if GHPC_DIAG
+        ++GhpcTexDiag::g_wroteFb;
+        if ((bitsPerPixel(fpsm) == 16) ? ((pixel & 0x7FFFu) == 0u)
+                                       : ((pixel & 0x00FFFFFFu) == 0u))
+            ++GhpcTexDiag::g_wroteZeroPixel;
+#endif
         WriteVramUnlocked(fpsm, fbp, fbw, x, y, pixel);
     }
 
@@ -1003,6 +1344,10 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
         sampleV = wrapTextureCoordinate(sampleV, texH, wrapV, minV, maxV);
 
         u32 out = ReadVramUnlocked(tex.psm, tex.tbp0, tex.tbw, sampleU, sampleV);
+#if GHPC_DIAG
+        ++GhpcTexDiag::g_samplesByPsm[tex.psm & 0x3Fu];
+        ++GhpcTexDiag::g_sampleCalls;
+#endif
 
         switch (tex.psm)
         {
@@ -1021,7 +1366,84 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
         case GS_PSM_T4:
         case GS_PSM_T4HL:
         case GS_PSM_T4HH:
+        {
+#if GHPC_DIAG
+            using namespace GhpcTexDiag;
+            const uint32_t col = LookupCLUT(state, static_cast<u8>(out), tex.cbp, tex.cpsm,
+                                            tex.csm, tex.csa, tex.psm);
+            // Only the two textures that dominate the boot screens, to keep the
+            // maps small enough to be meaningful.
+            if (true)
+            {
+                ++g_clutReads;
+                g_lastCbp = tex.cbp; g_lastCpsm = tex.cpsm;
+                g_lastCsm = tex.csm; g_lastCsa = tex.csa;
+                g_lastCbw = state.texclut.cbw; g_lastCou = state.texclut.cou;
+                g_lastCov = state.texclut.cov;
+                if (g_rawIdx.size() < 4096u)
+                    ++g_rawIdx[((tex.tbp0 & 0xFFFFu) << 16) | (out & 0xFFFFu)];
+                if (g_outColor.size() < 4096u)
+                    ++g_outColor[col];
+                if (!GhpcTexDiag::g_texDumped.count(tex.tbp0) && GhpcTexDiag::g_texDumped.size() < 8)
+                {
+                    GhpcTexDiag::g_texDumped.insert(tex.tbp0);
+                    const int W = state.textureWidth, H = state.textureHeight;
+                    if (W > 0 && H > 0 && W <= 512 && H <= 512)
+                    {
+                        char fn[128];
+                        std::snprintf(fn, sizeof(fn), "/tmp/ghpc_tex_%u_psm%02x.ppm",
+                                      (unsigned)tex.tbp0, (unsigned)tex.psm);
+                        FILE *f = std::fopen(fn, "wb");
+                        if (f)
+                        {
+                            std::fprintf(f, "P6\n%d %d\n255\n", W, H);
+                            for (int yy = 0; yy < H; ++yy)
+                                for (int xx = 0; xx < W; ++xx)
+                                {
+                                    const u32 raw = ReadVramUnlocked(tex.psm, tex.tbp0, tex.tbw, xx, yy);
+                                    u32 c = LookupCLUT(state, (u8)raw, tex.cbp, tex.cpsm,
+                                                       tex.csm, tex.csa, tex.psm);
+                                    unsigned char px[3] = {(unsigned char)(c & 0xFF),
+                                                           (unsigned char)((c >> 8) & 0xFF),
+                                                           (unsigned char)((c >> 16) & 0xFF)};
+                                    std::fwrite(px, 1, 3, f);
+                                }
+                            std::fclose(f);
+                            std::cerr << "[gs/texdump] wrote " << fn << " " << W << "x" << H << std::endl;
+                        }
+                    }
+                }
+                if (tex.psm == GS_PSM_T4)
+                {
+                    if (!GhpcTexDiag::g_t4Rescanned)
+                    {
+                        GhpcTexDiag::g_t4Rescanned = true;
+                        std::map<uint32_t, int> seen;
+                        for (uint32_t vy = 0u; vy < 32u; ++vy)
+                            for (uint32_t vx = 0u; vx < 32u; ++vx)
+                                seen[ReadVramUnlocked(GS_PSM_T4, tex.tbp0, tex.tbw, vx, vy) & 0xFu] = 1;
+                        std::cerr << "[gs/t4] rescan#" << (++GhpcTexDiag::g_t4RescanSeq)
+                                  << " tbp=" << tex.tbp0 << " tbw=" << (uint32_t)tex.tbw
+                                  << " uploadWritesSoFar=" << GhpcTexDiag::g_ghpcT4UploadWrites
+                                  << " srcNonZeroSoFar=" << GhpcTexDiag::g_t4SrcNonZero
+                                  << " distinctIdx=" << seen.size() << " values:";
+                        for (const auto &kv : seen) std::cerr << " " << kv.first;
+                        std::cerr << std::endl;
+                    }
+                    if (g_t4UV.size() < 4096u)
+                        ++g_t4UV[((uint32_t)(sampleU & 0xFFFFu) << 16) | (uint32_t)(sampleV & 0xFFFFu)];
+                    if (g_t4Color.size() < 4096u) ++g_t4Color[col];
+                    if (g_t4Idx.size() < 512u) ++g_t4Idx[out & 0xFFu];
+                    g_t4Cbp = tex.cbp; g_t4Cpsm = tex.cpsm; g_t4Csa = tex.csa;
+                    g_t4Tbp = tex.tbp0;
+                    g_t4Vram = m_vram; g_t4VramSize = m_vramSize;
+                }
+            }
+            return col;
+#else
             return LookupCLUT(state, static_cast<u8>(out), tex.cbp, tex.cpsm, tex.csm, tex.csa, tex.psm);
+#endif
+        }
         }
 
         return 0xFFFF00FFu;
@@ -1385,6 +1807,27 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
     m_transferState.direction = command.direction;
     m_transferState.localToHostPendingBytes = 0u;
 
+#if GHPC_DIAG
+    {
+        using namespace GhpcTexDiag;
+        // Anything landing near block 6956 could be clobbering the PSMT4 logo.
+        if (command.bitbltbuf.dbp >= 6900u && command.bitbltbuf.dbp <= 7000u)
+            std::cerr << "[gs/t4] ARM dir=" << command.direction
+                      << " dbp=" << command.bitbltbuf.dbp
+                      << " dbw=" << (uint32_t)command.bitbltbuf.dbw
+                      << " dpsm=0x" << std::hex << (uint32_t)command.bitbltbuf.dpsm << std::dec
+                      << " " << command.trxreg.rrw << "x" << command.trxreg.rrh
+                      << " sbp=" << command.bitbltbuf.sbp << std::endl;
+        ++g_armDir[command.direction & 3u];
+        if (command.direction == 0u)
+        {
+            ++g_uploads[UpKey{command.bitbltbuf.dbp, command.bitbltbuf.dbw,
+                              command.bitbltbuf.dpsm, command.trxreg.rrw, command.trxreg.rrh}];
+        }
+        report();
+    }
+#endif
+
     if (command.direction == 2u)
         PerformLocalToLocalTransfer();
     else if (command.direction == 1u)
@@ -1394,6 +1837,41 @@ void GSCpuBackend::BeginTransfer(const GSTransferCommand &command)
 void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+#if GHPC_DIAG
+    GhpcTexDiag::g_upBytesIn += sizeBytes;
+    if (m_transfer.bitbltbuf.dbp == 6956u && data)
+    {
+        size_t nz = 0;
+        for (uint32_t k = 0; k < sizeBytes; ++k) if (data[k]) ++nz;
+        GhpcTexDiag::g_t4SrcBytes += sizeBytes;
+        GhpcTexDiag::g_t4SrcNonZero += nz;
+        // Accepted, or dropped because the transfer already finished?
+        const bool armed = (m_transferState.direction == 0u) &&
+                           (m_transferState.totalPixels != 0u) &&
+                           (m_transfer.trxreg.rrw != 0u) && (m_transfer.trxreg.rrh != 0u);
+        if (::g_ghpcLastFeedSite == 3) { ++GhpcTexDiag::g_t4HwregChunks; GhpcTexDiag::g_t4HwregBytes += sizeBytes; }
+        if (::g_ghpcLastFeedSite == 1) { ++GhpcTexDiag::g_t4ImageChunks; GhpcTexDiag::g_t4ImageBytes += sizeBytes; }
+        if (GhpcTexDiag::g_t4ChunkLogs < 10u)
+        {
+            ++GhpcTexDiag::g_t4ChunkLogs;
+            std::cerr << "[gs/t4] chunk site=" << ::g_ghpcLastFeedSite
+                      << " bytes=" << sizeBytes << " nonZero=" << nz
+                      << " armed=" << (armed ? 1 : 0)
+                      << " copied=" << m_transferState.copiedPixels
+                      << "/" << m_transferState.totalPixels << std::endl;
+        }
+    }
+    if (m_transferState.direction != 0u || m_transferState.totalPixels == 0u ||
+        m_transfer.trxreg.rrw == 0u || m_transfer.trxreg.rrh == 0u)
+        GhpcTexDiag::g_upBytesUnarmed += sizeBytes;
+    else if (!GhpcTexDiag::psmHandled(m_transfer.bitbltbuf.dpsm))
+        GhpcTexDiag::g_upBytesBadPsm += sizeBytes;
+    else
+    {
+        GhpcTexDiag::g_texelWrites += sizeBytes;
+        GhpcTexDiag::markBlocks(m_transfer.bitbltbuf.dbp, sizeBytes);
+    }
+#endif
     if (!data || sizeBytes == 0u || !m_vram || m_transferState.direction != 0u)
         return;
     if (m_transfer.trxreg.rrw == 0u || m_transfer.trxreg.rrh == 0u || m_transferState.totalPixels == 0u)
@@ -1414,6 +1892,21 @@ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
 
         if (m_transferState.copiedPixels >= totalPixels)
         {
+#if GHPC_DIAG
+            {
+                // Count distinct texel values just written, so a blank upload is
+                // obvious without guessing from raw bytes.
+                std::map<uint32_t,int> seen;
+                const uint32_t w = m_transfer.trxreg.rrw, h = m_transfer.trxreg.rrh;
+                for (uint32_t yy = 0; yy < h && yy < 256u; ++yy)
+                    for (uint32_t xx = 0; xx < w && xx < 256u; ++xx)
+                        seen[ReadVramUnlocked(dpsm, dbp, dbw, xx, yy)] = 1;
+                std::cerr << "[gs/upload] done dbp=" << dbp << " dbw=" << dbw
+                          << " psm=0x" << std::hex << (uint32_t)dpsm << std::dec
+                          << " " << w << "x" << h
+                          << " distinctTexels=" << seen.size() << std::endl;
+            }
+#endif
             m_transferState.direction = 3u;
             m_transferState.totalPixels = 0u;
             return;
@@ -1475,6 +1968,40 @@ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
         case GS_PSM_T4HL:
         case GS_PSM_T4HH:
         {
+#if GHPC_DIAG
+            {
+                ++GhpcTexDiag::g_ghpcT4UploadWrites;
+                GhpcTexDiag::g_ghpcT4UploadDbp = dbp;
+                if (dbp == 6956u && GhpcTexDiag::g_t4PosShown < 1u)
+                {
+                    ++GhpcTexDiag::g_t4PosShown;
+                    std::cerr << "[gs/t4] upload TRXPOS dsax=" << m_transfer.trxpos.dsax
+                              << " dsay=" << m_transfer.trxpos.dsay
+                              << " rrw=" << m_transfer.trxreg.rrw
+                              << " rrh=" << m_transfer.trxreg.rrh
+                              << " dbp=" << dbp << " dbw=" << dbw << std::endl;
+                }
+            }
+            // Write one nibble then read it straight back through the same
+            // addressing the sampler uses. If they disagree, the PSMT4 write and
+            // read paths are not inverse.
+            {
+                const uint32_t tx = dsax + (m_transferState.copiedPixels % rrw);
+                const uint32_t ty = m_transfer.trxpos.dsay + (m_transferState.copiedPixels / rrw);
+                const uint32_t want = data[offset] & 0x0Fu;
+                WriteVramUnlocked(dpsm, dbp, dbw, tx, ty, want);
+                const uint32_t got = ReadVramUnlocked(dpsm, dbp, dbw, tx, ty) & 0x0Fu;
+                if (want == got) ++GhpcTexDiag::g_t4RoundTripOk;
+                else
+                {
+                    ++GhpcTexDiag::g_t4RoundTripBad;
+                    if (GhpcTexDiag::g_t4RoundTripBad < 4u)
+                        std::cerr << "[gs/t4] roundtrip MISMATCH dbp=" << dbp << " dbw=" << dbw
+                                  << " (" << tx << "," << ty << ") wrote=" << want
+                                  << " read=" << got << std::endl;
+                }
+            }
+#endif
             const uint8_t packed = data[offset++];
             const uint32_t firstPixel = m_transferState.copiedPixels;
             WriteVramUnlocked(dpsm, dbp, dbw,
@@ -1693,6 +2220,24 @@ bool GSCpuBackend::CopyFrameToHostRgba(const GSFrameReg &frame,
         return false;
 
     outPixels.assign(kHostFrameWidth * kHostFrameHeight * 4u, 0u);
+#if GHPC_DIAG
+    {
+        static auto tCopy = std::chrono::steady_clock::now();
+        const auto nowCopy = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(nowCopy - tCopy).count() >= 3.0)
+        {
+            tCopy = nowCopy;
+            std::cerr << "[gs/copy] reading fbp=" << frame.fbp
+                      << " fbw=" << frame.fbw
+                      << " psm=0x" << std::hex << static_cast<uint32_t>(frame.psm) << std::dec
+                      << " " << width << "x" << height
+                      << " basePages=" << (frameBaseIsPages ? 1 : 0)
+                      << " localLayout=" << (useLocalMemoryLayout ? 1 : 0)
+                      << " origin=(" << sourceOriginX << "," << sourceOriginY << ")"
+                      << std::endl;
+        }
+    }
+#endif
     const uint32_t baseBytes = frameBaseIsPages ? frame.fbp * 8192u : frame.fbp * 256u;
     const uint32_t basePtr = frameBaseIsPages ? GSInternal::framePageBaseToBlock(frame.fbp) : frame.fbp;
     const uint32_t fbw = frame.fbw ? frame.fbw : kHostFrameWidth / 64u;
@@ -1765,6 +2310,50 @@ PresentationFrame GSCpuBackend::Present(const GSPresentationRequest &request)
     SnapshotVram(snapshot);
     if (snapshot.empty())
         return {};
+#if GHPC_DIAG
+    {
+        static auto tSnap = std::chrono::steady_clock::now();
+        const auto nowSnap = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(nowSnap - tSnap).count() >= 3.0)
+        {
+            tSnap = nowSnap;
+            // Is VRAM itself empty, or is the readback losing it?
+            size_t nonZero = 0u;
+            for (size_t i = 0u; i < snapshot.size(); ++i)
+                if (snapshot[i] != 0u)
+                    ++nonZero;
+            // fbp 56 in CT16 starts at block 56*32, i.e. byte 56*32*256.
+            const size_t fb56 = static_cast<size_t>(56u) * 32u * 256u;
+            const size_t fbLen = static_cast<size_t>(512u) * 448u * 2u;
+            size_t nz56 = 0u;
+            for (size_t i = fb56; i < fb56 + fbLen && i < snapshot.size(); ++i)
+                if (snapshot[i] != 0u)
+                    ++nz56;
+            // Read the same pixels two ways: through the swizzle the present
+            // uses, and as raw bytes. If they disagree the readback is at fault.
+            std::cerr << "[gs/snap] probe fbp56 ct16 bw8:";
+            for (uint32_t py = 100u; py <= 300u; py += 100u)
+            {
+                for (uint32_t px = 100u; px <= 300u; px += 100u)
+                {
+                    const uint32_t viaSwizzle =
+                        GSMem::ReadCT16(snapshot.data(), 1792u, 8u, px, py);
+                    const size_t linear = fb56 + (static_cast<size_t>(py) * 512u + px) * 2u;
+                    const uint32_t viaRaw = (linear + 1u < snapshot.size())
+                        ? (snapshot[linear] | (static_cast<uint32_t>(snapshot[linear + 1u]) << 8u))
+                        : 0u;
+                    std::cerr << " (" << px << "," << py << ")sw=0x" << std::hex << viaSwizzle
+                              << " raw=0x" << viaRaw << std::dec;
+                }
+            }
+            std::cerr << std::endl;
+            std::cerr << "[gs/snap] vramBytes=" << snapshot.size()
+                      << " nonZero=" << nonZero
+                      << " fbp56range=[" << fb56 << "," << (fb56 + fbLen) << ")"
+                      << " nonZeroThere=" << nz56 << std::endl;
+        }
+    }
+#endif
 
     thread_local GSCpuBackend snapshotBackend;
     snapshotBackend.Initialize(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
@@ -1817,6 +2406,13 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
         {
             for (const GSFrameReg &candidate : request.contextFrames)
             {
+                // A candidate that disagrees with the display frame on pixel
+                // format is not another buffer, it is the same bytes decoded
+                // wrong. On GH2 the ctx frame (fbp0 fbw10 PSMCT32) aliases the
+                // real PSMCT16 frame, and reading 0x8000 pairs as 32-bit turns a
+                // black screen into 184320 pixels of green. Never reformat here.
+                if (candidate.psm != selected.psm || candidate.fbw != selected.fbw)
+                    continue;
                 if (candidate.fbp == selected.fbp && candidate.fbw == selected.fbw && candidate.psm == selected.psm)
                     continue;
                 std::vector<uint8_t> candidatePixels;
