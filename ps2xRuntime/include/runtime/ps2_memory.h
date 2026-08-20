@@ -341,6 +341,15 @@ public:
     bool tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t chcr);
     void processVIF0Data(uint32_t srcPhysAddr, uint32_t sizeBytes);
     void processVIF0Data(const uint8_t *data, uint32_t sizeBytes);
+    // Set once the guest arms VIF1 for an MFIFO drain. Lets a later ring fill
+    // resume a stalled drain without spuriously starting a channel the guest
+    // never started.
+    bool m_vif1MfifoArmed = false;
+    // Set when an MFIFO drain stopped because the ring held no more written
+    // data. The channel has not finished, so STR must stay set and TADR must
+    // stay on the tag that could not be completed.
+    bool m_vif1DrainStalled = false;
+
     void processVIF1Data(uint32_t srcPhysAddr, uint32_t sizeBytes);
     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
     void processPendingTransfers();

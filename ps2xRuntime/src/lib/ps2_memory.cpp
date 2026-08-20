@@ -1,4 +1,9 @@
+#include <chrono>
 #include "runtime/ps2_memory.h"
+#include <cstdlib>
+#if GHPC_DIAG
+extern unsigned int g_ghpcVif1ChunkSource;
+#endif
 #include "runtime/ps2_address.h"
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
@@ -1160,6 +1165,20 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
     if (address >= 0x10002000 && address <= 0x10002030)
     {
+#if GHPC_DIAG
+        {
+            static unsigned long long ipuWrites = 0ull;
+            static int shown = 0;
+            ++ipuWrites;
+            if (shown < 24)
+            {
+                ++shown;
+                std::fprintf(stderr, "[ipu] reg write 0x%x = 0x%x (cmd=0x%x) total=%llu\n",
+                             (unsigned)address, (unsigned)value,
+                             (unsigned)((value >> 28) & 0xFu), ipuWrites);
+            }
+        }
+#endif
         if (address == 0x10002010)
         {
             m_ioRegisters[address] = value & ~(1u << 31);
@@ -1269,6 +1288,25 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
     {
         if ((address & 0xFF) == 0x00 && (value & 0x100))
         {
+#if GHPC_DIAG
+            if (address == 0x1000B000u || address == 0x1000B400u)
+            {
+                static int ipuDma = 0;
+                if (ipuDma++ < 24)
+                    std::fprintf(stderr, "[ipu] DMA start ch=%s chcr=0x%x qwc=0x%x madr=0x%x\n",
+                                 (address == 0x1000B000u) ? "3/FROM" : "4/TO",
+                                 (unsigned)value,
+                                 (unsigned)m_ioRegisters[address + 0x20],
+                                 (unsigned)m_ioRegisters[address + 0x10]);
+            }
+#endif
+            if (address == 0x10009000u)
+            {
+                const auto dctrlArm = m_ioRegisters.find(0x1000E000u);
+                const uint32_t dctrlArmVal = (dctrlArm == m_ioRegisters.end()) ? 0u : dctrlArm->second;
+                if (((dctrlArmVal >> 2) & 0x3u) == 2u)
+                    m_vif1MfifoArmed = true;
+            }
             const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
             const bool dmacEnabled = (dctrlIt == m_ioRegisters.end()) || ((dctrlIt->second & 0x1u) != 0u);
             if (!dmacEnabled)
@@ -1280,6 +1318,119 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+
+            // VIF1 draining an MFIFO stalls when it catches up with the fill
+            // pointer. Without this the chain walker reads whatever happens to
+            // sit at TADR in an empty ring, treats it as a tag, and advances
+            // TADR past the fill pointer, so PsRnd::FlushPacket computes 16
+            // bytes of free space forever instead of a whole empty ring.
+            if (channelBase == 0x10009000u)
+            {
+                const uint32_t dctrl = m_ioRegisters[0x1000E000u];
+                if (((dctrl >> 2) & 0x3u) == 2u)
+                {
+                    const uint32_t tadr = m_ioRegisters[channelBase + 0x30];
+                    const uint32_t fill = m_ioRegisters[0x1000D010u];
+                    if (tadr == fill)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            // Channel 8, fromSPR. PsRnd builds each packet in scratchpad and
+            // sends it with DmaPacket::Send(spr, 8), which fills the MFIFO ring
+            // that VIF1 drains. Without this the ring stays empty, so
+            // PsRnd::FlushPacket spins forever waiting for space to free up.
+            if (channelBase == 0x1000D000u)
+            {
+                const uint32_t rbor = m_ioRegisters[0x1000E050u];
+                const uint32_t rbsr = m_ioRegisters[0x1000E040u];
+                const uint32_t dctrl = m_ioRegisters[0x1000E000u];
+                const bool mfifoToVif1 = ((dctrl >> 2) & 0x3u) == 2u;
+
+                uint32_t destination = madr;
+                uint32_t source = m_ioRegisters[channelBase + 0x80] & (PS2_SCRATCHPAD_SIZE - 1u);
+                if (m_scratchpad && m_rdram)
+                {
+                    for (uint32_t quad = 0u; quad < qwc; ++quad)
+                    {
+                        const uint32_t physical = destination & PS2_RAM_MASK;
+                        if (physical + 16u <= PS2_RAM_SIZE)
+                        {
+                            std::memcpy(m_rdram + physical, m_scratchpad + source, 16u);
+                        }
+                        source = (source + 16u) & (PS2_SCRATCHPAD_SIZE - 1u);
+                        destination = mfifoToVif1
+                                          ? (rbor | ((destination + 16u) & rbsr))
+                                          : (destination + 16u);
+                    }
+                }
+
+#if GHPC_DIAG
+                {
+                    extern unsigned long long g_ghpcSprBytes;
+                    extern unsigned long long g_ghpcSprBytesToVif;
+                    extern unsigned long long g_ghpcSprFills;
+                    g_ghpcSprBytes += (unsigned long long)qwc * 16ull;
+                    if (mfifoToVif1)
+                    {
+                        g_ghpcSprBytesToVif += (unsigned long long)qwc * 16ull;
+                        ++g_ghpcSprFills;
+                    }
+                }
+#endif
+#if GHPC_DIAG
+                if (mfifoToVif1)
+                {
+                    extern void ghpcNoteRingFill(uint32_t start, uint32_t qwc, uint32_t end);
+                    ghpcNoteRingFill(madr, qwc, destination);
+                    // Does each fill begin exactly where the chain expects its
+                    // next tag? Drift here shifts every later packet.
+                    {
+                        extern void ghpcNoteFillVsTadr(uint32_t fillStart, uint32_t tadr);
+                        ghpcNoteFillVsTadr(madr, m_ioRegisters[0x10009030u]);
+                    }
+                    // Does the tag chain inside this fill tile it exactly? If a
+                    // fill's own content is inconsistent, the ring was built
+                    // wrong rather than walked wrong.
+                    extern void ghpcCheckFillTiling(const uint8_t *ring, uint32_t startPhys,
+                                                    uint32_t bytes, uint32_t startAddr);
+                    if (m_rdram)
+                        ghpcCheckFillTiling(m_rdram, madr & PS2_RAM_MASK, qwc * 16u, madr);
+                }
+#endif
+                m_ioRegisters[channelBase + 0x10] = destination;
+                m_ioRegisters[channelBase + 0x80] = source;
+                m_ioRegisters[channelBase + 0x20] = 0u;
+                m_ioRegisters[channelBase + 0x00] = value & ~0x100u;
+
+                // Transfers here are instantaneous, so whatever just landed in
+                // the ring is immediately drainable. Re-kick VIF1 so it walks
+                // the tags starting from its current TADR.
+                if (mfifoToVif1)
+                {
+                    // In MFIFO mode, VIF1 reaching the fill pointer is a STALL, not
+                    // end-of-chain: hardware keeps STR set and resumes draining when
+                    // more data lands in the ring. Our chain walk ends the transfer
+                    // and clears STR, so without re-arming here every fill after the
+                    // first in a frame was left in the ring and never drained (~22
+                    // fills per frame vs ~0.76 drains). Re-arm whenever the ring
+                    // actually holds data that VIF1 has not consumed yet.
+                    uint32_t vif1Chcr = m_ioRegisters[0x10009000u];
+                    const uint32_t vif1Tadr = m_ioRegisters[0x10009030u];
+                    const bool ringHasData = (vif1Tadr != destination);
+                    if ((vif1Chcr & 0x100u) != 0u)
+                    {
+                        writeIORegister(0x10009000u, vif1Chcr);
+                    }
+                    else if (ringHasData && m_vif1MfifoArmed)
+                    {
+                        writeIORegister(0x10009000u, vif1Chcr | 0x100u);
+                    }
+                }
+                return true;
+            }
 
             if ((channelBase == 0x1000A000u || channelBase == 0x10009000u || channelBase == 0x10008000u) &&
                 (m_gsVRAM || channelBase == 0x10008000u))
@@ -1315,6 +1466,11 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     uint32_t asr1 = m_ioRegisters[channelBase + 0x50];
                     uint32_t asp = (chcr >> 4) & 0x3u;
                     const bool tieEnabled = (chcr & (1u << 7)) != 0u;
+                    // CHCR.TTE (bit 6) decides whether the DMAtag's upper qword is
+                    // transferred to the channel as VIFcodes. With TTE=0 hardware
+                    // sends only the payload, so splicing the tag in regardless
+                    // desyncs the VIF1 stream and the real MSCAL is never decoded.
+                    const bool tteEnabled = (chcr & (1u << 6)) != 0u;
                     const int kMaxChainTags = 4096;
                     std::vector<uint8_t> chainBuf;
 
@@ -1370,10 +1526,54 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     };
 
                     int tagsProcessed = 0;
+                    bool drainStalled = false;
                     uint32_t lastTagUpper = (chcr >> 16) & 0xFFFFu;
+
+                    // When VIF1 drains an MFIFO it must stop at the fill pointer
+                    // and wrap inside the ring, otherwise it walks off the end of
+                    // the written data and leaves TADR past the fill pointer.
+                    const uint32_t dctrlNow = m_ioRegisters[0x1000E000u];
+                    const bool mfifoDrain =
+                        (channelBase == 0x10009000u) && (((dctrlNow >> 2) & 0x3u) == 2u);
+                    const uint32_t mfifoFill = m_ioRegisters[0x1000D010u];
+                    const uint32_t mfifoBase = m_ioRegisters[0x1000E050u];
+                    const uint32_t mfifoMask = m_ioRegisters[0x1000E040u];
 
                     while (tagsProcessed < kMaxChainTags)
                     {
+                        // A drain may only read ring bytes the EE has already
+                        // written. Distance is measured forward to the fill
+                        // pointer in ring order, so a tag that steps over the
+                        // fill pointer is caught as well as one that lands on it.
+                        // Running out is a stall, not the end of the chain.
+                        if (mfifoDrain && mfifoMask != 0u)
+                        {
+                            const uint32_t distTag = (mfifoFill - tagAddr) & mfifoMask;
+                            if (distTag == 0u || distTag > (mfifoMask >> 1) || distTag < 16u)
+                            {
+                                drainStalled = true;
+                                break;
+                            }
+                        }
+                        else if (mfifoDrain && tagAddr == mfifoFill)
+                        {
+                            drainStalled = true;
+                            break;
+                        }
+#if GHPC_DIAG
+                        // The bound above is an exact-equality test on the tag
+                        // address only. Count the two ways a drain can read ring
+                        // memory the EE has not written yet.
+                        if (mfifoDrain && mfifoMask != 0u)
+                        {
+                            extern unsigned long long g_ghpcMfifoTagPastFill;
+                            extern unsigned long long g_ghpcMfifoTagsChecked;
+                            ++g_ghpcMfifoTagsChecked;
+                            const uint32_t distTag = (mfifoFill - tagAddr) & mfifoMask;
+                            if (distTag == 0u || distTag > (mfifoMask >> 1))
+                                ++g_ghpcMfifoTagPastFill;
+                        }
+#endif
                         const uint32_t currentTagAddr = tagAddr;
                         const bool tagInSPR = isScratchpad(tagAddr);
                         uint32_t physTag = 0;
@@ -1412,6 +1612,56 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint32_t dataAddr = 0;
                         bool hasPayload = (tagQwc > 0);
                         bool endChain = false;
+#if GHPC_DIAG
+                        // Keep the last few tags so the transition that put TADR
+                        // on a non-tag can be named.
+                        if (mfifoDrain)
+                        {
+                            struct T { uint32_t at, id, qwc, addr, next; };
+                            static T ring[4] = {};
+                            static uint32_t ri = 0u;
+                            static int dumped = 0;
+                            const bool insane = (tagQwc > 32768u) ||
+                                                ((id == 1u || id == 2u || id == 5u || id == 6u || id == 7u) &&
+                                                 (uint32_t)tagQwc * 16u > (mfifoMask + 16u));
+                            if (insane && dumped < 4)
+                            {
+                                ++dumped;
+                                std::fprintf(stderr, "[vif1] TADR DESYNC: tag@0x%x id=%u qwc=%u is not a tag. Preceding:\n",
+                                             (unsigned)currentTagAddr, (unsigned)id, (unsigned)tagQwc);
+                                {
+                                    extern void ghpcReportFillFor(uint32_t addr);
+                                    ghpcReportFillFor(currentTagAddr);
+                                }
+                                for (uint32_t k = 0u; k < 4u; ++k)
+                                {
+                                    const T &t = ring[(ri + k) & 3u];
+                                    std::fprintf(stderr, "    tag@0x%x id=%u qwc=%u addr=0x%x -> next=0x%x\n",
+                                                 t.at, t.id, t.qwc, t.addr, t.next);
+                                }
+                            }
+                            ring[ri & 3u] = T{currentTagAddr, id, tagQwc, addr, 0u};
+                            ++ri;
+                        }
+                        // Walk log: find where TADR first stops landing on a real tag.
+                        if (mfifoDrain)
+                        {
+                            static int walk = 0;
+                            const bool sane = ((addr & 0xFu) == 0u) && (tagQwc <= 16384u);
+                            if (walk < 60 || !sane)
+                            {
+                                if (walk < 200)
+                                {
+                                    ++walk;
+                                    std::fprintf(stderr,
+                                        "[vif1] walk tag@0x%x id=%u qwc=%u addr=0x%x %s\n",
+                                        (unsigned)currentTagAddr, (unsigned)id,
+                                        (unsigned)tagQwc, (unsigned)addr,
+                                        sane ? "" : "<== NOT A TAG");
+                                }
+                            }
+                        }
+#endif
 
                         switch (id)
                         {
@@ -1464,11 +1714,17 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             }
                             else
                             {
+                                // Ending the chain still consumes this tag and its
+                                // payload. Leaving TADR on the tag makes the next
+                                // MFIFO drain re-read it and consume nothing, so the
+                                // ring never drains. refe (case 0) already does this.
+                                tagAddr = dataAddr + static_cast<uint32_t>(tagQwc) * 16u;
                                 endChain = true;
                             }
                             break;
                         case 7:
                             dataAddr = tagAddr + 16;
+                            tagAddr = dataAddr + static_cast<uint32_t>(tagQwc) * 16u;
                             endChain = true;
                             break;
                         default:
@@ -1478,11 +1734,96 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         }
 
                         const bool compactVifLocalTag =
+                            tteEnabled &&
                             (channelBase == 0x10009000u || channelBase == 0x10008000u) &&
                             (id == 1u || id == 2u || id == 5u || id == 6u || id == 7u);
+#if GHPC_DIAG
+                        // TTE sends tag[127:64] as VIF stream for EVERY tag id.
+                        // Count the ids this predicate leaves out: their 8 bytes of
+                        // VIFcode are dropped, so their payload gets parsed as commands.
+                        if (tteEnabled && channelBase == 0x10009000u)
+                        {
+                            extern unsigned long long g_ghpcTteTagsCovered;
+                            extern unsigned long long g_ghpcTteTagsSkipped;
+                            extern unsigned long long g_ghpcTteSkippedById[8];
+                            if (compactVifLocalTag)
+                                ++g_ghpcTteTagsCovered;
+                            else
+                            {
+                                ++g_ghpcTteTagsSkipped;
+                                ++g_ghpcTteSkippedById[id & 7u];
+                            }
+                        }
+#endif
                         if (compactVifLocalTag)
                             appendCompactVif1TagData(currentTagAddr, 0u);
 
+                        // The tag itself being in written ring does not mean its
+                        // payload is. Bound the payload too, for the tag ids whose
+                        // data follows the tag inside the ring. ids 0/3/4 source
+                        // from ADDR, which is ordinary RDRAM, not the ring.
+                        if (mfifoDrain && hasPayload && mfifoMask != 0u &&
+                            (id == 1u || id == 2u || id == 5u || id == 6u || id == 7u))
+                        {
+                            const uint32_t payloadBytes = static_cast<uint32_t>(tagQwc) * 16u;
+                            const uint32_t distData = (mfifoFill - dataAddr) & mfifoMask;
+                            if (distData < payloadBytes)
+                            {
+#if GHPC_DIAG
+                                // Does a stalled tag ever get delivered later?
+                                extern unsigned long long g_ghpcStalls;
+                                extern unsigned long long g_ghpcStallSameAddr;
+                                extern unsigned int g_ghpcLastStallAddr;
+                                extern unsigned int g_ghpcLastStallNeed;
+                                extern unsigned int g_ghpcLastStallHave;
+                                ++g_ghpcStalls;
+                                if (g_ghpcLastStallAddr == currentTagAddr)
+                                    ++g_ghpcStallSameAddr;
+                                g_ghpcLastStallAddr = currentTagAddr;
+                                g_ghpcLastStallNeed = payloadBytes;
+                                g_ghpcLastStallHave = distData;
+                                {
+                                    static int dumps = 0;
+                                    if (dumps++ < 8)
+                                    {
+                                        std::fprintf(stderr,
+                                            "[vif1] STALL tag@0x%x id=%u qwc=%u addr=0x%x raw=0x%016llx fill=0x%x tadrIn=0x%x\n",
+                                            (unsigned)currentTagAddr, (unsigned)id, (unsigned)tagQwc,
+                                            (unsigned)addr, (unsigned long long)tag,
+                                            (unsigned)mfifoFill, (unsigned)currentTagAddr);
+                                    }
+                                }
+#endif
+                                tagAddr = currentTagAddr; // resume on this tag next fill
+                                drainStalled = true;
+                                break;
+                            }
+                        }
+#if GHPC_DIAG
+                        if (mfifoDrain && hasPayload && mfifoMask != 0u)
+                        {
+                            extern unsigned long long g_ghpcMfifoPayloadPastFill;
+                            extern unsigned long long g_ghpcMfifoPayloadBytesPastFill;
+                            const uint32_t payloadBytes = static_cast<uint32_t>(tagQwc) * 16u;
+                            const uint32_t distData = (mfifoFill - dataAddr) & mfifoMask;
+                            if (distData < payloadBytes)
+                            {
+                                ++g_ghpcMfifoPayloadPastFill;
+                                g_ghpcMfifoPayloadBytesPastFill += (payloadBytes - distData);
+                            }
+                        }
+#endif
+#if GHPC_DIAG
+                        {
+                            extern unsigned long long g_ghpcStallResumed;
+                            extern unsigned int g_ghpcLastStallAddr;
+                            if (mfifoDrain && g_ghpcLastStallAddr == currentTagAddr)
+                            {
+                                ++g_ghpcStallResumed;
+                                g_ghpcLastStallAddr = 0xFFFFFFFFu;
+                            }
+                        }
+#endif
                         if (hasPayload)
                         {
                             if (compactVifLocalTag)
@@ -1490,12 +1831,34 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             else
                                 appendData(dataAddr, tagQwc);
                         }
+                        if (mfifoDrain)
+                            tagAddr = mfifoBase | (tagAddr & mfifoMask);
+
                         if (irq && tieEnabled)
                             endChain = true;
                         if (endChain)
                             break;
                     }
 
+#if GHPC_DIAG
+                    if (channelBase == 0x10009000u)
+                    {
+                        extern unsigned long long g_ghpcVifKicks;
+                        ++g_ghpcVifKicks;
+                        static int kicks = 0;
+                        if (kicks++ < 24)
+                            std::cerr << "[vif1] kick tags=" << tagsProcessed
+                                      << " chainBytes=" << chainBuf.size()
+                                      << " mfifoDrain=" << (mfifoDrain ? 1 : 0)
+                                      << std::hex << " tadrNow=0x" << tagAddr
+                                      << " fill=0x" << mfifoFill
+                                      << " base=0x" << mfifoBase
+                                      << " mask=0x" << mfifoMask
+                                      << std::dec << std::endl;
+                    }
+#endif
+                    if (channelBase == 0x10009000u)
+                        m_vif1DrainStalled = drainStalled;
                     m_ioRegisters[channelBase + 0x30] = tagAddr;
                     m_ioRegisters[channelBase + 0x40] = asr0;
                     m_ioRegisters[channelBase + 0x50] = asr1;
@@ -1689,6 +2052,9 @@ void PS2Memory::processPendingTransfers()
     {
         if (!p.chainData.empty())
         {
+#if GHPC_DIAG
+            g_ghpcVif1ChunkSource = 0u;
+#endif
             processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
         }
         else if (p.qwc > 0)
@@ -1716,6 +2082,9 @@ void PS2Memory::processPendingTransfers()
                         chunk = PS2_SCRATCHPAD_SIZE - srcPhys;
                     if (chunk == 0)
                         break;
+#if GHPC_DIAG
+                    g_ghpcVif1ChunkSource = 1u;
+#endif
                     processVIF1Data(m_scratchpad + srcPhys, chunk);
                     bytesLeft -= chunk;
                     srcPhys += chunk;
@@ -1733,6 +2102,9 @@ void PS2Memory::processPendingTransfers()
                         chunk = PS2_RAM_SIZE - srcPhys;
                     if (chunk == 0)
                         break;
+#if GHPC_DIAG
+                    g_ghpcVif1ChunkSource = 2u;
+#endif
                     processVIF1Data(srcPhys, chunk);
                     bytesLeft -= chunk;
                     srcPhys += chunk;
@@ -1781,10 +2153,19 @@ void PS2Memory::processPendingTransfers()
     }
     if (hadVif1)
     {
-        raiseDStatChannel(1u); // VIF1 channel
-        queueCompletedDmacCause(1u);
-        m_ioRegisters[VIF1_CHANNEL + 0x00] &= ~0x100u;
-        m_ioRegisters[VIF1_CHANNEL + 0x20] = 0;
+        // A stalled MFIFO drain has not finished the chain. Leaving STR set and
+        // TADR on the unfinished tag is what lets the next ring fill resume it.
+        if (m_vif1DrainStalled)
+        {
+            m_ioRegisters[VIF1_CHANNEL + 0x00] |= 0x100u;
+        }
+        else
+        {
+            raiseDStatChannel(1u); // VIF1 channel
+            queueCompletedDmacCause(1u);
+            m_ioRegisters[VIF1_CHANNEL + 0x00] &= ~0x100u;
+            m_ioRegisters[VIF1_CHANNEL + 0x20] = 0;
+        }
     }
 }
 
@@ -1828,6 +2209,9 @@ void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
 
 void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t sizeBytes, bool drainImmediately, bool path2DirectHl)
 {
+#if GHPC_DIAG
+    { extern int g_ghpcGifPath; g_ghpcGifPath = (int)pathId; }
+#endif
     if (!data || sizeBytes < 16)
         return;
 
@@ -1841,6 +2225,25 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t 
         flushMaskedPath3Packets(false);
     }
 
+#if GHPC_DIAG
+    {
+        static unsigned long long perPath[4] = {0,0,0,0};
+        static unsigned long long perPathBytes[4] = {0,0,0,0};
+        const int pi = ((int)pathId >= 0 && (int)pathId < 4) ? (int)pathId : 0;
+        ++perPath[pi];
+        perPathBytes[pi] += sizeBytes;
+        static auto tSub = std::chrono::steady_clock::now();
+        const auto nowSub = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(nowSub - tSub).count() >= 3.0)
+        {
+            tSub = nowSub;
+            std::cerr << "[gif] submits p1=" << perPath[1] << "(" << perPathBytes[1] << "B)"
+                      << " p2=" << perPath[2] << "(" << perPathBytes[2] << "B)"
+                      << " p3=" << perPath[3] << "(" << perPathBytes[3] << "B)" << std::endl;
+        }
+    }
+
+#endif
     if (m_gifArbiter)
         m_gifArbiter->submit(pathId, data, sizeBytes, path2DirectHl);
     else if (m_gifPacketCallback)
