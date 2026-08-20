@@ -206,6 +206,15 @@ namespace ps2_stubs
 
     void sceCdRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        {
+            static int n = 0;
+            if (n++ < 8)
+                std::cerr << "[cd] sceCdRead a0=" << getRegU32(ctx, 4)
+                          << " a1=" << getRegU32(ctx, 5)
+                          << " a2=0x" << std::hex << getRegU32(ctx, 6) << std::dec << std::endl;
+        }
+#endif
         const uint32_t a0 = getRegU32(ctx, 4); // usually lbn
         const uint32_t a1 = getRegU32(ctx, 5); // usually sector count
         const uint32_t a2 = getRegU32(ctx, 6); // usually destination buffer
@@ -544,6 +553,23 @@ namespace ps2_stubs
 
     void sceCdSearchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        {
+            static int n = 0;
+            if (n++ < 8)
+            {
+                const uint32_t p = getRegU32(ctx, 5) & PS2_RAM_MASK;
+                std::cerr << "[cd] sceCdSearchFile path=\"";
+                for (uint32_t k = 0; k < 96u; ++k)
+                {
+                    const uint8_t c = rdram[p + k];
+                    if (!c) break;
+                    std::cerr << (char)((c >= 0x20 && c < 0x7F) ? c : '.');
+                }
+                std::cerr << "\"" << std::endl;
+            }
+        }
+#endif
         uint32_t fileAddr = getRegU32(ctx, 4);
         uint32_t pathAddr = getRegU32(ctx, 5);
         const std::string path = readPs2CStringBounded(rdram, pathAddr, 260);

@@ -315,6 +315,50 @@ namespace ps2_stubs
                 }
             }
 
+#if GHPC_DIAG
+            // GHPCAUTOPAD: synthesize button edges so headless runs can advance
+            // past screens that wait for input. Off unless GHPC_PAD_AUTO is set:
+            //   GHPC_PAD_AUTO=1 ./scripts/run.sh --quiet --debug
+            // Buttons are active low, so pressing clears the bit. Pulsed rather
+            // than held, because the UI reacts to a press edge, not a level.
+            {
+                static int s_auto = -1;
+                static std::chrono::steady_clock::time_point s_t0;
+                if (s_auto < 0)
+                {
+                    const char *env = std::getenv("GHPC_PAD_AUTO");
+                    s_auto = (env && *env && *env != '0') ? 1 : 0;
+                    s_t0 = std::chrono::steady_clock::now();
+                    if (s_auto > 0)
+                        std::fprintf(stderr, "[pad] GHPCAUTOPAD enabled\n");
+                }
+                if (s_auto > 0)
+                {
+                    const double t = std::chrono::duration<double>(
+                                         std::chrono::steady_clock::now() - s_t0)
+                                         .count();
+                    const double delay = 6.0; // let boot settle first
+                    if (t >= delay)
+                    {
+                        const double span = t - delay;
+                        const int cycle = static_cast<int>(span / 1.2);
+                        const double phase = span - (cycle * 1.2);
+                        if (phase < 0.2)
+                        {
+                            const uint16_t btn = (cycle & 1) ? kPadBtnStart : kPadBtnCross;
+                            state.buttons = static_cast<uint16_t>(state.buttons & ~btn);
+                            static int s_logged = 0;
+                            if (s_logged < 12)
+                            {
+                                ++s_logged;
+                                std::fprintf(stderr, "[pad] GHPCAUTOPAD press %s t=%.1f buttons=0x%04x\n",
+                                             (cycle & 1) ? "START" : "CROSS", t, state.buttons);
+                            }
+                        }
+                    }
+                }
+            }
+#endif
             fillPadStatus(outData, state, portState);
 
             {

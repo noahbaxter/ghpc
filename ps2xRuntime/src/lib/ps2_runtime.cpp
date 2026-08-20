@@ -14,7 +14,9 @@
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 
+#include <cstdio>
 #include <iostream>
+#include <cstdlib>
 #include <fstream>
 #include <algorithm>
 #include <array>
@@ -444,6 +446,66 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
         }
         ++s_uploadDebugCount;
     });
+#if GHPC_DIAG
+    {
+        static uint32_t contentLogs = 0u;
+        static size_t lastNonBlack = SIZE_MAX;
+        size_t nonBlack = 0u;
+        size_t distinct = 0u;
+        uint32_t firstColor = 0u;
+        for (size_t i = 0; i + 4 <= s_scratch.size(); i += 4)
+        {
+            const uint32_t px = (uint32_t)s_scratch[i] | ((uint32_t)s_scratch[i+1] << 8) |
+                                ((uint32_t)s_scratch[i+2] << 16);
+            if (px != 0u)
+            {
+                if (nonBlack == 0u) firstColor = px;
+                else if (px != firstColor) ++distinct;
+                ++nonBlack;
+            }
+        }
+        // Dump the first few frames that actually contain image content, so there
+        // is a real picture to look at rather than just a pixel count.
+        if (nonBlack > 1000u)
+        {
+            static int dumps = 0;
+            static auto lastDump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+            const auto nowDump = std::chrono::steady_clock::now();
+            const bool dueDump = std::chrono::duration<double>(nowDump - lastDump).count() >= 2.0;
+            if (dumps < 20 && dueDump)
+            {
+                lastDump = nowDump;
+                char path[256];
+                std::snprintf(path, sizeof(path), "/tmp/ghpc_frame_%d.ppm", dumps);
+                if (FILE *f = std::fopen(path, "wb"))
+                {
+                    std::fprintf(f, "P6\n%u %u\n255\n", width, height);
+                    for (uint32_t y = 0; y < height; ++y)
+                        for (uint32_t x = 0; x < width; ++x)
+                        {
+                            const size_t i = ((size_t)y * width + x) * 4u;
+                            unsigned char rgb[3] = {0,0,0};
+                            if (i + 3 <= s_scratch.size())
+                            { rgb[0]=s_scratch[i]; rgb[1]=s_scratch[i+1]; rgb[2]=s_scratch[i+2]; }
+                            std::fwrite(rgb, 1, 3, f);
+                        }
+                    std::fclose(f);
+                    std::cerr << "[frame] wrote " << path << " nonBlack=" << nonBlack << std::endl;
+                    ++dumps;
+                }
+            }
+        }
+        if (contentLogs < 8u || nonBlack != lastNonBlack)
+        {
+            ++contentLogs;
+            lastNonBlack = nonBlack;
+            std::cerr << "[frame] " << width << "x" << height
+                      << " nonBlack=" << nonBlack << "/" << (s_scratch.size()/4)
+                      << " firstColor=0x" << std::hex << firstColor << std::dec
+                      << " otherColors=" << distinct << std::endl;
+        }
+    }
+#endif
     s_lastDisplayFbp = displayFbp;
     s_lastSourceFbp = sourceFbp;
     s_lastPreferred = usedPreferredDisplaySource;
@@ -1314,6 +1376,63 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     ctx->pc = targetPc;
     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
 
+#if GHPC_DIAG
+    // GHPCPROBE: durable entry probe at the one seam every guest call crosses.
+    // Lives here, in a real source file, so it can be exported as a patch.
+    // Probes written into work/output cannot be: --from=recomp regenerates that
+    // tree and --from=stage rsyncs over it, so there is no source of truth.
+    // Watch list comes from the environment, so changing it needs no rebuild:
+    //   GHPC_PROBE=0x2fcf98,0x24b970 ./scripts/run.sh --quiet --debug
+    if (isCall)
+    {
+        static uint32_t s_watch[16];
+        static unsigned s_count = 0u;
+        static uint32_t s_lo = 0xFFFFFFFFu, s_hi = 0u;
+        static unsigned long long s_hits[16] = {0};
+        static bool s_init = false;
+        if (!s_init)
+        {
+            s_init = true;
+            if (const char *env = std::getenv("GHPC_PROBE"))
+            {
+                const char *p = env;
+                while (*p && s_count < 16u)
+                {
+                    char *end = nullptr;
+                    const unsigned long v = std::strtoul(p, &end, 0);
+                    if (end == p) break;
+                    const uint32_t a = static_cast<uint32_t>(v);
+                    s_watch[s_count++] = a;
+                    if (a < s_lo) s_lo = a;
+                    if (a > s_hi) s_hi = a;
+                    p = end;
+                    while (*p == ',' || *p == ' ') ++p;
+                }
+                std::fprintf(stderr, "[probe] GHPCPROBE watching %u address(es)\n", s_count);
+            }
+        }
+        // Common case with no watch list is two compares.
+        if (s_count != 0u && targetPc >= s_lo && targetPc <= s_hi)
+        {
+            for (unsigned i = 0; i < s_count; ++i)
+            {
+                if (s_watch[i] != targetPc) continue;
+                const unsigned long long n = ++s_hits[i];
+                if (n <= 40ull || (n % 1000ull) == 0ull)
+                {
+                    std::fprintf(stderr,
+                                 "[probe] 0x%x #%llu a0=0x%x a1=0x%x a2=0x%x a3=0x%x ra=0x%x from=0x%x\n",
+                                 targetPc, n,
+                                 (unsigned)getRegU32(ctx, 4), (unsigned)getRegU32(ctx, 5),
+                                 (unsigned)getRegU32(ctx, 6), (unsigned)getRegU32(ctx, 7),
+                                 (unsigned)getRegU32(ctx, 31), sourcePc);
+                }
+                break;
+            }
+        }
+    }
+#endif
+
     // Every inter-function transfer is also a deterministic EE safe point.
     // Backward edges inside generated functions use eeCheckpointDue(), while
     // this charge bounds straight-line call chains that have no local loop.
@@ -1970,6 +2089,15 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
     }
 
     m_asyncCallbackStackTop = base;
+#if GHPC_DIAG
+    {
+        static int n = 0;
+        if (n++ < 64)
+            std::fprintf(stderr, "[astack] reserve #%d base=0x%x top=0x%x size=0x%x floor=0x%x\n",
+                         n, (unsigned)base, (unsigned)top, (unsigned)allocSize,
+                         (unsigned)m_asyncCallbackStackFloor);
+    }
+#endif
     return top - 0x10u;
 }
 

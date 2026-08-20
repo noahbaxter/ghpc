@@ -4,6 +4,8 @@
 #include "ps2_runtime_macros.h"
 
 #include <algorithm>
+#include <chrono>
+#include <iostream>
 #include <cassert>
 #include <cstring>
 #include <limits>
@@ -11,6 +13,178 @@
 
 namespace
 {
+#if GHPC_DIAG
+    const char *eeThreadStatusName(EeThreadStatus status)
+    {
+        switch (status)
+        {
+        case EeThreadStatus::Running: return "running";
+        case EeThreadStatus::Ready: return "ready";
+        case EeThreadStatus::Waiting: return "waiting";
+        case EeThreadStatus::WaitingSuspended: return "waiting+suspended";
+        case EeThreadStatus::Suspended: return "suspended";
+        case EeThreadStatus::Dormant: return "dormant";
+        }
+        return "?";
+    }
+
+    const char *eeWaitReasonName(EeWaitReason reason)
+    {
+        switch (reason)
+        {
+        case EeWaitReason::None: return "none";
+        case EeWaitReason::Sleep: return "sleep";
+        case EeWaitReason::Semaphore: return "semaphore";
+        case EeWaitReason::EventFlag: return "eventflag";
+        case EeWaitReason::VSync: return "vsync";
+        case EeWaitReason::External: return "external";
+        case EeWaitReason::Mpeg: return "mpeg";
+        }
+        return "?";
+    }
+
+    // Nothing runnable for this long means every guest thread is parked on
+    // something the host never delivers. Dump the kernel state once so the
+    // blocking object is named instead of guessed at.
+    constexpr auto kStallReportDelay = std::chrono::seconds(3);
+
+    bool eeCensusDue()
+    {
+        static std::chrono::steady_clock::time_point last{};
+        const auto now = std::chrono::steady_clock::now();
+        if (last != std::chrono::steady_clock::time_point{} && now - last < kStallReportDelay)
+        {
+            return false;
+        }
+        last = now;
+        return true;
+    }
+
+    // Debug::Fail parks the game in a modal that polls for a button press. The
+    // assert text is still live in the failing thread's frames, so scan the
+    // stack for pointers that resolve to printable strings and print them.
+    void dumpStackStrings(const uint8_t *rdram, uint32_t sp)
+    {
+        if (!rdram || sp == 0u)
+        {
+            return;
+        }
+        for (uint32_t i = 0u; i < 64u; ++i)
+        {
+            const uint32_t slot = (sp & 0x01FFFFFFu) + i * 4u;
+            if (slot + 4u > 0x02000000u)
+            {
+                break;
+            }
+            uint32_t value = 0u;
+            std::memcpy(&value, rdram + slot, sizeof(value));
+            const uint32_t target = value & 0x01FFFFFFu;
+            if (target < 0x00100000u || target >= 0x02000000u)
+            {
+                continue;
+            }
+            std::string text;
+            for (uint32_t k = 0u; k < 160u; ++k)
+            {
+                const uint8_t c = rdram[target + k];
+                if (c == 0u)
+                {
+                    break;
+                }
+                if (c < 0x20u || c >= 0x7Fu)
+                {
+                    text.clear();
+                    break;
+                }
+                text.push_back(static_cast<char>(c));
+            }
+            if (false)
+            {
+                std::cerr << "[ee/stall]     ret +0x" << std::hex << (i * 4u)
+                          << " -> 0x" << value << std::dec << std::endl;
+            }
+            if (text.size() >= 8u)
+            {
+                std::cerr << "[ee/stall]     str +0x" << std::hex << (i * 4u)
+                          << " @0x" << value << std::dec << " \"" << text << "\"" << std::endl;
+            }
+        }
+
+        // Debug::Fail formats its text into a stack buffer, so the message is
+        // inline rather than behind a pointer. Sweep the frames as raw ASCII.
+        std::string run;
+        for (uint32_t i = 0u; i < 2048u; ++i)
+        {
+            const uint32_t at = (sp & 0x01FFFFFFu) + i;
+            if (at >= 0x02000000u)
+            {
+                break;
+            }
+            const uint8_t c = rdram[at];
+            if (c >= 0x20u && c < 0x7Fu)
+            {
+                run.push_back(static_cast<char>(c));
+                continue;
+            }
+            if (run.size() >= 12u)
+            {
+                std::cerr << "[ee/stall]     txt \"" << run << "\"" << std::endl;
+            }
+            run.clear();
+        }
+    }
+
+    void reportEeStall(const EeKernelSnapshot &snapshot, bool idle, const uint8_t *rdram)
+    {
+        (void)idle;
+
+        std::cerr << "[ee/stall] thread census" << std::endl;
+        for (const EeThreadSnapshot &thread : snapshot.threads)
+        {
+            if (thread.status == EeThreadStatus::Dormant)
+            {
+                continue;
+            }
+            std::cerr << "[ee/stall]   thread id=" << thread.id
+                      << " pc=0x" << std::hex << thread.pc
+                      << " ra=0x" << thread.ra
+                      << " sp=0x" << thread.sp
+                      << " stack=0x" << thread.stack
+                      << " stackSize=0x" << thread.stackSize
+                      << " count=0x" << thread.cop0Count
+                      << " entry=0x" << thread.entry << std::dec
+                      << " prio=" << thread.currentPriority
+                      << " status=" << eeThreadStatusName(thread.status)
+                      << " wait=" << eeWaitReasonName(thread.waitReason)
+                      << " waitId=" << thread.waitId
+                      << " wakeups=" << thread.wakeupCount
+                      << std::endl;
+            if (thread.status == EeThreadStatus::Running)
+            {
+                dumpStackStrings(rdram, thread.sp);
+            }
+        }
+        for (const EeSemaphoreSnapshot &sema : snapshot.semaphores)
+        {
+            if (sema.waiters == 0u)
+            {
+                continue;
+            }
+            std::cerr << "[ee/stall]   sema id=" << sema.id
+                      << " count=" << sema.count
+                      << " max=" << sema.maxCount
+                      << " waiters=" << sema.waiters << std::endl;
+        }
+        for (const EeEventFlagSnapshot &flag : snapshot.eventFlags)
+        {
+            std::cerr << "[ee/stall]   eventflag id=" << flag.id
+                      << " bits=0x" << std::hex << flag.bits << std::dec
+                      << std::endl;
+        }
+    }
+
+#endif // GHPC_DIAG
+
     constexpr int KE_OK = 0;
     constexpr int KE_ERROR = -1;
     constexpr int KE_ILLEGAL_PRIORITY = -403;
@@ -159,6 +333,13 @@ void EeScheduler::run()
 
     while (!m_stopRequested.load(std::memory_order_acquire))
     {
+#if GHPC_DIAG
+        if (eeCensusDue())
+        {
+            publishSnapshot();
+            reportEeStall(m_snapshot, true, m_rdram);
+        }
+#endif
         processPendingEvents();
         if (m_stopRequested.load(std::memory_order_acquire))
         {
@@ -283,6 +464,41 @@ void EeScheduler::run()
             }
             continue;
         }
+        {
+            // Watchlist for the ARK path. GH2 debug build addresses.
+            struct Watch { uint32_t addr; const char *name; int strArg; };
+            static const Watch kWatch[] = {
+                {0x002ec548u, "NewFile", 4},
+                {0x002f76c8u, "Archive::Archive", 5},
+                {0x002f7a48u, "Archive::Read", -1},
+                {0x002f7730u, "Archive::GetFileInfo", 5},
+                {0x002f7c28u, "ArkFile::ArkFile", 5},
+                {0x002f75c0u, "ArkHash::Read", -1},
+            };
+            static uint32_t hits[6] = {0};
+            for (size_t w = 0; w < 6; ++w)
+            {
+                if (context.pc != kWatch[w].addr)
+                    continue;
+                if (hits[w]++ >= 6u)
+                    break;
+                std::cerr << "[ark] " << kWatch[w].name;
+                if (kWatch[w].strArg >= 0 && m_rdram)
+                {
+                    const uint32_t ptr = getRegU32(&context, kWatch[w].strArg) & 0x01FFFFFFu;
+                    std::cerr << " arg=\"";
+                    for (uint32_t k = 0; k < 96u && ptr + k < 0x02000000u; ++k)
+                    {
+                        const uint8_t c = m_rdram[ptr + k];
+                        if (c == 0u) break;
+                        std::cerr << (char)((c >= 0x20u && c < 0x7Fu) ? c : '.');
+                    }
+                    std::cerr << "\"";
+                }
+                std::cerr << std::endl;
+                break;
+            }
+        }
         PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
 
         if (checkpointDue(kGuestDispatchCycles))
@@ -294,7 +510,30 @@ void EeScheduler::run()
         {
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
+#if GHPC_DIAG
+            const uint32_t kWatchAddr = 0x1f7ff10u;
+            const uint32_t entryPc = context.pc;
+            uint64_t beforeVal = 0;
+            std::memcpy(&beforeVal, m_rdram + (kWatchAddr & 0x01FFFFFFu), 8);
             function(m_rdram, &context, &m_runtime);
+            {
+                uint64_t afterVal = 0;
+                std::memcpy(&afterVal, m_rdram + (kWatchAddr & 0x01FFFFFFu), 8);
+                if (afterVal != beforeVal)
+                {
+                    static int watchLogs = 0;
+                    if (watchLogs++ < 40)
+                        std::cerr << "[ee/watch] 0x" << std::hex << kWatchAddr
+                                  << " changed 0x" << beforeVal << " -> 0x" << afterVal
+                                  << " by guestFn entry=0x" << entryPc
+                                  << " (exit pc=0x" << context.pc << ")"
+                                  << std::dec << " thread=" << running->id
+                                  << " inv=" << running->invocations.size() << std::endl;
+                }
+            }
+#else
+            function(m_rdram, &context, &m_runtime);
+#endif
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
         }
@@ -390,6 +629,15 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
+
+    // The EE Count register advances at half the CPU clock. Games busy-wait on
+    // it directly (Timer::Sleep spins on mfc0 $9), and the recompiler lowers
+    // that read to a plain load of ctx->cop0_count, so nothing else would ever
+    // move it and any such loop would never terminate.
+    if (GuestThread *running = currentThread())
+    {
+        running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle >> 1);
+    }
     m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
     if (m_pendingEeTimerInterrupts != 0u)
     {
@@ -512,6 +760,15 @@ int EeScheduler::startThread(int id, uint32_t arg, const R5900Context &caller, b
     assert(exiting != nullptr);
     const int id = exiting->id;
     const uint32_t ownedStack = deleteThreadRecord && exiting->ownsStack ? exiting->stack : 0u;
+#if GHPC_DIAG
+    std::cerr << "[ee/exit] thread " << id
+              << " exitCurrent(delete=" << (deleteThreadRecord ? 1 : 0) << ")"
+              << " pc=0x" << std::hex << exiting->activeContext().pc
+              << " ra=0x" << getRegU32(&exiting->activeContext(), 31)
+              << " sp=0x" << getRegU32(&exiting->activeContext(), 29)
+              << std::dec << " invocations=" << exiting->invocations.size()
+              << std::endl;
+#endif
     makeDormant(*exiting);
     m_currentThreadId = 0;
     if (deleteThreadRecord && id != kMainThreadId)
@@ -1278,7 +1535,11 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
         SET_GPR_U32(&invocation.context, 4, cause);
         SET_GPR_U32(&invocation.context, 5, handler.argument);
         SET_GPR_U32(&invocation.context, 28, handler.gp);
-        SET_GPR_U32(&invocation.context, 29, handler.sp);
+        // handler.sp is the guest $sp captured when the handler was registered, so
+        // replaying it makes the handler run inside whatever frame is live when the
+        // IRQ fires. Leave $sp at 0 and let the dispatch loop hand out a dedicated
+        // invocation stack, the way hardware gives interrupts their own stack.
+        SET_GPR_U32(&invocation.context, 29, 0u);
         SET_GPR_U32(&invocation.context, 31, 0u);
         queueInvocation(std::move(invocation));
     }
@@ -1497,6 +1758,9 @@ void EeScheduler::publishSnapshot()
         EeThreadSnapshot snapshot{};
         snapshot.id = id;
         snapshot.pc = item.activeContext().pc;
+        snapshot.ra = getRegU32(&item.activeContext(), 31);
+        snapshot.sp = getRegU32(&item.activeContext(), 29);
+        snapshot.cop0Count = item.activeContext().cop0_count;
         snapshot.entry = item.entry;
         snapshot.stack = item.stack;
         snapshot.stackSize = item.stackSize;
@@ -1632,6 +1896,14 @@ void EeScheduler::makeRunning(GuestThread &item)
 
 void EeScheduler::makeDormant(GuestThread &item)
 {
+#if GHPC_DIAG
+    std::cerr << "[ee/dormant] thread " << item.id
+              << " pc=0x" << std::hex << item.activeContext().pc
+              << " ra=0x" << getRegU32(&item.activeContext(), 31)
+              << " sp=0x" << getRegU32(&item.activeContext(), 29)
+              << std::dec << " invocations=" << item.invocations.size()
+              << std::endl;
+#endif
     removeReady(item);
     removeFromWaitObject(item);
     item.status = EeThreadStatus::Dormant;
@@ -1888,7 +2160,10 @@ void EeScheduler::processEvent(const EeEvent &event)
             invocation.context.pc = m_gsVSyncCallback;
             SET_GPR_U32(&invocation.context, 4, static_cast<uint32_t>(m_vsyncTick));
             SET_GPR_U32(&invocation.context, 28, m_gsVSyncCallbackGp);
-            SET_GPR_U32(&invocation.context, 29, m_gsVSyncCallbackSp);
+            // Same stale-$sp hazard as the IRQ/alarm paths: the captured sp points
+            // into a frame that is long gone by the time vsync fires. Let the
+            // dispatch loop assign a dedicated invocation stack instead.
+            SET_GPR_U32(&invocation.context, 29, 0u);
             SET_GPR_U32(&invocation.context, 31, 0u);
             queueInvocation(std::move(invocation));
         }
@@ -1918,7 +2193,13 @@ void EeScheduler::processEvent(const EeEvent &event)
         SET_GPR_U32(&invocation.context, 5, static_cast<uint32_t>(alarm.ticks));
         SET_GPR_U32(&invocation.context, 6, alarm.argument);
         SET_GPR_U32(&invocation.context, 28, alarm.gp);
-        SET_GPR_U32(&invocation.context, 29, alarm.sp);
+        // alarm.sp is the guest $sp captured when the alarm was registered. By the
+        // time the alarm fires that address sits inside whatever frame is live now,
+        // so replaying it makes the handler write through the interrupted thread's
+        // stack (cbTimerHandler was zeroing App::App's saved $ra and locals). Real
+        // hardware runs the handler on its own stack; leaving $sp at 0 makes the
+        // dispatch loop hand out a dedicated invocation stack.
+        SET_GPR_U32(&invocation.context, 29, 0u);
         SET_GPR_U32(&invocation.context, 31, 0u);
         queueInvocation(std::move(invocation));
         break;

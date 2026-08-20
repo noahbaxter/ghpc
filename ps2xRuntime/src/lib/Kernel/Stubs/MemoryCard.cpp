@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "Common.h"
 #include "MemoryCard.h"
 
@@ -696,6 +697,9 @@ namespace ps2_stubs
 
     void sceMcGetDir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        { static int c=0; if(c++<10) std::fprintf(stderr,"[mc] sceMcGetDir a0=0x%x a1=0x%x a2=0x%x\n",(unsigned)getRegU32(ctx,4),(unsigned)getRegU32(ctx,5),(unsigned)getRegU32(ctx,6)); }
+#endif
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string rawPath = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -858,6 +862,9 @@ namespace ps2_stubs
 
     void sceMcGetInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        { static int c=0; if(c++<10) std::fprintf(stderr,"[mc] sceMcGetInfo a0=0x%x a1=0x%x a2=0x%x\n",(unsigned)getRegU32(ctx,4),(unsigned)getRegU32(ctx,5),(unsigned)getRegU32(ctx,6)); }
+#endif
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const uint32_t typePtr = getRegU32(ctx, 6);
@@ -918,6 +925,9 @@ namespace ps2_stubs
 
     void sceMcInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        { static int c=0; if(c++<10) std::fprintf(stderr,"[mc] sceMcInit a0=0x%x a1=0x%x a2=0x%x\n",(unsigned)getRegU32(ctx,4),(unsigned)getRegU32(ctx,5),(unsigned)getRegU32(ctx,6)); }
+#endif
         {
             std::lock_guard<std::mutex> lock(g_mcStateMutex);
             closeMcFilesLocked();
@@ -982,6 +992,9 @@ namespace ps2_stubs
 
     void sceMcOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        { static int c=0; if(c++<10) std::fprintf(stderr,"[mc] sceMcOpen a0=0x%x a1=0x%x a2=0x%x\n",(unsigned)getRegU32(ctx,4),(unsigned)getRegU32(ctx,5),(unsigned)getRegU32(ctx,6)); }
+#endif
         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
         const std::string path = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
@@ -1045,6 +1058,9 @@ namespace ps2_stubs
 
     void sceMcRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        { static int c=0; if(c++<10) std::fprintf(stderr,"[mc] sceMcRead a0=0x%x a1=0x%x a2=0x%x\n",(unsigned)getRegU32(ctx,4),(unsigned)getRegU32(ctx,5),(unsigned)getRegU32(ctx,6)); }
+#endif
         const int32_t fd = static_cast<int32_t>(getRegU32(ctx, 4));
         const uint32_t dstAddr = getRegU32(ctx, 5);
         const int32_t size = static_cast<int32_t>(getRegU32(ctx, 6));
@@ -1192,6 +1208,9 @@ namespace ps2_stubs
 
     void sceMcSync(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+#if GHPC_DIAG
+        { static int c=0; if(c++<10) std::fprintf(stderr,"[mc] sceMcSync a0=0x%x a1=0x%x a2=0x%x\n",(unsigned)getRegU32(ctx,4),(unsigned)getRegU32(ctx,5),(unsigned)getRegU32(ctx,6)); }
+#endif
         const uint32_t cmdPtr = getRegU32(ctx, 5);
         const uint32_t resultPtr = getRegU32(ctx, 6);
         int32_t cmd = 0;

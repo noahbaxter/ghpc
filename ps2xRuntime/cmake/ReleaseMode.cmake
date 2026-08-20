@@ -1,5 +1,8 @@
 include(CheckIPOSupported)
 
+# LTO costs ~90s on every relink of the runner. Off by choice while iterating.
+option(PS2X_ENABLE_LTO "Link the runtime with interprocedural optimization" ON)
+
 check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
 
 function(EnableFastReleaseMode TargetName)
@@ -34,7 +37,9 @@ function(EnableFastReleaseMode TargetName)
         endif()
     endif()
 
-    if(IPO_SUPPORTED)
+    if(NOT PS2X_ENABLE_LTO)
+        message("> LTO disabled for: ${TargetName}")
+    elseif(IPO_SUPPORTED)
         set_property(TARGET ${TargetName} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
     else()
         message(WARNING "Interprocedural optimization not supported: ${ipo_error}")
