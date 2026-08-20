@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PS2R="$ROOT/third_party/PS2Recomp"
+PS2R="$ROOT"
 BUILD="$PS2R/build"   # recomputed after arg parsing (see DIAG)
 RUNNER="$PS2R/ps2xRuntime/src/runner"
 WORK="$ROOT/work"

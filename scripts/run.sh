@@ -20,7 +20,7 @@ for a in "$@"; do case "$a" in
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
-BIN="$ROOT/third_party/PS2Recomp/$BUILD_DIR/ps2xRuntime/ps2EntryRunner"
+BIN="$ROOT/$BUILD_DIR/ps2xRuntime/ps2EntryRunner"
 [ -x "$BIN" ]        || { echo "binary missing, run ./scripts/build.sh first" >&2; exit 1; }
 [ -f "$ELF" ]        || { echo "missing ELF: $ELF" >&2; exit 1; }
 [ -f "$WORK/GEN/MAIN.HDR" ] || echo "WARNING: work/GEN/MAIN.HDR missing, game data not staged"
