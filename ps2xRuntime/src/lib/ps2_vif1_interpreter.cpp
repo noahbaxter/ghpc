@@ -1,6 +1,10 @@
 // Based on Blackline Interactive implementation
+#include <chrono>
+#include <iomanip>
+#include <iostream>
 #include "runtime/ps2_memory.h"
 #include <cstring>
+#include <cstdlib>
 
 enum VIFCmd : uint8_t
 {
@@ -30,18 +34,47 @@ namespace
 {
     constexpr uint8_t kGifFmtImage = 2u;
 
+    // Walk the whole GIFtag chain inside a DIRECT payload and report how many
+    // quadwords of a trailing IMAGE transfer spill past the end of that payload.
+    // A texture upload is PACKED first (the A+D writes that set BITBLTBUF,
+    // TRXPOS, TRXREG and TRXDIR) and only then IMAGE, so looking at the first
+    // tag alone always reported 0 and left the pixel data to be parsed as
+    // VIFcode.
     uint32_t gifImageQwcFromTag(const uint8_t *data, uint32_t sizeBytes)
     {
         if (!data || sizeBytes < 16u)
             return 0u;
 
-        uint64_t tagLo = 0u;
-        std::memcpy(&tagLo, data, sizeof(tagLo));
-        const uint8_t flg = static_cast<uint8_t>((tagLo >> 58) & 0x3u);
-        if (flg != kGifFmtImage)
-            return 0u;
+        uint32_t off = 0u;
+        while (off + 16u <= sizeBytes)
+        {
+            uint64_t tagLo = 0u;
+            std::memcpy(&tagLo, data + off, sizeof(tagLo));
+            const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
+            const uint8_t flg = static_cast<uint8_t>((tagLo >> 58) & 0x3u);
+            uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
+            if (nreg == 0u)
+                nreg = 16u;
+            off += 16u;
 
-        return static_cast<uint32_t>(tagLo & 0x7FFFu);
+            uint64_t payload = 0ull;
+            if (flg == 0u) // PACKED
+                payload = static_cast<uint64_t>(nloop) * nreg * 16ull;
+            else if (flg == 1u) // REGLIST, 8 bytes per entry, padded to a qword
+                payload = ((static_cast<uint64_t>(nloop) * nreg * 8ull) + 15ull) & ~15ull;
+            else // IMAGE or DISABLE
+                payload = static_cast<uint64_t>(nloop) * 16ull;
+
+            if (static_cast<uint64_t>(off) + payload > static_cast<uint64_t>(sizeBytes))
+            {
+                if (flg == kGifFmtImage)
+                    return static_cast<uint32_t>(
+                        ((static_cast<uint64_t>(off) + payload) - sizeBytes) / 16ull);
+                return 0u;
+            }
+            off += static_cast<uint32_t>(payload);
+        }
+        return 0u;
     }
 }
 
@@ -259,11 +292,350 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
     processVIF1Data(m_rdram + srcPhys, sizeBytes);
 }
 
+#if GHPC_DIAG
+static int g_vif1TraceRemaining = 0;
+unsigned int g_ghpcVif1ChunkSource = 0u;
+#include <map>
+#include <set>
+static std::map<uint32_t,uint32_t> g_mpgRanges;   // dest -> bytes
+static std::map<uint32_t,unsigned long long> g_mscalCovered, g_mscalUncovered;
+void ghpcNoteMpg(uint32_t dest, uint32_t bytes)
+{
+    uint32_t &b = g_mpgRanges[dest];
+    if (bytes > b) b = bytes;
+}
+unsigned long long g_ghpcUnpackBytesSinceMscal = 0ull;
+unsigned long long g_ghpcMscalRejected = 0ull;
+static std::map<uint32_t, unsigned long long> g_unpackDest;
+void ghpcNoteUnpackDest(uint32_t vuAddrQw, uint32_t bytes)
+{
+    ++g_unpackDest[vuAddrQw / 64u];   // bucket by 64-qword regions
+    static unsigned long long n = 0;
+    if ((++n % 5000ull) == 0ull)
+    {
+        unsigned long long low = 0, tot = 0;
+        for (const auto &kv : g_unpackDest) { tot += kv.second; if (kv.first == 0u) low += kv.second; }
+        std::cerr << "[vu1] UNPACK dest regions=" << g_unpackDest.size()
+                  << " total=" << tot << " intoQw0-63=" << low << " |";
+        int k = 0;
+        for (const auto &kv : g_unpackDest) if (k++ < 10) std::cerr << " qw" << (kv.first * 64u) << "=" << kv.second;
+        std::cerr << std::endl;
+    }
+}
+unsigned long long g_ghpcImpossibleTag = 0ull;
+unsigned long long g_ghpcDirectScanned = 0ull;
+unsigned long long g_ghpcDirectSpill = 0ull;
+#include <vector>
+namespace { struct Fill { uint32_t start, qwc, end; }; std::vector<Fill> g_fills; }
+void ghpcNoteRingFill(uint32_t start, uint32_t qwc, uint32_t end)
+{
+    if (g_fills.size() < 4096u) g_fills.push_back(Fill{start, qwc, end});
+}
+void ghpcCheckFillTiling(const uint8_t *ring, uint32_t startPhys, uint32_t bytes, uint32_t startAddr)
+{
+    static unsigned long long checked = 0, tiled = 0, ragged = 0;
+    static int shown = 0;
+    uint32_t off = 0u;
+    bool ok = true;
+    while (off + 16u <= bytes)
+    {
+        uint64_t tag = 0;
+        std::memcpy(&tag, ring + startPhys + off, 8);
+        const uint32_t qwc = (uint32_t)(tag & 0xFFFFu);
+        const uint32_t id  = (uint32_t)((tag >> 28) & 0x7u);
+        uint32_t step = 16u;
+        if (id == 1u || id == 2u || id == 5u || id == 6u || id == 7u)
+            step = 16u + qwc * 16u;   // data follows the tag inside the ring
+        if (step == 0u || off + step > bytes) { ok = (off + step == bytes); break; }
+        off += step;
+    }
+    ++checked;
+    if (ok && off == bytes) ++tiled; else ++ragged;
+    if (!ok && shown < 1)
+    {
+        ++shown;
+        std::cerr << "[vif1] FILL NOT TILED start=0x" << std::hex << startAddr
+                  << " bytes=0x" << bytes << " stoppedAt=0x" << off << std::dec << std::endl;
+        // Raw content from the last good tag boundary onward.
+        for (uint32_t k = 0u; k < bytes && k + 16u <= bytes; k += 16u)
+        {
+            uint64_t a = 0, b = 0;
+            std::memcpy(&a, ring + startPhys + k, 8);
+            std::memcpy(&b, ring + startPhys + k + 8, 8);
+            std::cerr << "      +0x" << std::hex << k << " " << std::setw(16) << std::setfill('0') << a
+                      << " " << std::setw(16) << std::setfill('0') << b
+                      << std::dec << std::setfill(' ') << (k == off ? "   <== here" : "") << std::endl;
+        }
+    }
+    if ((checked % 400ull) == 0ull)
+        std::cerr << "[vif1] fill tiling: checked=" << checked
+                  << " tiled=" << tiled << " ragged=" << ragged << std::endl;
+}
+
+void ghpcNoteFillVsTadr(uint32_t fillStart, uint32_t tadr)
+{
+    static unsigned long long total = 0, aligned = 0, behind = 0, ahead = 0;
+    ++total;
+    if (fillStart == tadr) ++aligned;
+    else if (fillStart > tadr) ++ahead;   // fill starts past where the chain will read
+    else ++behind;
+    if ((total % 400ull) == 0ull)
+        std::cerr << "[vif1] fill vs TADR: total=" << total
+                  << " equal=" << aligned << " fillAhead=" << ahead
+                  << " fillBehind=" << behind << std::endl;
+}
+
+void ghpcReportFillFor(uint32_t addr)
+{
+    // Which ring fill covered the address the walker expected a tag at, and
+    // where did that fill start relative to it?
+    for (size_t i = g_fills.size(); i-- > 0;)
+    {
+        const Fill &f = g_fills[i];
+        const uint32_t bytes = f.qwc * 16u;
+        if (addr >= f.start && addr < f.start + bytes)
+        {
+            std::cerr << "    covered by fill #" << i << " start=0x" << std::hex << f.start
+                      << " qwc=" << std::dec << f.qwc
+                      << " end=0x" << std::hex << f.end
+                      << " offsetIntoFill=" << std::dec << (addr - f.start) << std::endl;
+            return;
+        }
+    }
+    std::cerr << "    NOT covered by any recorded fill (fills=" << g_fills.size() << ")" << std::endl;
+    for (size_t i = g_fills.size(); i-- > 0 && i + 4 >= g_fills.size();)
+        std::cerr << "      recent fill start=0x" << std::hex << g_fills[i].start
+                  << " qwc=" << std::dec << g_fills[i].qwc
+                  << " end=0x" << std::hex << g_fills[i].end << std::dec << std::endl;
+}
+static std::map<uint32_t, std::pair<unsigned long long, unsigned long long>> g_feed; // pc -> (kicks, bytes)
+void ghpcNoteMscalFeed(uint32_t pc)
+{
+    auto &e = g_feed[pc];
+    ++e.first;
+    e.second += g_ghpcUnpackBytesSinceMscal;
+    g_ghpcUnpackBytesSinceMscal = 0ull;
+    static unsigned long long m = 0;
+    if ((++m % 400ull) == 0ull)
+    {
+        std::cerr << "[vif1] impossible tags ended: " << g_ghpcImpossibleTag << std::endl;
+        std::cerr << "[vu1] MSCAL rejected=" << g_ghpcMscalRejected
+                  << " DIRECT scanned=" << g_ghpcDirectScanned
+                  << " withImageSpill=" << g_ghpcDirectSpill << std::endl;
+        std::cerr << "[vu1] UNPACK bytes fed per MSCAL (pc: kicks avgBytes):";
+        for (const auto &kv : g_feed)
+            std::cerr << " 0x" << std::hex << kv.first << std::dec
+                      << ":" << kv.second.first
+                      << "/" << (kv.second.first ? kv.second.second / kv.second.first : 0ull);
+        std::cerr << std::endl;
+    }
+}
+void ghpcNoteMscal(uint32_t pc)
+{
+    bool covered = false;
+    for (const auto &kv : g_mpgRanges)
+        if (pc >= kv.first && pc < kv.first + kv.second) { covered = true; break; }
+    if (covered) ++g_mscalCovered[pc]; else ++g_mscalUncovered[pc];
+    static unsigned long long n = 0;
+    if ((++n % 200ull) == 0ull)
+    {
+        std::cerr << "[vu1] MPG ranges:";
+        for (const auto &kv : g_mpgRanges)
+            std::cerr << " 0x" << std::hex << kv.first << "+0x" << kv.second << std::dec;
+        std::cerr << std::endl << "[vu1] MSCAL into LOADED:";
+        for (const auto &kv : g_mscalCovered) std::cerr << " 0x" << std::hex << kv.first << std::dec << "x" << kv.second;
+        std::cerr << std::endl << "[vu1] MSCAL into UNLOADED:";
+        for (const auto &kv : g_mscalUncovered) std::cerr << " 0x" << std::hex << kv.first << std::dec << "x" << kv.second;
+        std::cerr << std::endl;
+    }
+}
+unsigned long long g_ghpcStalls = 0ull;
+unsigned long long g_ghpcStallSameAddr = 0ull;
+unsigned long long g_ghpcStallResumed = 0ull;
+unsigned int g_ghpcLastStallAddr = 0xFFFFFFFFu;
+unsigned int g_ghpcLastStallNeed = 0u;
+unsigned int g_ghpcLastStallHave = 0u;
+unsigned long long g_ghpcMfifoTagPastFill = 0ull;
+unsigned long long g_ghpcMfifoTagsChecked = 0ull;
+unsigned long long g_ghpcMfifoPayloadPastFill = 0ull;
+unsigned long long g_ghpcMfifoPayloadBytesPastFill = 0ull;
+unsigned long long g_ghpcTteTagsCovered = 0ull;
+unsigned long long g_ghpcTteTagsSkipped = 0ull;
+unsigned long long g_ghpcTteSkippedById[8] = {0,0,0,0,0,0,0,0};
+unsigned long long g_ghpcSprBytes = 0ull;
+unsigned long long g_ghpcSprBytesToVif = 0ull;
+unsigned long long g_ghpcSprFills = 0ull;
+unsigned long long g_ghpcVifKicks = 0ull;
+unsigned long long g_ghpcVif1Bytes = 0ull;
+unsigned long long g_ghpcMscalCount = 0ull;
+// A command whose payload runs past the end of the chunk is discarded here and
+// no residual is carried to the next processVIF1Data call, so the next chunk
+// starts parsing payload as commands. Count each truncation by kind.
+unsigned long long g_truncDirect = 0ull;
+unsigned long long g_truncUnpack = 0ull;
+unsigned long long g_truncMpg = 0ull;
+unsigned long long g_chunks = 0ull;
+unsigned long long g_chunksEndingTruncated = 0ull;
+unsigned long long g_bytesDiscarded = 0ull;
+// Per-chunk desync accounting: does a truncated tail actually poison the NEXT
+// chunk, or is the garbage arriving some other way?
+unsigned long long g_dirtyChunks = 0ull;       // chunks containing >=1 invalid opcode
+unsigned long long g_dirtyAfterTrunc = 0ull;   // ...of those, ones right after a truncation
+unsigned long long g_invalidOpcodes = 0ull;
+unsigned long long g_firstBadPosZero = 0ull;   // desync starting at offset 0 of the chunk
+bool g_prevChunkTruncated = false;
+uint32_t g_curChunkSource = 0u;
+uint32_t g_curChunkBytes = 0u;
+unsigned long long g_lastTruncTotal = 0ull;
+bool g_chunkDirty = false;
+int g_chunkFirstBadPos = -1;
+// Ring of the last few commands parsed, so a mid-chunk desync can name the
+// command whose consumed length was wrong.
+struct VifHist { uint32_t pos, cmd; uint8_t op, num; uint16_t imm; uint32_t consumed; };
+VifHist g_hist[32] = {};
+uint32_t g_histIdx = 0u;
+uint32_t g_midChunkDumps = 0u;
+// Which feed delivered this chunk: 0 = flattened DMA chain (chainData),
+// 1 = scratchpad qwc, 2 = RAM qwc. Set by the caller in ps2_memory.cpp.
+unsigned long long g_dirtyBySource[3] = {0,0,0};
+unsigned long long g_chunksBySource[3] = {0,0,0};
+unsigned long long g_dirtyChunkBytes = 0ull;
+inline void pushHist(uint32_t pos, uint32_t cmd, uint8_t op, uint8_t num, uint16_t imm)
+{
+    if (g_histIdx != 0u)
+    {
+        VifHist &prev = g_hist[(g_histIdx - 1u) & 31u];
+        if (pos >= prev.pos)
+            prev.consumed = pos - prev.pos;
+    }
+    g_hist[g_histIdx & 31u] = VifHist{pos, cmd, op, num, imm, 0u};
+    ++g_histIdx;
+}
+inline void noteConsumed(uint32_t) {}
+inline void dumpHist(uint32_t badPos, uint32_t sizeBytes)
+{
+    if (g_midChunkDumps >= 6u)
+        return;
+    ++g_midChunkDumps;
+    std::cerr << "[vif1] MID-CHUNK DESYNC at pos=0x" << std::hex << badPos
+              << " of 0x" << sizeBytes << std::dec
+              << " (no preceding truncation). Preceding commands:" << std::endl;
+    for (uint32_t i = 0u; i < 32u; ++i)
+    {
+        const VifHist &h = g_hist[(g_histIdx + i) & 31u];
+        if (h.consumed == 0u && h.pos == 0u && h.cmd == 0u)
+            continue;
+        std::cerr << "    pos=0x" << std::hex << h.pos << " cmd=0x" << h.cmd
+                  << " op=0x" << (unsigned)h.op << std::dec
+                  << " num=" << (unsigned)h.num
+                  << " imm=0x" << std::hex << h.imm << std::dec
+                  << " consumed=" << h.consumed
+                  << " -> next=0x" << std::hex << (h.pos + h.consumed) << std::dec << std::endl;
+    }
+}
+
+inline bool vifOpcodeValid(uint8_t op)
+{
+    if ((op & 0x60u) == 0x60u)
+        return true; // UNPACK
+    switch (op)
+    {
+    case 0x00: case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07:
+    case 0x10: case 0x11: case 0x13: case 0x14: case 0x15: case 0x17:
+    case 0x20: case 0x30: case 0x31: case 0x32: case 0x33:
+    case 0x4A: case 0x50: case 0x51:
+        return true;
+    default:
+        return false;
+    }
+}
+#endif
+
 void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 {
     if (sizeBytes == 0u)
         return;
 
+#if GHPC_DIAG
+    {
+        g_ghpcVif1Bytes += sizeBytes;
+        ++g_chunks;
+        g_curChunkSource = g_ghpcVif1ChunkSource;
+        g_curChunkBytes = sizeBytes;
+        ++g_chunksBySource[g_curChunkSource % 3u];
+        if (g_chunkDirty)
+        {
+            ++g_dirtyChunks;
+            ++g_dirtyBySource[g_curChunkSource % 3u];
+            g_dirtyChunkBytes += g_curChunkBytes;
+            if (g_prevChunkTruncated)
+                ++g_dirtyAfterTrunc;
+            if (g_chunkFirstBadPos == 0)
+                ++g_firstBadPosZero;
+        }
+        g_prevChunkTruncated = (g_truncDirect + g_truncUnpack + g_truncMpg) != g_lastTruncTotal;
+        g_lastTruncTotal = g_truncDirect + g_truncUnpack + g_truncMpg;
+        g_chunkDirty = false;
+        g_chunkFirstBadPos = -1;
+        static auto tRep = std::chrono::steady_clock::now();
+        auto nowR = std::chrono::steady_clock::now();
+        if (std::chrono::duration<double>(nowR - tRep).count() >= 5.0)
+        {
+            tRep = nowR;
+            std::cerr << "[vif1] TOTALS sprAll=" << g_ghpcSprBytes
+                      << " sprToVif=" << g_ghpcSprBytesToVif
+                      << " fills=" << g_ghpcSprFills
+                      << " kicks=" << g_ghpcVifKicks
+                      << " vif1Bytes=" << g_ghpcVif1Bytes
+                      << " | chunks=" << g_chunks
+                      << " truncDirect=" << g_truncDirect
+                      << " truncUnpack=" << g_truncUnpack
+                      << " truncMpg=" << g_truncMpg
+                      << " bytesDiscarded=" << g_bytesDiscarded
+                      << " | dirtyChunks=" << g_dirtyChunks
+                      << " dirtyAfterTrunc=" << g_dirtyAfterTrunc
+                      << " firstBadAtPos0=" << g_firstBadPosZero
+                      << " invalidOps=" << g_invalidOpcodes
+                      << " | bySource chain=" << g_dirtyBySource[0] << "/" << g_chunksBySource[0]
+                      << " spr=" << g_dirtyBySource[1] << "/" << g_chunksBySource[1]
+                      << " ram=" << g_dirtyBySource[2] << "/" << g_chunksBySource[2]
+                      << " dirtyBytes=" << g_dirtyChunkBytes << std::endl;
+            std::cerr << "[vif1] STALL count=" << g_ghpcStalls
+                      << " sameAddrRepeat=" << g_ghpcStallSameAddr
+                      << " resumed=" << g_ghpcStallResumed
+                      << " lastNeed=" << g_ghpcLastStallNeed
+                      << " lastHave=" << g_ghpcLastStallHave << std::endl;
+            std::cerr << "[vif1] MFIFO tagsChecked=" << g_ghpcMfifoTagsChecked
+                      << " tagPastFill=" << g_ghpcMfifoTagPastFill
+                      << " payloadPastFill=" << g_ghpcMfifoPayloadPastFill
+                      << " payloadBytesPastFill=" << g_ghpcMfifoPayloadBytesPastFill << std::endl;
+            std::cerr << "[vif1] TTE tags covered=" << g_ghpcTteTagsCovered
+                      << " skipped=" << g_ghpcTteTagsSkipped << " byId:";
+            for (uint32_t i = 0u; i < 8u; ++i)
+                if (g_ghpcTteSkippedById[i]) std::cerr << " id" << i << "=" << g_ghpcTteSkippedById[i];
+            std::cerr << std::endl;
+        }
+    }
+    if (sizeBytes == 0x9a0u)
+    {
+        static int bigPackets = 0;
+        if (bigPackets < 1) { ++bigPackets; g_vif1TraceRemaining = 400;
+            std::cerr << "[vif1] TRACE begin packet bytes=" << sizeBytes << std::endl; }
+    }
+    {
+        static uint32_t calls = 0u;
+        if (calls < 8u)
+        {
+            ++calls;
+            std::cerr << "[vif1] data bytes=" << sizeBytes << " first=";
+            for (uint32_t b = 0u; b < 16u && b < sizeBytes; ++b)
+                std::cerr << std::hex << std::setw(2) << std::setfill('0')
+                          << (uint32_t)data[b] << ' ';
+            std::cerr << std::dec << std::endl;
+        }
+    }
+
+#endif
     uint32_t pos = 0;
 
     while (pos + 4 <= sizeBytes)
@@ -304,9 +676,50 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         pos += 4;
 
         uint8_t opcode = (cmd >> 24) & 0x7F;
+#if GHPC_DIAG
+        {
+            static uint32_t histogram[128] = {0};
+            static uint32_t total = 0u;
+            ++histogram[opcode & 0x7Fu];
+            pushHist(pos - 4u, cmd, opcode,
+                     static_cast<uint8_t>((cmd >> 16) & 0xFFu),
+                     static_cast<uint16_t>(cmd & 0xFFFFu));
+            if (!vifOpcodeValid(opcode))
+            {
+                ++g_invalidOpcodes;
+                if (!g_chunkDirty)
+                {
+                    g_chunkDirty = true;
+                    g_chunkFirstBadPos = static_cast<int>(pos - 4u);
+                    if (!g_prevChunkTruncated && (pos - 4u) != 0u)
+                        dumpHist(pos - 4u, sizeBytes);
+                }
+            }
+            if (++total % 50u == 0u)
+            {
+                std::cerr << "[vif1] opcode histogram after " << total << ":";
+                for (uint32_t o = 0u; o < 128u; ++o)
+                {
+                    if (histogram[o] != 0u)
+                        std::cerr << " 0x" << std::hex << o << std::dec << "=" << histogram[o];
+                }
+                std::cerr << std::endl;
+            }
+        }
+#endif
         uint16_t imm = cmd & 0xFFFF;
         uint8_t num = (cmd >> 16) & 0xFF;
         const bool irq = (cmd & 0x80000000u) != 0u;
+#if GHPC_DIAG
+        if (g_vif1TraceRemaining > 0)
+        {
+            --g_vif1TraceRemaining;
+            std::cerr << "[vif1]  @0x" << std::hex << (pos - 4u)
+                      << " cmd=0x" << cmd << " op=0x" << (unsigned)opcode
+                      << std::dec << " num=" << (unsigned)num
+                      << " imm=0x" << std::hex << imm << std::dec << std::endl;
+        }
+#endif
 
         // Track most-recent command for VIFn_CODE emulation.
         vif1_regs.code = cmd;
@@ -371,6 +784,18 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_MSCAL || opcode == VIF_MSCALF)
         {
             uint32_t startPC = (uint32_t)imm * 8u;
+            // VU1 micro memory is 16 KB, i.e. 2048 instruction pairs, so a real
+            // MSCAL always has imm < 2048. Larger values only come from a
+            // desynced stream being read as VIFcode; masking them into range
+            // (microAddressMask) runs whatever garbage happens to live there.
+            if (startPC >= PS2_VU1_CODE_SIZE && !getenv("GHPC_ALLOW_MASKED_MSCAL"))
+            {
+#if GHPC_DIAG
+                extern unsigned long long g_ghpcMscalRejected;
+                ++g_ghpcMscalRejected;
+#endif
+                continue;
+            }
 
             // Values visible to the VU program for this MSCAL.
             // DobieStation semantics: ITOP = ITOPS; TOP = current TOPS;
@@ -387,6 +812,41 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
             vif1_regs.stat ^= (1u << 7); // toggle DBF
 
+#if GHPC_DIAG
+            {
+                {
+                    // Are legitimate MSCALs to other overlays being lost in
+                    // corrupted chunks? Split targets by chunk cleanliness.
+                    static std::map<uint32_t, unsigned long long> cleanT, dirtyT;
+                    if (g_chunkDirty) ++dirtyT[startPC]; else ++cleanT[startPC];
+                    static unsigned long long n = 0;
+                    if ((++n % 2000ull) == 0ull)
+                    {
+                        std::cerr << "[vu1] MSCAL targets in CLEAN chunks:";
+                        for (const auto &kv : cleanT) std::cerr << " 0x" << std::hex << kv.first << std::dec << "x" << kv.second;
+                        std::cerr << std::endl << "[vu1] MSCAL targets in DIRTY chunks:";
+                        for (const auto &kv : dirtyT) std::cerr << " 0x" << std::hex << kv.first << std::dec << "x" << kv.second;
+                        std::cerr << std::endl;
+                    }
+                }
+                extern void ghpcNoteMscal(uint32_t pc);
+                extern void ghpcNoteMscalFeed(uint32_t pc);
+                ghpcNoteMscal(startPC);
+                ghpcNoteMscalFeed(startPC);
+                // Double-buffer setup decides which VU1 memory the program reads.
+                static int n = 0;
+                if (n < 10)
+                {
+                    ++n;
+                    std::cerr << "[vu1] MSCAL pc=0x" << std::hex << startPC << std::dec
+                              << " top=" << runTop << " itop=" << runItop
+                              << " base=" << (vif1_regs.base & 0x3FFu)
+                              << " ofst=" << (vif1_regs.ofst & 0x3FFu)
+                              << " nextTops=" << (vif1_regs.tops & 0x3FFu)
+                              << " dbf=" << ((vif1_regs.stat >> 7) & 1u) << std::endl;
+                }
+            }
+#endif
             if (m_vu1MscalCallback)
                 m_vu1MscalCallback(startPC, runTop, runItop);
             continue;
@@ -442,6 +902,14 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             // MPG payload is instruction-packed and should not be QW-aligned.
             const uint32_t instructionCount = (num == 0u) ? 256u : static_cast<uint32_t>(num);
             const uint32_t mpgBytes = instructionCount * 8u;
+#if GHPC_DIAG
+            {
+                // Track which micro memory ranges actually received code, so an
+                // MSCAL into never-loaded memory can be named.
+                extern void ghpcNoteMpg(uint32_t dest, uint32_t bytes);
+                ghpcNoteMpg(destAddr, mpgBytes);
+            }
+#endif
             if (m_vu1Code && destAddr < PS2_VU1_CODE_SIZE && mpgBytes > 0)
             {
                 uint32_t copyBytes = mpgBytes;
@@ -455,7 +923,13 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             }
             pos += mpgBytes;
             if (pos > sizeBytes)
+            {
+#if GHPC_DIAG
+                ++g_truncMpg;
+                g_bytesDiscarded += (pos - sizeBytes);
+#endif
                 break;
+            }
             continue;
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)
@@ -473,21 +947,33 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 const bool directHl = (opcode == VIF_DIRECTHL);
                 submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
 
-                const uint32_t imageQw = gifImageQwcFromTag(data + pos, qwCount * 16u);
-                if (imageQw != 0u)
+                // The helper now returns the spill directly, so no inline
+                // adjustment is needed.
+                const uint32_t spillQw = gifImageQwcFromTag(data + pos, qwCount * 16u);
+#if GHPC_DIAG
                 {
-                    const uint32_t inlineImageQw = (qwCount > 0u) ? (qwCount - 1u) : 0u;
-                    if (imageQw > inlineImageQw)
-                    {
-                        m_vif1PendingPath2ImageQwc = imageQw - inlineImageQw;
-                        m_vif1PendingPath2DirectHl = directHl;
-                    }
+                    extern unsigned long long g_ghpcDirectScanned, g_ghpcDirectSpill;
+                    ++g_ghpcDirectScanned;
+                    if (spillQw != 0u) ++g_ghpcDirectSpill;
+                }
+#endif
+                if (spillQw != 0u)
+                {
+                    m_vif1PendingPath2ImageQwc = spillQw;
+                    m_vif1PendingPath2DirectHl = directHl;
                 }
             }
 
             pos += qwCount * 16;
+#if GHPC_DIAG
+            noteConsumed(pos);
+#endif
             if (truncated)
             {
+#if GHPC_DIAG
+                ++g_truncDirect;
+                g_bytesDiscarded += (sizeBytes - pos);
+#endif
                 pos = sizeBytes;
                 break;
             }
@@ -549,6 +1035,19 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
+#if GHPC_DIAG
+            {
+                extern unsigned long long g_ghpcUnpackBytesSinceMscal;
+                g_ghpcUnpackBytesSinceMscal += totalBytes;
+            }
+#endif
+#if GHPC_DIAG
+            {
+                // Where do UNPACKs actually land in VU1 data memory?
+                extern void ghpcNoteUnpackDest(uint32_t vuAddrQw, uint32_t bytes);
+                ghpcNoteUnpackDest(vuAddr, totalBytes);
+            }
+#endif
             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
@@ -746,14 +1245,46 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     std::memcpy(m_vu1Data + destOff, lanes, sizeof(lanes));
                 }
             }
+#if GHPC_DIAG
+            if (g_vif1TraceRemaining > 0)
+                std::cerr << "[vif1]   UNPACK vn=" << (unsigned)vn << " vl=" << (unsigned)vl
+                          << " num=" << writeVectorCount
+                          << " cl=" << cl << " wl=" << wl
+                          << " srcVecs=" << sourceVectorCount
+                          << " bytesPerVec=" << bytesPerVector
+                          << " payload=" << totalBytes
+                          << " pos=0x" << std::hex << pos << "->0x" << (pos + totalBytes)
+                          << std::dec << std::endl;
+#endif
             pos += totalBytes;
+#if GHPC_DIAG
+            noteConsumed(pos);
+#endif
 
             if (pos > sizeBytes)
+            {
+#if GHPC_DIAG
+                ++g_truncUnpack;
+                g_bytesDiscarded += (pos - sizeBytes);
+#endif
                 break;
+            }
             continue;
         }
         else
         {
+#if GHPC_DIAG
+            // An unrecognised CMD means the stream is desynced: we skip 4 bytes and
+            // keep churning, which hides the real cause. Name it.
+            {
+                static uint32_t unknownLogs = 0u;
+                if (unknownLogs++ < 24u)
+                    std::cerr << "[vif1] UNKNOWN cmd=0x" << std::hex << cmd
+                              << " opcode=0x" << (unsigned)opcode
+                              << " at pos=0x" << (pos - 4u)
+                              << "/0x" << sizeBytes << std::dec << std::endl;
+            }
+#endif
             continue;
         }
     }

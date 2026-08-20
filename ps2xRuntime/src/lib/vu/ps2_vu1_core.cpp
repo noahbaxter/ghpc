@@ -8,6 +8,9 @@
 #include <cfenv>
 #include <cmath>
 #include <cstdio>
+#include <map>
+#include <set>
+#include <utility>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -696,6 +699,25 @@ void VU1Interpreter::queueVfWrite(uint8_t reg, uint8_t laneMask,
     reportReservedInstruction(false, 0xFFFFFFF7u);
 }
 
+#if GHPC_DIAG
+uint32_t g_ghpcLastVf7WriterPc = 0;
+void ghpcNoteVuStore(uint32_t qw)
+{
+    static std::map<uint32_t, unsigned long long> dest;
+    ++dest[(qw & 0x3FFu) / 64u];
+    static unsigned long long n = 0;
+    if ((++n % 20000ull) == 0ull)
+    {
+        unsigned long long low = 0, tot = 0;
+        for (const auto &kv : dest) { tot += kv.second; if (kv.first == 0u) low = kv.second; }
+        std::fprintf(stderr, "[vu1] VU stores total=%llu intoQw0-63=%llu |", tot, low);
+        int k = 0;
+        for (const auto &kv : dest) if (k++ < 10) std::fprintf(stderr, " qw%u=%llu", kv.first * 64u, kv.second);
+        std::fprintf(stderr, "\n");
+    }
+}
+#endif
+
 void VU1Interpreter::queueViWrite(uint8_t reg, int32_t value, uint32_t latency)
 {
     if (reg == 0u)
@@ -919,6 +941,174 @@ void VU1Interpreter::finishXgkick()
     if (!m_xgkick.active)
         return;
 
+#if GHPC_DIAG
+    {
+        // What geometry does VU1 actually emit? Dump the GIFtag and the
+        // first few data qwords of the first packets.
+        static int kicks = 0;
+        static int bad = 0, good = 0;
+        {
+            // A real packet's REGS field holds small nibble descriptors. A kick
+            // aimed at vertex data shows float constants there (0x437f0000 is
+            // 255.0f). Split kick source addresses by which kind we got.
+            uint64_t tl = 0, th = 0;
+            std::memcpy(&tl, m_xgkick.packet.data(), 8);
+            std::memcpy(&th, m_xgkick.packet.data() + 8, 8);
+            const uint32_t nregField = (uint32_t)((tl >> 60) & 0xFu);
+            const bool looksBogus = (nregField == 0u) && (th > 0xFFFFFFFFull);
+            // Direct test for the exact signature seen downstream, no heuristic.
+            {
+                static unsigned long long exact = 0, nreg0 = 0, tot = 0;
+                ++tot;
+                if (th == 0x437f000000000000ull) ++exact;
+                if (nregField == 0u) ++nreg0;
+                if ((tot % 4000ull) == 0ull)
+                    std::fprintf(stderr,
+                        "[vu1] submit tags=%llu nreg0=%llu regs437f=%llu firstTagLo=0x%llx\n",
+                        tot, nreg0, exact, (unsigned long long)tl);
+            }
+            static std::map<uint32_t, std::pair<int,int>> bySrc;
+            auto &e = bySrc[m_xgkick.sourceAddress / 16u];
+            if (looksBogus) ++e.second; else ++e.first;
+            // Does the emitted packet length match what the first tag declares?
+            {
+                const uint32_t nl = (uint32_t)(tl & 0x7FFFu);
+                uint32_t nr = (uint32_t)((tl >> 60) & 0xFu); if (nr == 0u) nr = 16u;
+                const uint32_t fl = (uint32_t)((tl >> 58) & 3u);
+                const bool eop = ((tl >> 15) & 1u) != 0u;
+                uint32_t want = 16u;
+                if (fl == 0u) want += nl * nr * 16u;
+                else if (fl == 1u) want += ((nl * nr * 8u) + 15u) & ~15u;
+                else want += nl * 16u;
+                static unsigned long long okLen = 0, longLen = 0, shortLen = 0;
+                if (eop) {
+                    if (m_xgkick.totalBytes == want) ++okLen;
+                    else if (m_xgkick.totalBytes > want) ++longLen;
+                    else ++shortLen;
+                    static int lr = 0;
+                    if (m_xgkick.totalBytes != want && lr < 5) { ++lr;
+                        std::fprintf(stderr,
+                          "[vu1] LEN MISMATCH firstTag nloop=%u nreg=%u flg=%u eop=1 want=%u got=%u\n",
+                          nl, nr, fl, want, (unsigned)m_xgkick.totalBytes); }
+                    if (((okLen + longLen + shortLen) % 2000ull) == 0ull)
+                        std::fprintf(stderr, "[vu1] pktLen ok=%llu tooLong=%llu tooShort=%llu\n",
+                                     okLen, longLen, shortLen);
+                }
+            }
+            static int reps = 0;
+            if (((good + bad) % 1500) == 0 && reps < 40)
+            {
+                ++reps;
+                std::fprintf(stderr, "[vu1] XGKICK src good/bogus:");
+                for (const auto &kv : bySrc)
+                    std::fprintf(stderr, " qw%u=%d/%d", kv.first, kv.second.first, kv.second.second);
+                std::fprintf(stderr, "\n");
+            }
+        }
+        // Visible box in 12.4 fixed point for ofx=1792 ofy=1824, 512x448.
+        if (m_xgkick.totalBytes >= 64u)
+        {
+            // Scan EVERY vertex, not just the first: a strip legitimately
+            // starts off-screen. Only count a packet bad if no vertex lands in
+            // the visible box.
+            uint64_t tagLo = 0;
+            std::memcpy(&tagLo, m_xgkick.packet.data(), 8);
+            uint32_t nloop = (uint32_t)(tagLo & 0x7FFFu);
+            uint32_t nreg = (uint32_t)((tagLo >> 60) & 0xFu);
+            if (nreg == 0u) nreg = 16u;
+            const bool packed = ((tagLo >> 58) & 3u) == 0u;
+            uint64_t tagHi = 0;
+            std::memcpy(&tagHi, m_xgkick.packet.data() + 8, 8);
+            bool anyVisible = false;
+            uint32_t X = 0u, Y = 0u;
+            if (packed)
+            {
+                for (uint32_t loop = 0u; loop < nloop && !anyVisible; ++loop)
+                {
+                    for (uint32_t r = 0u; r < nreg; ++r)
+                    {
+                        const uint32_t reg = (uint32_t)((tagHi >> (r * 4u)) & 0xFu);
+                        if (reg != 4u && reg != 5u) continue;
+                        const uint32_t off = 16u + (loop * nreg + r) * 16u;
+                        if (off + 16u > m_xgkick.totalBytes) break;
+                        uint64_t v = 0;
+                        std::memcpy(&v, m_xgkick.packet.data() + off, 8);
+                        X = (uint32_t)(v & 0xFFFFu);
+                        Y = (uint32_t)((v >> 32) & 0xFFFFu);
+                        if (X >= 28672u && X <= 36864u && Y >= 29184u && Y <= 36352u)
+                        { anyVisible = true; break; }
+                    }
+                }
+            }
+            const bool offscreen = packed && !anyVisible;
+            if (offscreen) ++bad; else ++good;
+            {
+                static std::map<uint32_t, std::pair<int,int>> byPc;
+                auto &e = byPc[m_ghpcStartPc];
+                if (offscreen) ++e.second; else ++e.first;
+                if (((good + bad) % 2000) == 0)
+                {
+                    std::fprintf(stderr, "[vu1] byStartPC good/bad:");
+                    for (const auto &kv : byPc)
+                        std::fprintf(stderr, " pc0x%x=%d/%d", kv.first, kv.second.first, kv.second.second);
+                    std::fprintf(stderr, "\n");
+                }
+            }
+            // Dump the actual vertices of the worst failing program.
+            if (m_ghpcStartPc == 0x3fc8u)
+            {
+                static int nd = 0;
+                if (nd < 4)
+                {
+                    ++nd;
+                    std::fprintf(stderr, "[vu1] pc0x3fc8 bytes=%u nloop=%u nreg=%u flg=%u prim=0x%llx regs=0x%llx\n",
+                                 (unsigned)m_xgkick.totalBytes, nloop, nreg,
+                                 (unsigned)((tagLo >> 58) & 3u),
+                                 (unsigned long long)((tagLo >> 47) & 0x7FFu),
+                                 (unsigned long long)tagHi);
+                    for (uint32_t q = 1u; q <= 6u && q * 16u + 16u <= m_xgkick.totalBytes; ++q)
+                    {
+                        uint64_t a = 0, b = 0;
+                        std::memcpy(&a, m_xgkick.packet.data() + q * 16u, 8);
+                        std::memcpy(&b, m_xgkick.packet.data() + q * 16u + 8, 8);
+                        std::fprintf(stderr, "[vu1]   qw%u lo=0x%016llx hi=0x%016llx\n",
+                                     q, (unsigned long long)a, (unsigned long long)b);
+                    }
+                }
+            }
+            if (offscreen && bad <= 6)
+                std::fprintf(stderr, "[vu1] OFFSCREEN X=%u(%.1f) Y=%u(%.1f) good=%d bad=%d\n",
+                             X, X / 16.0, Y, Y / 16.0, good, bad);
+            if (((good + bad) % 500) == 0)
+                std::fprintf(stderr, "[vu1] tally good=%d bad=%d\n", good, bad);
+        }
+        if (kicks < 0)
+        {
+            ++kicks;
+            const uint8_t *pk = m_xgkick.packet.data();
+            uint64_t lo = 0, hi = 0;
+            std::memcpy(&lo, pk, 8);
+            std::memcpy(&hi, pk + 8, 8);
+            const uint32_t nloop = (uint32_t)(lo & 0x7FFF);
+            const uint32_t nreg = (uint32_t)((lo >> 60) & 0xF);
+            std::fprintf(stderr,
+                "[vu1] XGKICK bytes=%u nloop=%u flg=%u nreg=%u regs=0x%llx pre=%u prim=0x%llx\n",
+                (unsigned)m_xgkick.totalBytes, nloop,
+                (unsigned)((lo >> 58) & 3), nreg,
+                (unsigned long long)hi,
+                (unsigned)((lo >> 46) & 1),
+                (unsigned long long)((lo >> 47) & 0x7FF));
+            for (uint32_t q = 1; q <= 4 && q * 16u + 16u <= m_xgkick.totalBytes; ++q)
+            {
+                uint64_t a = 0, b = 0;
+                std::memcpy(&a, pk + q * 16u, 8);
+                std::memcpy(&b, pk + q * 16u + 8, 8);
+                std::fprintf(stderr, "[vu1]   qw%u lo=0x%016llx hi=0x%016llx\n",
+                             q, (unsigned long long)a, (unsigned long long)b);
+            }
+        }
+    }
+#endif
     if (m_activeMemory)
         m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
     else if (m_activeGs)
@@ -1592,6 +1782,9 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
 {
     resetScheduler();
     m_state.pc = startPC & microAddressMask();
+#if GHPC_DIAG
+    m_ghpcStartPc = startPC & microAddressMask();
+#endif
     m_state.ebit = false;
     m_state.haltAfterDelaySlot = false;
     m_state.stoppedByD = false;
@@ -1671,6 +1864,167 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                 break;
             }
         }
+#if GHPC_DIAG
+        {
+            // Execution census for the two addresses that decide the bad kick.
+            static unsigned long long at1160 = 0, at11a0 = 0, vi2zero = 0, vi2nz = 0;
+            static int32_t lastVi2 = 0;
+            if (m_state.pc == 0x1160u) {
+                ++at1160;
+                if (m_state.vi[2] == 0) ++vi2zero; else { ++vi2nz; lastVi2 = m_state.vi[2]; }
+            }
+            if (m_state.pc == 0x11a0u) ++at11a0;
+            {
+                // One-shot static scan: every address whose decode writes VF2,
+                // versus the addresses actually executed.
+                static bool scanned = false;
+                static std::set<uint32_t> staticWriters, executedWriters;
+                if (!scanned && vuCode)
+                {
+                    scanned = true;
+                    for (uint32_t a = 0; a + 8u <= codeSize; a += 8u)
+                    {
+                        const DecodedInstructionPair d =
+                            getDecodedInstructionPairForPc(vuCode, codeSize, memory, a);
+                        if (d.lowerUsage.vfWrite.reg == 2u || d.upperUsage.vfWrite.reg == 2u)
+                            staticWriters.insert(a);
+                    }
+                    std::fprintf(stderr, "[vu1] static VF2 writers: %zu addresses\n", staticWriters.size());
+                }
+                if (decoded.lowerUsage.vfWrite.reg == 2u || decoded.upperUsage.vfWrite.reg == 2u)
+                    executedWriters.insert(m_state.pc);
+                static unsigned long long r = 0;
+                if ((++r % 2000000ull) == 0ull)
+                {
+                    std::fprintf(stderr, "[vu1] VF2 writers static=%zu executed=%zu | NEVER executed:",
+                                 staticWriters.size(), executedWriters.size());
+                    int shown = 0;
+                    for (uint32_t a : staticWriters)
+                        if (!executedWriters.count(a) && shown < 24) { std::fprintf(stderr, " 0x%x", a); ++shown; }
+                    std::fprintf(stderr, "\n");
+                }
+            }
+            {
+                // Independent of decoder metadata: is VF2 ever non-zero at all,
+                // and if so where? Sampled on every instruction.
+                static unsigned long long nz = 0, z = 0;
+                static uint32_t firstNzPc = 0xFFFFFFFFu, lastNzBits = 0;
+                uint32_t bb[4];
+                for (int c = 0; c < 4; ++c) std::memcpy(&bb[c], &m_state.vf[2][c], 4);
+                static unsigned long long lane[4] = {0,0,0,0};
+                for (int c = 0; c < 4; ++c) if (bb[c] != 0u) ++lane[c];
+                if (bb[0] != 0u) { ++nz; lastNzBits = bb[0]; if (firstNzPc == 0xFFFFFFFFu) firstNzPc = m_state.pc; }
+                else ++z;
+                static unsigned long long q = 0;
+                if ((++q % 400000ull) == 0ull)
+                    std::fprintf(stderr,
+                        "[vu1] vf2 lanes nonzero x=%llu y=%llu z=%llu w=%llu | lastBits x=0x%x y=0x%x z=0x%x w=0x%x\n",
+                        lane[0], lane[1], lane[2], lane[3], bb[0], bb[1], bb[2], bb[3]);
+            }
+            if (m_state.pc == 0x1188u)
+            {
+                // Let the decoder describe 0x1188 and report what it produces.
+                static unsigned long long t = 0;
+                if ((++t % 3000ull) == 0ull)
+                {
+                    uint32_t before = 0; std::memcpy(&before, &m_state.vf[2][0], 4);
+                    std::fprintf(stderr,
+                        "[vu1] 0x1188 lower=0x%08x | writesVf=%u readCount=%u src0=vf%u src1=vf%u viReadMask=0x%x | vf2.x before=0x%x src0.x=0x%x\n",
+                        decoded.lower,
+                        (unsigned)decoded.lowerUsage.vfWrite.reg,
+                        (unsigned)decoded.lowerUsage.vfReadCount,
+                        (unsigned)decoded.lowerUsage.vfRead[0].reg,
+                        (unsigned)decoded.lowerUsage.vfRead[1].reg,
+                        (unsigned)decoded.lowerUsage.viRead,
+                        before,
+                        [&]{ uint32_t b=0; std::memcpy(&b, &m_state.vf[decoded.lowerUsage.vfRead[0].reg][0], 4); return b; }());
+                }
+            }
+            if (m_state.pc == 0x1160u)
+            {
+                // MTIR vi11, vf7.x -- what is VF7.x, and who wrote VF7 last?
+                extern uint32_t g_ghpcLastVf7WriterPc;
+                uint32_t bits = 0; std::memcpy(&bits, &m_state.vf[2][0], 4);
+                static std::map<uint32_t, unsigned long long> byWriter;
+                static unsigned long long zb = 0, nzb = 0; static uint32_t lastBits = 0;
+                if (bits == 0u) ++zb; else { ++nzb; lastBits = bits; }
+                ++byWriter[g_ghpcLastVf7WriterPc];
+                static unsigned long long t = 0;
+                if ((++t % 4000ull) == 0ull) {
+                    std::fprintf(stderr, "[vu1] vf2.x at 0x1160: rawZero=%llu rawNonzero=%llu lastRaw=0x%x | lastVF2 writer pc:",
+                                 zb, nzb, lastBits);
+                    for (const auto &kv : byWriter)
+                        std::fprintf(stderr, " 0x%x=%llu", kv.first, kv.second);
+                    std::fprintf(stderr, "\n");
+                }
+            }
+            static unsigned long long c = 0;
+            if ((++c % 400000ull) == 0ull)
+                std::fprintf(stderr,
+                    "[vu1] exec 0x1160=%llu 0x11a0=%llu | vi2 at 0x1160: zero=%llu nonzero=%llu last=%d\n",
+                    at1160, at11a0, vi2zero, vi2nz, (int)lastVi2);
+        }
+        {
+            // Which VI registers does the decoder ever claim are written?
+            static unsigned long long wr[16] = {0};
+            static unsigned long long n = 0;
+            if (writtenVi) ++wr[writtenVi & 15u];
+            if (writtenVi == 11u)
+            {
+                // What values does VI11 actually receive?
+                static unsigned long long zero = 0, nonzero = 0; static int32_t lastNz = 0;
+                const int32_t nv = m_state.vi[11];
+                if (nv == 0) {
+                    ++zero;
+                    // Which instruction and PC produced the zero?
+                    static std::map<uint64_t, unsigned long long> byOp;
+                    const uint32_t lo = decoded.lower;
+                    const uint32_t op = (lo >> 25) & 0x7Fu;
+                    byOp[((uint64_t)m_state.pc << 32) | lo] += 1;
+                    static unsigned long long z = 0;
+                    if ((++z % 3000ull) == 0ull) {
+                        std::fprintf(stderr, "[vu1] vi11:=0 sites (pc/lowerOp)xN:");
+                        for (const auto &kv : byOp)
+                            std::fprintf(stderr, " pc0x%x/op0x%x=%llu",
+                                         (unsigned)(kv.first >> 32),
+                                         (unsigned)((uint32_t)kv.first),
+                                         kv.second);
+                        std::fprintf(stderr, " [op6=0x%x]\n", (unsigned)op);
+                        // Dump the microcode across the loop body once, marking
+                        // any lower instruction whose `it` field is VI11.
+                        static bool dumped = false;
+                        if (!dumped && vuCode)
+                        {
+                            dumped = true;
+                            for (uint32_t a = 0x1140u; a <= 0x11b8u && a + 8u <= codeSize; a += 8u)
+                            {
+                                uint32_t lw = 0, uw = 0;
+                                std::memcpy(&lw, vuCode + a, 4);
+                                std::memcpy(&uw, vuCode + a + 4, 4);
+                                const uint32_t itf = (lw >> 16) & 0x1Fu;
+                                const uint32_t isf = (lw >> 11) & 0x1Fu;
+                                const uint32_t opf = (lw >> 25) & 0x7Fu;
+                                std::fprintf(stderr,
+                                    "[vu1] code 0x%x lower=0x%08x (op=0x%02x it=%u is=%u)%s upper=0x%08x\n",
+                                    a, lw, opf, itf, isf, (itf == 11u ? "  <== writes VI11" : ""), uw);
+                            }
+                        }
+                    }
+                } else { ++nonzero; lastNz = nv; }
+                static unsigned long long q = 0;
+                if ((++q % 100000ull) == 0ull)
+                    std::fprintf(stderr, "[vu1] vi11 writes: zero=%llu nonzero=%llu lastNonzero=%d\n",
+                                 zero, nonzero, (int)lastNz);
+            }
+            if ((++n % 400000ull) == 0ull)
+            {
+                std::fprintf(stderr, "[vu1] VI writes:");
+                for (uint32_t k = 1; k < 16u; ++k)
+                    if (wr[k]) std::fprintf(stderr, " vi%u=%llu", k, wr[k]);
+                std::fprintf(stderr, "\n");
+            }
+        }
+#endif
 
         const VfAccess upperWrite = decoded.upperUsage.vfWrite;
         const VfAccess lowerWrite = decoded.lowerUsage.vfWrite;
@@ -1683,6 +2037,10 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         float newLowerVf[4]{};
         float oldAcc[4]{};
         float newAcc[4]{};
+#if GHPC_DIAG
+        if ((hasUpperWrite && upperWrite.reg == 2u) || (hasLowerWrite && lowerWrite.reg == 2u))
+        { extern uint32_t g_ghpcLastVf7WriterPc; g_ghpcLastVf7WriterPc = m_state.pc; }
+#endif
         if (hasUpperWrite)
             std::memcpy(oldUpperVf, m_state.vf[upperWrite.reg], sizeof(oldUpperVf));
         if (hasDistinctLowerWrite)

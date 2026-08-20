@@ -1,3 +1,5 @@
+#include <map>
+#include <cstdio>
 #include "runtime/ps2_vu1.h"
 #include "runtime/gs/ps2_gif_arbiter.h"
 #include "runtime/gs/gs_frontend.h"
@@ -99,6 +101,14 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x01: // SQ (Store Quadword to VU data memory)
     {
+#if GHPC_DIAG
+        {
+            // Where do VU stores land? A GIF packet at address 0 would have to
+            // be built by these.
+            extern void ghpcNoteVuStore(uint32_t qw);
+            ghpcNoteVuStore((uint32_t)((uint16_t)m_state.vi[VIT(instr)] + (int32_t)IMM11(instr)));
+        }
+#endif
         uint8_t is = FS(instr);  // VF source
         uint8_t it = VIT(instr); // VI base
         uint8_t dest = (instr >> 21) & 0xF;
@@ -285,6 +295,19 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     {
         uint8_t is = VIS(instr);
         uint32_t target = ((uint32_t)(uint16_t)readBranchVi(is) * 8u) & pcMask;
+#if GHPC_DIAG
+        {
+            static std::map<uint32_t, unsigned long long> tg;
+            ++tg[target];
+            static unsigned long long n = 0;
+            if ((++n % 20000ull) == 0ull) {
+                std::fprintf(stderr, "[vu1] JR targets:");
+                int k = 0;
+                for (const auto &kv : tg) if (k++ < 16) std::fprintf(stderr, " 0x%x=%llu", kv.first, kv.second);
+                std::fprintf(stderr, "\n");
+            }
+        }
+#endif
         m_state.branchPending = true;
         m_state.branchTarget = target;
         m_state.branchDelay = 1;
@@ -304,6 +327,23 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
     }
     case 0x28: // IBEQ
     {
+#if GHPC_DIAG
+        if (m_state.pc == 0x1198u)
+        {
+            // The conditional immediately before the bad kick at 0x11a0.
+            static unsigned long long taken = 0, fell = 0;
+            static int32_t lastA = 0, lastB = 0;
+            const int32_t a = m_state.vi[VIT(instr)];
+            const int32_t b = m_state.vi[VIS(instr)];
+            lastA = a; lastB = b;
+            if (a == b) ++taken; else ++fell;
+            static unsigned long long n = 0;
+            if ((++n % 3000ull) == 0ull)
+                std::fprintf(stderr,
+                    "[vu1] 0x1198 IBEQ vi%u=%d vi%u=%d | equal(branch)=%llu notEqual(fallthrough)=%llu\n",
+                    (unsigned)VIT(instr), a, (unsigned)VIS(instr), b, taken, fell);
+        }
+#endif
         uint8_t it = VIT(instr);
         uint8_t is = VIS(instr);
         int16_t imm = IMM11(instr);
@@ -555,6 +595,21 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                 return;
             case 0x3C: // MTIR (Move To Integer Register)
             {
+#if GHPC_DIAG
+                if (m_state.pc == 0x1160u)
+                {
+                    // Let the interpreter report its own decode, no hand maths.
+                    const uint32_t cc = (instr >> 21) & 0x3u;
+                    uint32_t fb = 0; std::memcpy(&fb, &m_state.vf[vfS][cc], 4);
+                    static unsigned long long z = 0, nz = 0; static uint32_t lastnz = 0;
+                    if ((fb & 0xFFFFu) == 0u) ++z; else { ++nz; lastnz = fb; }
+                    static unsigned long long t = 0;
+                    if ((++t % 3000ull) == 0ull)
+                        std::fprintf(stderr,
+                            "[vu1] MTIR@0x1160 viT=%u vfS=%u comp=%u | low16 zero=%llu nonzero=%llu lastNZbits=0x%x\n",
+                            (unsigned)viT, (unsigned)vfS, cc, z, nz, lastnz);
+                }
+#endif
                 // MTIR encodes a two-bit fsf component selector in bits
                 // 22:21. It is not a four-bit destination mask.
                 const uint32_t comp = (instr >> 21) & 0x3u;
@@ -665,6 +720,52 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                 return;
             }
             case 0x6C: // XGKICK - send GIF packet from VU1 data memory
+#if GHPC_DIAG
+                {
+                    // Which VI register feeds XGKICK, and when is it zero?
+                    static std::map<uint32_t, std::pair<unsigned long long, unsigned long long>> byReg;
+                    const uint32_t v = (uint32_t)(uint16_t)m_state.vi[viS];
+                    {
+                        // PC of the kick itself, split by whether it reads zero.
+                        static std::map<uint32_t, std::pair<unsigned long long, unsigned long long>> byPc;
+                        auto &pe = byPc[m_state.pc];
+                        if (v == 0u) ++pe.second; else ++pe.first;
+                        static unsigned long long k = 0;
+                        if ((++k % 6000ull) == 0ull) {
+                            std::fprintf(stderr, "[vu1] XGKICK pc nonzero/zero:");
+                            for (const auto &kv : byPc)
+                                std::fprintf(stderr, " 0x%x=%llu/%llu", kv.first, kv.second.first, kv.second.second);
+                            std::fprintf(stderr, "\n");
+                        }
+                    }
+                    auto &e = byReg[viS];
+                    if (v == 0u) ++e.second; else ++e.first;
+                    if (v == 0u)
+                    {
+                        // Is a write to this register still sitting in the
+                        // pipeline when XGKICK reads it?
+                        static unsigned long long zeroWithPending = 0, zeroNoPending = 0;
+                        bool pending = false;
+                        int32_t pendVal = 0;
+                        for (const auto &w : m_viWritePipeline)
+                            if (w.valid && w.reg == viS) { pending = true; pendVal = w.value; break; }
+                        if (pending) ++zeroWithPending; else ++zeroNoPending;
+                        static unsigned long long m = 0;
+                        if ((++m % 2000ull) == 0ull)
+                            std::fprintf(stderr,
+                                "[vu1] XGKICK reads 0: pendingWrite=%llu noPending=%llu lastPendVal=%d\n",
+                                zeroWithPending, zeroNoPending, (int)pendVal);
+                    }
+                    static unsigned long long n = 0;
+                    if ((++n % 4000ull) == 0ull)
+                    {
+                        std::fprintf(stderr, "[vu1] XGKICK by VI reg (nonzero/zero), pc=0x%x:", (unsigned)m_state.pc);
+                        for (const auto &kv : byReg)
+                            std::fprintf(stderr, " vi%u=%llu/%llu", kv.first, kv.second.first, kv.second.second);
+                        std::fprintf(stderr, "\n");
+                    }
+                }
+#endif
                 startXgkick(static_cast<uint32_t>(static_cast<uint16_t>(m_state.vi[viS])));
                 return;
             case 0x70: // ESADD
