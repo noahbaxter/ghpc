@@ -42,22 +42,35 @@ A 360 copy is useful as a second build to diff against.
 
 ## Stage
 
-Recompiled GH2 boots, initializes video and audio, runs `SystemInit`, and binds
-its filesystem RPC to the Sony fileio service (SID `0x80000001`). It cannot read
-the ARK because no service answers that SID, so it remains in the game's retry
-loop and the framebuffer stays magenta.
+M0 (symbols), M1 (recompile and compile), M2 (boot), M3 (RPC bind), M4 (fileio
+service) complete. Details in `ghpc/notes/`.
 
-M0 (symbols), M1 (recompile and compile), M2 (boot), M3 (RPC bind) complete.
-Details in `notes/`. M4 is the fileio service.
+The storage stack works end to end: the ARK header parses, `GetFileInfo`
+resolves, and `BlockMgr` streams 64 KB blocks, verified at a 2.94 GB offset.
+The GS presents a real 512x448 frame, so the magenta sentinel is gone, but the
+drawing path (VIF1 -> VU1 -> GIF) delivers nothing into it.
+
+An earlier build reached the main menu and wrote a memory card save. That
+depended on a `DataArray` workaround which existed only as a stale object file
+with no source, so it was never reproducible. After rebuilding from clean
+source the game dies earlier, at `Debug::Fail msg="Data ("`, preceded by
+`[FILEIO] fn=0xc status=-2 path="host0:"`. `host0:` is the devkit host
+filesystem, which is untested as a lead.
 
 ## Layout
 
 ```
-scripts/build.sh    ELF -> C++ -> native binary. --from/--to run a slice.
-scripts/run.sh      launch (cwd must be work/ so the game resolves GEN/)
-config/             stub-denylist.txt, symbols excluded from handler binding
-notes/              milestone findings, m0..m3
-patches/            local changes to PS2Recomp, apply over a pristine clone
+ghpc/               everything specific to this port
+  scripts/build.sh  ELF -> C++ -> native binary. --from/--to run a slice.
+  scripts/run.sh    launch (cwd must be work/ so the game resolves GEN/)
+  scripts/checkrun.sh  run the debug build and assert boot still progresses
+  scripts/dtb.py    decrypt and inspect any DTB straight out of the ARK
+  config/           stub-denylist.txt, symbols excluded from handler binding
+  notes/            milestone findings, m0..m5
+  reference/        gitignored: stills captured from the game
+ps2xRecomp/         upstream: the recompiler, ELF -> C++
+ps2xRuntime/        upstream: PS2 hardware emulation and host layer
+ps2xIOP/            upstream: IOP modules
 work/               gitignored: ELFs, generated C++, extracted game data
 third_party/        gitignored: shallow clones of reference projects
 ```
@@ -67,10 +80,14 @@ third_party/        gitignored: shallow clones of reference projects
 **Name-collision binding.** PS2Recomp binds runtime handlers by symbol name. The
 ELF is symbolized and GH2 statically links Sony's libraries, so those names
 resolve to real function bodies rather than imports. Four mechanisms did this;
-`config/stub-denylist.txt` plus patch 0003 override all four. Add denylist
-entries with a stated reason.
+`ghpc/config/stub-denylist.txt` plus commit 977a01f override all four. Add
+denylist entries with a stated reason.
 
-**Patches stay local.** Nothing is submitted upstream.
+**Fork, not a dependency.** This repo is a fork of `ran-j/PS2Recomp` with the
+port built on top. Engine changes are ordinary commits. Take upstream with
+`git fetch upstream && git merge upstream/main`, never rebase, since rebasing
+rewrites the port's commits on every pull. Keep upstream directory names so
+rename detection stays cheap. Nothing has been submitted upstream yet.
 
 **Disk.** The ARK is 3.1 GB; reference clones reached 9 GB. `third_party/`
 clones are all re-clonable.
@@ -92,9 +109,9 @@ functions.
 ## Build
 
 ```sh
-./scripts/build.sh              # full pipeline, ~5 min cold
-./scripts/build.sh --from=build # rebuild only
-./scripts/run.sh --quiet
+./ghpc/scripts/build.sh              # full pipeline, ~5 min cold
+./ghpc/scripts/build.sh --from=build # rebuild only
+./ghpc/scripts/run.sh --quiet
 ```
 
 Requires cmake, ninja, ccache, pkg-config, llvm (`llvm-readelf`,
