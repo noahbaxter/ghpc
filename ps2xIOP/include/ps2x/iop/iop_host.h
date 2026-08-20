@@ -81,6 +81,11 @@ namespace ps2x::iop
 
         virtual int32_t memoryCard(const MemoryCardRequest &request) = 0;
 
+        // Sony's libfileio carries the EE semaphore it will block on inside the
+        // RPC packet rather than in the SIF client header, so a service needs to
+        // release an arbitrary EE semaphore, not just the one the RPC layer owns.
+        virtual bool signalGuestSemaphore(uint32_t semaphoreId) = 0;
+
         virtual bool hasGuestFunction(uint32_t address) const = 0;
         virtual bool invokeGuestFunction(uint64_t callToken,
                                          uint32_t address,

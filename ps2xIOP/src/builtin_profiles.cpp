@@ -108,6 +108,19 @@ namespace ps2x::iop::detail
         std::vector<ProfileDefinition> profiles;
 
         profiles.push_back({
+            "guitar-hero-ps2",
+            "builtin",
+            {.entryPoint = 0x00100D68u},
+            [](IopHost &host, const GameIdentity &)
+            {
+                ServiceList services;
+                services.emplace_back(createFileioService(host));
+                services.emplace_back(createUsbKbService(host));
+                return services;
+            },
+        });
+
+        profiles.push_back({
             "recvx-us",
             "builtin",
             {.elfName = "slus_201.84"},

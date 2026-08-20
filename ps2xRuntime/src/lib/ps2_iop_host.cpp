@@ -4,6 +4,7 @@
 #include "ps2_stubs.h"
 #include "Kernel/Stubs/SIF.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/ee_scheduler.h"
 #include "Kernel/Stubs/MemoryCard.h"
 #include "Kernel/Syscalls/Common.h"
 
@@ -393,6 +394,15 @@ void PS2IopHostAdapter::closeHostFile(uint64_t handle)
     {
         std::fclose(stream);
     }
+}
+
+bool PS2IopHostAdapter::signalGuestSemaphore(uint32_t semaphoreId)
+{
+    if (semaphoreId == 0u || semaphoreId > 0xFFFFu)
+    {
+        return false;
+    }
+    return m_runtime.eeScheduler().signalSemaphore(static_cast<int>(semaphoreId), true) >= 0;
 }
 
 int32_t PS2IopHostAdapter::memoryCard(const ps2x::iop::MemoryCardRequest &request)

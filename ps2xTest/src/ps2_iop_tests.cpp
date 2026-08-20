@@ -225,6 +225,13 @@ namespace
             return 0;
         }
 
+        bool signalGuestSemaphore(uint32_t semaphoreId) override
+        {
+            lastSignalledSemaphore = semaphoreId;
+            ++semaphoreSignals;
+            return true;
+        }
+
         bool hasGuestFunction(uint32_t address) const override
         {
             return address == guestFunctionAddress;
@@ -285,6 +292,8 @@ namespace
         GuestBuffer lastAudioSend{};
         GuestBuffer lastAudioReceive{};
         uint32_t memoryCardCalls = 0u;
+        uint32_t lastSignalledSemaphore = 0u;
+        uint32_t semaphoreSignals = 0u;
         MemoryCardRequest lastMemoryCardRequest{};
         uint32_t guestFunctionAddress = 0x2000u;
         uint32_t guestFunctionResult = 0x3000u;

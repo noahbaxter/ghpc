@@ -8,6 +8,8 @@ add_library(ps2_iop STATIC
     src/iop_subsystem.cpp
     src/builtin_profiles.cpp
     src/plugin_loader.cpp
+    src/modules/fileio.cpp
+    src/modules/usbkb.cpp
     src/modules/dbcman.cpp
     src/modules/libsd.cpp
     src/modules/mcserv.cpp
@@ -47,3 +49,9 @@ install(TARGETS ps2_iop
 install(DIRECTORY include/
     DESTINATION include
 )
+
+if(PS2X_GHPC_DIAG)
+    target_compile_definitions(ps2_iop PUBLIC
+        GHPC_DIAG=1
+    )
+endif()
