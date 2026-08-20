@@ -10,7 +10,7 @@ keyed by the first four bytes, walked with two rolling indices.
 """
 import argparse, struct, sys, os
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HDR = os.path.join(ROOT, "work", "GEN", "MAIN.HDR")
 ARK = os.path.join(ROOT, "work", "GEN", "MAIN_0.ARK")
 M = 0xFFFFFFFF

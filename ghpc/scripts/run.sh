@@ -7,7 +7,7 @@
 #   ./scripts/run.sh GH1        # or GH80s, to try the other titles
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILD_DIR="build"
 WORK="$ROOT/work"
 

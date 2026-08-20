@@ -34,7 +34,7 @@ work/
 third_party/
 
 # Stills captured from the game
-reference/
+ghpc/reference/
 
 # Discs and executables
 *.ELF

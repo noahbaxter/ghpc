@@ -9,8 +9,8 @@ LOG="${2:-/tmp/ghpc_checkrun.log}"
 EXPECT_TME=17430
 EXPECT_NOTME=2933
 
-cd "$(dirname "$0")/.."
-( ./scripts/run.sh --quiet --debug > "$LOG" 2>&1 & echo $! > /tmp/ghpc_checkrun.pid )
+cd "$(dirname "$0")/../.."
+( ./ghpc/scripts/run.sh --quiet --debug > "$LOG" 2>&1 & echo $! > /tmp/ghpc_checkrun.pid )
 sleep "$SECS"
 kill "$(cat /tmp/ghpc_checkrun.pid)" 2>/dev/null
 pkill -f ps2EntryRunner 2>/dev/null

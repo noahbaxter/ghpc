@@ -11,7 +11,8 @@
 #   ./scripts/build.sh --restore    # put PS2Recomp's stock runner back
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+GHPC="$ROOT/ghpc"
 PS2R="$ROOT"
 BUILD="$PS2R/build"   # recomputed after arg parsing (see DIAG)
 RUNNER="$PS2R/ps2xRuntime/src/runner"
@@ -86,8 +87,8 @@ t=p.read_text()
 t=re.sub(r'^output\s*=.*$', f'output = "{out}/"', t, flags=re.M)
 p.write_text(t)
 PY
-  # Drop stubs we refuse to let the analyzer bind (see config/stub-denylist.txt)
-  python3 - "$WORK/gh2.toml" "$ROOT/config/stub-denylist.txt" <<'PYDENY'
+  # Drop stubs we refuse to let the analyzer bind (see ghpc/config/stub-denylist.txt)
+  python3 - "$WORK/gh2.toml" "$GHPC/config/stub-denylist.txt" <<'PYDENY'
 import sys,re,pathlib
 toml,deny = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 names = {l.strip() for l in deny.read_text().splitlines()
