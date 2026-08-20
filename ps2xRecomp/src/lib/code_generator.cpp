@@ -120,6 +120,12 @@ namespace ps2recomp
         m_relocationCallNames = callNames;
     }
 
+    void CodeGenerator::setNoRelocBind(const std::vector<std::string> &names)
+    {
+        m_noRelocBind.clear();
+        m_noRelocBind.insert(names.begin(), names.end());
+    }
+
     void CodeGenerator::setConfiguredJumpTables(const std::vector<JumpTable> &jumpTables)
     {
         m_configJumpTableTargetsByAddress.clear();

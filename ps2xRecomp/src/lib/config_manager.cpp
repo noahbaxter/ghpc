@@ -74,6 +74,15 @@ namespace ps2recomp
                 config.stubImplementations = toml::find<std::vector<std::string>>(data, "stubs");
             }
 
+            if (general.contains("no_reloc_bind") && general.at("no_reloc_bind").is_array())
+            {
+                config.noRelocBind = toml::find<std::vector<std::string>>(general, "no_reloc_bind");
+            }
+            else if (data.contains("no_reloc_bind") && data.at("no_reloc_bind").is_array())
+            {
+                config.noRelocBind = toml::find<std::vector<std::string>>(data, "no_reloc_bind");
+            }
+
             if (general.contains("skip") && general.at("skip").is_array())
             {
                 config.skipFunctions = toml::find<std::vector<std::string>>(general, "skip");

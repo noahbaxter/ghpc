@@ -913,6 +913,7 @@ namespace ps2recomp
                 }
             }
             m_codeGenerator->setRelocationCallNames(relocationCallNames);
+            m_codeGenerator->setNoRelocBind(m_config.noRelocBind);
             m_codeGenerator->setBootstrapInfo(m_bootstrapInfo);
             m_codeGenerator->setConfiguredJumpTables(m_config.jumpTables);
             m_codeGenerator->setEmitInstructionComments(true);
@@ -2022,6 +2023,17 @@ namespace ps2recomp
 
     bool PS2Recompiler::isStubFunction(const Function &function) const
     {
+        // A denied name keeps its real recompiled body. With a symbolized ELF a
+        // function named sceFsSemInit is the game's own statically linked SDK code,
+        // not an import that a runtime handler should stand in for. Checked first so
+        // the denylist wins over the address bindings and the bare name match alike.
+        if (!m_config.noRelocBind.empty() &&
+            std::find(m_config.noRelocBind.begin(), m_config.noRelocBind.end(), function.name) !=
+                m_config.noRelocBind.end())
+        {
+            return false;
+        }
+
         if (m_stubFunctionStarts.contains(function.start))
         {
             return true;
@@ -2065,6 +2077,19 @@ namespace ps2recomp
         const auto bindingIt = m_stubHandlerBindingsByStart.find(function.start);
         if (bindingIt != m_stubHandlerBindingsByStart.end() && !bindingIt->second.empty())
             handlerName = bindingIt->second;
+        // A denied name keeps its real recompiled body. Our ELF is symbolized, so a
+        // function called sceFsSemInit is the game's own statically linked SDK code,
+        // not an import that a runtime handler should stand in for.
+        if (!m_config.noRelocBind.empty())
+        {
+            const auto &denied = m_config.noRelocBind;
+            if (std::find(denied.begin(), denied.end(), function.name) != denied.end() ||
+                std::find(denied.begin(), denied.end(), handlerName) != denied.end())
+            {
+                return false;
+            }
+        }
+
         return resolveStubTarget(handlerName) != StubTarget::Unknown;
     }
 

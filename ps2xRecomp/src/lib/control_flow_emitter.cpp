@@ -295,6 +295,17 @@ namespace ps2recomp
         const bool isSyscall = !resolvedSyscallName.empty();
         const std::string_view handlerName = isSyscall ? resolvedSyscallName : resolvedStubName;
 
+        // A symbolized ELF statically links SDK code, so a relocation symbol can name a
+        // real function with a real body rather than an SDK import. Redirecting those
+        // callsites throws away working behaviour, so let the configured denylist win
+        // over the name match.
+        if (!m_gen.m_noRelocBind.empty() &&
+            (m_gen.m_noRelocBind.count(std::string(relocIt->second)) != 0 ||
+             m_gen.m_noRelocBind.count(std::string(handlerName)) != 0))
+        {
+            return false;
+        }
+
         m_ss << indent << "{\n";
         if (kind == StaticBranchKind::Call)
         {

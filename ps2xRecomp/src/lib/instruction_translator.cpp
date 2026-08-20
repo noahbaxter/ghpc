@@ -72,8 +72,17 @@ namespace ps2recomp
         MemoryAccessHint effectiveMemoryHint = memoryHint;
         if (inst.isMmio)
         {
-            effectiveMemoryHint.hasAddress = true;
-            effectiveMemoryHint.address = inst.mmioAddress;
+            // The analyzer records one address per instruction, and it only
+            // tracks the lui, so a lui/ori pair collapses to the page base:
+            // PsRnd::VSync writes T1_MODE (0x10000810) and polls T1_COUNT
+            // (0x10000800), but both were emitted as 0x10000000, landing on
+            // timer 0 and leaving CUE clear so the poll never terminated.
+            //
+            // MMIO accesses are rare and already go through runtime->LoadN and
+            // runtime->StoreN, which dispatch on the address they are handed, so
+            // compute it from the base register instead of trusting a constant.
+            effectiveMemoryHint.hasAddress = false;
+            effectiveMemoryHint.address = 0;
         }
 
         return effectiveMemoryHint;
