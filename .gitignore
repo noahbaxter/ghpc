@@ -48,3 +48,4 @@ android/local.properties
 android/.gradle/
 
 .DS_Store
+.claude/
