@@ -7,3 +7,4 @@ out/
 *.chd
 work/
 .DS_Store
+reference/
