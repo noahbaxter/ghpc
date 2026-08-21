@@ -712,3 +712,152 @@ Kept as general tools, all behind `GHPC_DIAG`:
   BASE=932), roughly 40 dirty chunks per run. The guard rejects them; the
   desync itself is unfixed.
 - Intermittent hang, roughly 1 run in 6, stalling shortly after splash 1.
+
+## Input already works end to end
+
+Confirmed by `GHPC_PAD_AUTO=1` pulsing CROSS (green fret) repeatedly, which
+traverses the menus. There was no missing plumbing to build; the chain was
+already complete and simply undocumented.
+
+The keyboard path is confirmed separately and by hand: arrow keys move the
+selection and X activates it, which is exactly the mapping below. So both ends
+are verified, the synthetic path and the real one.
+
+One loose end worth ruling out: a run with auto-pad off still reported
+`[pad] buttons changed to 0xfeff` with nothing being touched. That is a single
+bit (bit 8, L2) pulsing on its own, which looks like a phantom from a connected
+gamepad rather than a real press. Harmless in menus, but it would matter once
+note input is timed.
+
+    JoypadPoll (0x2f3f48)
+      -> BreugPadRead (0x2f6648), buffer gBreugPadData (0x51e000, 3072 bytes)
+        -> scePadRead, bound to the runtime HLE stub, not the recompiled body
+          -> readPadPortData (Kernel/Stubs/Pad.cpp)
+            -> pad override, else padBackend, else raylib keyboard and gamepad
+
+`scePad*` is deliberately absent from `ghpc/config/stub-denylist.txt`, so those
+symbols bind to the runtime handlers rather than to Sony's statically linked
+bodies. That is what makes host input possible at all, and it is why nothing
+had to be added.
+
+Keyboard mapping, from `applyKeyboardState`:
+
+    D-pad          arrow keys
+    Square Cross   Z X
+    Circle Triangle C V
+    L1 R1          Q E
+    L2 R2          1 3
+    Start Select   Enter RightShift
+    L3 R3          LeftCtrl RightCtrl
+    Left analog    WASD
+
+A connected gamepad is picked up automatically through `applyGamepadState`.
+`GHPC_PAD_AUTO=1` synthesizes alternating CROSS and START pulses every 1.2s
+after a 6s settle, which is how headless runs get past screens that wait for
+input. Verified button words: CROSS is 0xbfff, START is 0xfff7, nothing pressed
+is 0xffff (active low).
+
+A new `[pad]` / `[padcensus]` probe in `Pad.cpp` counts port opens, reads, and
+whether each read found the port open, and prints the delivered button word
+whenever it changes. Use it before assuming input is not arriving; absence of
+the old `[padread]` lines proves nothing, since those sit behind aggressive
+logs rather than `GHPC_DIAG`.
+
+**Still missing, and this is the actual M3 goal:** HID guitar support. The game
+already has the guitar layer built in (`JoypadIsGuitar__Fi`,
+`StrumBarPressed__FP10JoypadData`, and the `joypad_guitar`,
+`joypad_guitar_xbox`, `lefty_joypad_guitar` config symbols), so the work is
+host side: enumerate a real HID guitar, map frets, strum bar, whammy and tilt,
+and decide what `scePadInfoMode` should report so `JoypadIsGuitar` accepts it.
+Today the stub reports plain DIGITAL or DUALSHOCK.
+
+## Loading screen flicker is buffer divergence, not z-fighting
+
+It is not z-fighting. Z-fighting shimmers per pixel and changes with the
+camera; this is two whole pictures, each internally stable, swapping every
+present.
+
+Captured by tracing presents only when the picture actually changes
+(`GHPC_PRESENT_TRACE` with `GHPC_PRESENT_MIN`, plus `GHPC_FRAME_ONCHANGE` for
+the matching frame dumps). Both were needed: a fixed trace cap fills with the
+splash and never reaches the loading screen, and the old 2 second dump gap
+cannot show something that alternates at frame rate.
+
+    #1245 disp=56 nonBlack=190368 sig=0xfd6be71d95d48ec8
+    #1246 disp=0  nonBlack=211608 sig=0xb23a22f1b0ce458c
+    #1247 disp=56 nonBlack=190368 sig=0xfd6be71d95d48ec8
+    #1248 disp=0  nonBlack=211608 sig=0xb23a22f1b0ce458c
+
+Byte-identical repeats, so each buffer holds a fixed, different picture. The
+game is double buffering across fbp 0 and fbp 56 (adjacent and non-overlapping:
+fbp56 is 56 x 8192 = 458752 bytes, exactly one 512x448 CT16 frame), and
+alternating DISPFB between them is correct behaviour. The defect is that the
+two buffers disagree.
+
+Diffing the pair:
+
+- **fbp56 is correct.** Full poster, face art, red rays, dark panel, text.
+- **fbp0 is missing the entire poster layer.** The brick wall behind it shows
+  through, and the text and the bottom SELECT / UP-DOWN bar are drawn on top of
+  bare brick. Note the counter-intuitive part: fbp0 has *more* non-black pixels
+  (211608 vs 190368) because brick is brighter than the poster's black panel,
+  so a naive "more content" heuristic points at the wrong buffer.
+
+Ruled out so far:
+- **Not the known BASE desync.** `badBaseRejects=0` over the census window that
+  covers this screen, so the guard is not eating the poster's packets.
+- **Not a whole texture's draws going missing.** With the geometry census keyed
+  on destination fbp, every texture bucket has near-equal counts in both
+  buffers (5408: 56412 vs 56333; 7072: 5751 vs 6096; 6688: 1466 vs 1462).
+  Caveat: that census is a run-wide window, not scoped to the loading screen,
+  so treat it as suggestive rather than settled.
+
+So the poster geometry appears to be submitted to both buffers, yet only lands
+in one. The next question is whether it is drawn into fbp0 and then painted
+over. `[gs/pixel]` is now a rolling per-buffer window (`GHPC_PIXEL=x,y`, last 12
+writes per destination buffer) rather than the first 80 writes overall, so it
+can show which draw touched a poster pixel *last* in each buffer.
+
+### The two buffers receive different draw lists, not one missing draw
+
+Watching a pixel that actually diverges, (246,99), with the rolling per-buffer
+window. Repeating unit per frame:
+
+    fbp0   0x1c40 prim=6 tme=0  black (0,0,0,128)
+           0x1620 tme=1         cream (212,214,208,255)
+
+    fbp56  0x1620 tme=1         cream (212,214,208,255)
+           0x1c40 prim=6 tme=0  black (0,0,0,128)
+           0x1520 tme=1         dark  (42,34,30,128)
+
+Two facts fall out, and both matter more than "a draw went missing":
+
+1. **The buffers get different numbers of draws.** fbp0 sees two writes at this
+   pixel per frame, fbp56 sees three. The `0x1520` dark overlay reaches fbp56
+   only. So the frame's draw list is not being replayed identically into both.
+2. **The order differs too.** fbp0 paints black then cream; fbp56 paints cream,
+   then black, then dark. Same draws, different sequence, so this is not a
+   simple dropped packet.
+
+Also note **which buffer is correct is not stable between runs**. In the frame
+dumps, fbp0 was the broken one and ended black at this pixel. In the pixel probe
+run, fbp0's last write was cream. So neither buffer is inherently the bad one,
+which argues for a timing or ordering fault rather than one buffer being skipped.
+
+Working hypothesis: a single frame's draws are being split across both
+framebuffers instead of each buffer receiving the whole scene, so whichever
+buffer is presented is missing whatever went to the other. That would produce
+exactly this alternation.
+
+Next probe: log FRAME register writes interleaved with a draw sequence number,
+and check whether `fbp` changes partway through one frame's draw list. If it
+does, the question becomes whether the game legitimately switches render target
+mid-frame (GH2 does render to texture in places) or whether the runtime latches
+FRAME at the wrong point relative to the queued draws. `buildDrawBatch` captures
+`m_ctx[prim.ctxt]` at submit time, so a mismatch would have to come from the
+register write landing at a different point in the stream than the draws it
+should apply to.
+
+Do not re-chase: the present path itself is clean. `disp` always equals `sel`,
+`usedPreferred` is always 0, the black-content fallback never fires, and
+`fieldMode` is 0, so nothing in presentation is choosing the wrong buffer.
