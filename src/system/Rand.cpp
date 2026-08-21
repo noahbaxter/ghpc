@@ -27,9 +27,11 @@ int Rand::Int() { // 0x32da88
 // the sign of the dividend, and Int() spans the full signed range, so a negative
 // draw yields a result below lo. That is the original behaviour, not a
 // translation artifact.
-int Rand::Int(int lo, int hi) { // 0x32d980
-    MILO_ASSERT(lo < hi, 40);
-    return lo + Int() % (hi - lo);
+int Rand::Int(int low, int high) { // 0x32d980
+    // "high > low" at 0x4df138, in Rand.cpp at 0x4df128. The parameter names
+    // are the originals.
+    MILO_ASSERT(high > low, 40);
+    return low + Int() % (high - low);
 }
 
 // Walks a zero-terminated table of primes in the data segment at 0x445240 and
@@ -40,7 +42,8 @@ int Rand::Int(int lo, int hi) { // 0x32d980
 // The leading load of the first entry is a separate early-out for an empty
 // table, ahead of the loop proper.
 int NextHashPrime(int atLeast) { // 0x32f2e0
-    extern const int kHashPrimes[]; // 0x445240
+    // 0x445240: 29, 37, 41, 47, 53, 67, 79, 97, 107, 131, 157, 181, ...
+    extern const int kHashPrimes[];
     for (const int *p = kHashPrimes; *p != 0; ++p) {
         if (*p >= atLeast)
             return *p;

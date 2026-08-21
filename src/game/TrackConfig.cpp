@@ -36,7 +36,10 @@ void TrackConfig::SetGemsRange(int first, int last) { // 0x15bbb8
     mGemsRangeLast = last;
 }
 
-void TrackConfig::SetTrackNum(int num) { // 0x15bb48
-    MILO_ASSERT(num >= 0, 121);
-    mTrackNum = num;
+// The assert string at 0x474790 reads "trackNum >= 0" and the file string at
+// 0x474760 reads "TrackConfig.cpp", so both the condition and the parameter name
+// here are the originals rather than reconstructions.
+void TrackConfig::SetTrackNum(int trackNum) { // 0x15bb48
+    MILO_ASSERT(trackNum >= 0, 121);
+    mTrackNum = trackNum;
 }

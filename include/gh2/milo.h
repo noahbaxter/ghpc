@@ -14,17 +14,47 @@ namespace Hmx {
 // Base of everything in the Milo object system. Not decompiled yet.
 class Object {
 public:
+    enum CopyType { kCopyDeep, kCopyShallow, kCopyFromMax };
     virtual ~Object() {}
 };
 
 } // namespace Hmx
 
+// Interned string. One word wide.
+class Symbol { public: const char *mStr; };
+
+// Two words wide. RndShader::Handle stores 6 to +0x04 and 0 to +0x00 on the way
+// out, and 6 is kDataInt in the Milo DataType enum, so +0x00 is the value and
+// +0x04 is the tag.
+enum DataType {
+    kDataUnhandled = 0,
+    kDataFloat = 1,
+    kDataVar = 2,
+    kDataFunc = 3,
+    kDataObject = 4,
+    kDataSymbol = 5,
+    kDataInt = 6,
+};
+
 class DataArray;
-// Two words wide: RndDrawable::OnZeroSphere returns an empty one by clearing
-// exactly 0x00 and 0x04 of the caller-provided return slot.
-class DataNode { public: int mType; int mValue; };
+
+class DataNode {
+public:
+    DataNode() : mValue(0), mType(kDataUnhandled) {}
+    DataNode(int v) : mValue(v), mType(kDataInt) {}
+
+    Symbol Sym(const DataArray *) const; // 0x305148
+
+    int mValue;      // 0x00
+    DataType mType;  // 0x04
+};
+
+// Only what the decompiled bodies reach.
+class DataArray {
+public:
+    const DataNode *Node(int i) const; // 0x2fac90
+};
 class File;
-class Symbol { public: void *mStr; };
 class String;
 class BinStream;
 class ObjectDir;
@@ -46,6 +76,9 @@ void Notify(const char *); // 0x2ebd88
 
 #define MILO_ASSERT_RANGE(val, lo, hi, line) \
     MILO_ASSERT((val) >= (lo) && (val) <= (hi), line)
+
+// Debug::Notify with a MakeString-formatted argument.
+#define MILO_WARN(fmt, arg) Debug::Notify(fmt)
 
 // --- abstract bases, declared only so the null implementations have something
 // --- to override. None of these has been decompiled.

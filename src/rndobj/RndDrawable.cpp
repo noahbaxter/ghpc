@@ -25,7 +25,9 @@ void RndDrawable::UpdateSphere() { // 0x3b5860
 // the sphere is cleared through $a1, not $a0. This function returns a DataNode
 // by value, and the g++ 2.x MIPS ABI passes a hidden pointer to the return slot
 // in $a0, which pushes this into $a1 and the DataArray into $a2. So $a1 is this
-// and the two zero stores through $a0 at the end are the returned empty node.
+// and the two zero stores through $a0 at the end are the returned node. Both
+// words are zero, and tag 0 is kDataUnhandled, so this returns an empty node
+// rather than the integer zero that RndShader::Handle returns.
 DataNode RndDrawable::OnZeroSphere(const DataArray *) { // 0x1dccd8
     UpdateSphere();
     return DataNode();

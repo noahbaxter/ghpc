@@ -661,4 +661,12 @@ public:
     ChannelMapping *mMapping; // 0x04
 };
 
+
+// RndShader carries no state that any decompiled function touches.
+class RndShader {
+public:
+    void Copy(const Hmx::Object *, Hmx::Object::CopyType); // 0x205c28
+    DataNode Handle(DataArray *, bool);                    // 0x205c30
+};
+
 #endif // GH2_INFERRED_TYPES_H

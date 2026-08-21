@@ -5,7 +5,10 @@
 // rebuilt on the next use.
 //
 // Assert line numbers below are the ones GH2 baked into the failure strings, so
-// they are the line numbers of the original ADSR.cpp.
+// they are the line numbers of the original ADSR.cpp. The strings themselves are
+// in the ELF too, and tools/rodata.py reads them back, which is where the
+// parameter names ar, dr, sr, rr and sl come from. They are the original names,
+// not guesses.
 
 #include "gh2/inferred_types.h"
 
@@ -27,33 +30,38 @@ Ps2ADSR::ReleaseMode ADSR::GetReleaseMode() const { return mReleaseMode; } // 0x
 // Debug::Fail on the way through, then the store, then mSynced = 0. The upper
 // bound is the literal loaded by the lui/mtc1 pair.
 
-void ADSR::SetAttackRate(float rate) { // 0x2573a0, bound 0x4270 0000 = 60.0f
-    MILO_ASSERT_RANGE(rate, 0.0f, 60.0f, 405);
-    mAttackRate = rate;
+void ADSR::SetAttackRate(float ar) { // 0x2573a0, bound 0x42700000 = 60.0f
+    // "( 0) <= (ar) && (ar) <= ( 60.0f)" at 0x4aa738
+    MILO_ASSERT_RANGE(ar, 0, 60.0f, 405);
+    mAttackRate = ar;
     mSynced = 0;
 }
 
-void ADSR::SetDecayRate(float rate) { // 0x257438
-    MILO_ASSERT_RANGE(rate, 0.0f, 60.0f, 419);
-    mDecayRate = rate;
+void ADSR::SetDecayRate(float dr) { // 0x257438
+    // "( 0) <= (dr) && (dr) <= ( 60.0f)" at 0x4aa760
+    MILO_ASSERT_RANGE(dr, 0, 60.0f, 419);
+    mDecayRate = dr;
     mSynced = 0;
 }
 
-void ADSR::SetSustainRate(float rate) { // 0x2574d0
-    MILO_ASSERT_RANGE(rate, 0.0f, 60.0f, 433);
-    mSustainRate = rate;
+void ADSR::SetSustainRate(float sr) { // 0x2574d0
+    // "( 0) <= (sr) && (sr) <= ( 60.0f)" at 0x4aa788
+    MILO_ASSERT_RANGE(sr, 0, 60.0f, 433);
+    mSustainRate = sr;
     mSynced = 0;
 }
 
-void ADSR::SetReleaseRate(float rate) { // 0x257600
-    MILO_ASSERT_RANGE(rate, 0.0f, 60.0f, 461);
-    mReleaseRate = rate;
+void ADSR::SetReleaseRate(float rr) { // 0x257600
+    // "( 0) <= (rr) && (rr) <= ( 60.0f)" at 0x4aa7d8
+    MILO_ASSERT_RANGE(rr, 0, 60.0f, 461);
+    mReleaseRate = rr;
     mSynced = 0;
 }
 
-void ADSR::SetSustainLevel(float level) { // 0x257568, bound 0x3F80 0000 = 1.0f
-    MILO_ASSERT_RANGE(level, 0.0f, 1.0f, 447);
-    mSustainLevel = level;
+void ADSR::SetSustainLevel(float sl) { // 0x257568, bound 0x3f800000 = 1.0f
+    // "( 0.0f) <= (sl) && (sl) <= ( 1.0f)" at 0x4aa7b0
+    MILO_ASSERT_RANGE(sl, 0.0f, 1.0f, 447);
+    mSustainLevel = sl;
     mSynced = 0;
 }
 
