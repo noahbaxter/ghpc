@@ -68,7 +68,11 @@ struct alignas(16) R5900Context
     uint32_t sa;         // Shift amount register
 
     // VU0 registers (when used in macro mode)
-    __m128 vu0_vf[32];        // VU0 vector float registers
+    // 33 entries, not 32. VU0's vf00 is hardwired to (0,0,0,1) and hardware
+    // discards writes to it; games rely on that, using ops like
+    // `vaddx.x $vf00, ...` purely to set the MAC flags for a compare. Slot 32
+    // is the sink those writes are redirected to by the recompiler.
+    __m128 vu0_vf[33];        // VU0 vector float registers
     uint16_t vi[16];          // VU0 vector integer registers
     float vu0_q;              // VU0 Q register (quotient)
     float vu0_p;              // VU0 P register (EFU result)

@@ -10,7 +10,7 @@ namespace ps2recomp
 {
     std::string CodeGenerator::translateVU_VADD_Field(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -21,7 +21,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VSUB_Field(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -32,7 +32,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMUL_Field(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -43,7 +43,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VADD(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -52,7 +52,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VSUB(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -61,7 +61,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMUL(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -197,7 +197,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMADD_Field(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -218,7 +218,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMSUB_Field(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -238,7 +238,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMINI_Field(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -257,7 +257,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMAX_Field(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -276,7 +276,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMADD(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -292,7 +292,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMADDq(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
@@ -307,7 +307,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMADDi(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
@@ -322,7 +322,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMAX(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -337,7 +337,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMAXi(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = _mm_max_ps(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
@@ -351,7 +351,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMINIi(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = _mm_min_ps(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
@@ -365,7 +365,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMULi(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
@@ -379,7 +379,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMULq(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
@@ -393,7 +393,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VOPMSUB(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -411,7 +411,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VADDq(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
@@ -425,7 +425,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VADDi(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VADD(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
@@ -439,7 +439,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMSUB(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -455,7 +455,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMINI(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t vft = inst.rt;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
@@ -470,7 +470,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VSUBi(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
@@ -484,7 +484,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VSUBq(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 res = PS2_VSUB(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
@@ -498,7 +498,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMSUBq(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_q)); "
@@ -513,7 +513,7 @@ namespace ps2recomp
 
     std::string CodeGenerator::translateVU_VMSUBi(const Instruction &inst)
     {
-        uint8_t vfd = inst.sa;
+        uint8_t vfd = (uint8_t)codegen::vfDst(inst.sa);
         uint8_t vfs = inst.rd;
         uint8_t dest_mask = inst.vectorInfo.vectorField;
         return fmt::format("{{ __m128 mul_res = PS2_VMUL(ctx->vu0_vf[{}], _mm_set1_ps(ctx->vu0_i)); "
