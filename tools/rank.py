@@ -72,8 +72,17 @@ def parse_file(path):
     insns = []
     for line in text.splitlines():
         m = DISASM.match(line)
-        if m:
-            insns.append((m.group(3).lower(), m.group(4)))
+        if not m:
+            continue
+        mnem, ops = m.group(3).lower(), m.group(4)
+        if mnem == ".word":
+            # The recompiler's pretty-printer does not know every COP1 opcode.
+            # It still emits correct C++ and parks the real disassembly in a
+            # trailing comment: ".word 0x46000064  # cvt.w.s $f1, $f0 # ...".
+            real = re.search(r"#\s+([a-z][\w.]*)\s+(.*?)\s*#", ops)
+            if real:
+                mnem, ops = real.group(1), real.group(2)
+        insns.append((mnem, ops))
 
     # The basic-block dispatch table at the top of the function. Its size is a
     # direct measure of how many entry points the block graph has.

@@ -7788,28 +7788,6 @@
   "callees": []
  },
  {
-  "file": "GetScore__C9Performer_0x110d50.cpp",
-  "symbol": "GetScore__C9Performer",
-  "demangled": "Performer::GetScore()",
-  "addr": "0x110d50",
-  "score": -4.6,
-  "kind": "accessor",
-  "insns": 4,
-  "dispatch": 0,
-  "labels": 0,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 2,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 1,
-  "stores": 0,
-  "mult_div": 0,
-  "distinct_mem": 1,
-  "callees": []
- },
- {
   "file": "EndFrame__9Character_0x16e980.cpp",
   "symbol": "EndFrame__9Character",
   "demangled": "Character::EndFrame()",
@@ -8115,6 +8093,28 @@
   "stores": 2,
   "mult_div": 0,
   "distinct_mem": 2,
+  "callees": []
+ },
+ {
+  "file": "GetScore__C9Performer_0x110d50.cpp",
+  "symbol": "GetScore__C9Performer",
+  "demangled": "Performer::GetScore()",
+  "addr": "0x110d50",
+  "score": -3.4,
+  "kind": "accessor",
+  "insns": 4,
+  "dispatch": 0,
+  "labels": 0,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 3,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 1,
+  "stores": 0,
+  "mult_div": 0,
+  "distinct_mem": 1,
   "callees": []
  },
  {
@@ -16928,28 +16928,6 @@
   "callees": []
  },
  {
-  "file": "SetMipMapK__5PsTexf_0x1c6b88.cpp",
-  "symbol": "SetMipMapK__5PsTexf",
-  "demangled": "PsTex::SetMipMapK(float)",
-  "addr": "0x1c6b88",
-  "score": 3.45,
-  "kind": "accessor",
-  "insns": 17,
-  "dispatch": 0,
-  "labels": 0,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 4,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 1,
-  "stores": 2,
-  "mult_div": 0,
-  "distinct_mem": 2,
-  "callees": []
- },
- {
   "file": "Begin__CQ46OC3Ent4Face11FxFaceGraph23FxFaceGraphNodeJumpList_0x297d90.cpp",
   "symbol": "Begin__CQ46OC3Ent4Face11FxFaceGraph23FxFaceGraphNodeJumpList",
   "demangled": "OC3Ent::Face::FxFaceGraph::FxFaceGraphNodeJumpList::Begin()",
@@ -19308,6 +19286,28 @@
   "callees": [
    "func_16AB88"
   ]
+ },
+ {
+  "file": "SetMipMapK__5PsTexf_0x1c6b88.cpp",
+  "symbol": "SetMipMapK__5PsTexf",
+  "demangled": "PsTex::SetMipMapK(float)",
+  "addr": "0x1c6b88",
+  "score": 4.65,
+  "kind": "accessor",
+  "insns": 17,
+  "dispatch": 0,
+  "labels": 0,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 5,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 1,
+  "stores": 2,
+  "mult_div": 0,
+  "distinct_mem": 2,
+  "callees": []
  },
  {
   "file": "RefOwner__t9ObjDirPtr1Z11CharClipSet_0x36aa58.cpp",
@@ -27230,30 +27230,6 @@
   "callees": []
  },
  {
-  "file": "GetPercentComplete__C9Performer_0x111110.cpp",
-  "symbol": "GetPercentComplete__C9Performer",
-  "demangled": "Performer::GetPercentComplete()",
-  "addr": "0x111110",
-  "score": 8.55,
-  "kind": "accessor",
-  "insns": 11,
-  "dispatch": 1,
-  "labels": 1,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 3,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 1,
-  "stores": 1,
-  "mult_div": 0,
-  "distinct_mem": 1,
-  "callees": [
-   "func_1110A8"
-  ]
- },
- {
   "file": "ps2___Q36OC3Ent4Facet6FxList1ZPQ36OC3Ent4Face11FxRefString_0x402110.cpp",
   "symbol": "ps2___Q36OC3Ent4Facet6FxList1ZPQ36OC3Ent4Face11FxRefString",
   "demangled": "ps2___Q36OC3Ent4Facet6FxList1ZPQ36OC3Ent4Face11FxRefString",
@@ -27340,30 +27316,6 @@
   "mult_div": 0,
   "distinct_mem": 2,
   "callees": []
- },
- {
-  "file": "GetCurrentTempo__C9BeatMatch_0x126838.cpp",
-  "symbol": "GetCurrentTempo__C9BeatMatch",
-  "demangled": "BeatMatch::GetCurrentTempo()",
-  "addr": "0x126838",
-  "score": 8.6,
-  "kind": "accessor",
-  "insns": 10,
-  "dispatch": 1,
-  "labels": 1,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 2,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 2,
-  "stores": 1,
-  "mult_div": 0,
-  "distinct_mem": 2,
-  "callees": [
-   "func_120EB8"
-  ]
  },
  {
   "file": "JoypadTerminate__Fv_0x2f3f20.cpp",
@@ -28626,6 +28578,30 @@
   ]
  },
  {
+  "file": "GetPercentComplete__C9Performer_0x111110.cpp",
+  "symbol": "GetPercentComplete__C9Performer",
+  "demangled": "Performer::GetPercentComplete()",
+  "addr": "0x111110",
+  "score": 9.75,
+  "kind": "accessor",
+  "insns": 11,
+  "dispatch": 1,
+  "labels": 1,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 4,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 1,
+  "stores": 1,
+  "mult_div": 0,
+  "distinct_mem": 1,
+  "callees": [
+   "func_1110A8"
+  ]
+ },
+ {
   "file": "GemPlayableBy__Fii_0x2734e8.cpp",
   "symbol": "GemPlayableBy__Fii",
   "demangled": "GemPlayableBy(int, int)",
@@ -28646,6 +28622,30 @@
   "mult_div": 0,
   "distinct_mem": 0,
   "callees": []
+ },
+ {
+  "file": "GetCurrentTempo__C9BeatMatch_0x126838.cpp",
+  "symbol": "GetCurrentTempo__C9BeatMatch",
+  "demangled": "BeatMatch::GetCurrentTempo()",
+  "addr": "0x126838",
+  "score": 9.8,
+  "kind": "accessor",
+  "insns": 10,
+  "dispatch": 1,
+  "labels": 1,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 3,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 2,
+  "stores": 1,
+  "mult_div": 0,
+  "distinct_mem": 2,
+  "callees": [
+   "func_120EB8"
+  ]
  },
  {
   "file": "SetFile__8RndMovieRC8FilePathb_0x3c2cb8.cpp",
@@ -41243,30 +41243,6 @@
   ]
  },
  {
-  "file": "SetSpeedImpl__12SampleInstEEf_0x26a370.cpp",
-  "symbol": "SetSpeedImpl__12SampleInstEEf",
-  "demangled": "SampleInstEE::SetSpeedImpl(float)",
-  "addr": "0x26a370",
-  "score": 14.6,
-  "kind": "accessor",
-  "insns": 16,
-  "dispatch": 1,
-  "labels": 1,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 3,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 2,
-  "stores": 3,
-  "mult_div": 0,
-  "distinct_mem": 4,
-  "callees": [
-   "func_3EBE78"
-  ]
- },
- {
   "file": "JoypadVibrate__Fi_0x2ef858.cpp",
   "symbol": "JoypadVibrate__Fi",
   "demangled": "JoypadVibrate(int)",
@@ -42313,6 +42289,30 @@
   "distinct_mem": 3,
   "callees": [
    "func_2B3A00"
+  ]
+ },
+ {
+  "file": "SetSpeedImpl__12SampleInstEEf_0x26a370.cpp",
+  "symbol": "SetSpeedImpl__12SampleInstEEf",
+  "demangled": "SampleInstEE::SetSpeedImpl(float)",
+  "addr": "0x26a370",
+  "score": 15.8,
+  "kind": "accessor",
+  "insns": 16,
+  "dispatch": 1,
+  "labels": 1,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 4,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 2,
+  "stores": 3,
+  "mult_div": 0,
+  "distinct_mem": 4,
+  "callees": [
+   "func_3EBE78"
   ]
  },
  {
@@ -57024,28 +57024,6 @@
   "callees": []
  },
  {
-  "file": "GetTailPoints__C7Scoringi_0x11fc50.cpp",
-  "symbol": "GetTailPoints__C7Scoringi",
-  "demangled": "Scoring::GetTailPoints(int)",
-  "addr": "0x11fc50",
-  "score": 21.25,
-  "kind": "accessor",
-  "insns": 27,
-  "dispatch": 0,
-  "labels": 1,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 16,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 1,
-  "stores": 0,
-  "mult_div": 0,
-  "distinct_mem": 1,
-  "callees": []
- },
- {
   "file": "StartInstance__9SlotViewsiffP8RndGroupf_0x16a430.cpp",
   "symbol": "StartInstance__9SlotViewsiffP8RndGroupf",
   "demangled": "SlotViews::StartInstance(int, float, float, RndGroup *, float)",
@@ -58684,28 +58662,6 @@
   "callees": [
    "func_3FB7D0"
   ]
- },
- {
-  "file": "Lookup__Ff_0x3304d0.cpp",
-  "symbol": "Lookup__Ff",
-  "demangled": "Lookup(float)",
-  "addr": "0x3304d0",
-  "score": 21.8,
-  "kind": "",
-  "insns": 18,
-  "dispatch": 0,
-  "labels": 0,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 8,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 4,
-  "stores": 0,
-  "mult_div": 0,
-  "distinct_mem": 4,
-  "callees": []
  },
  {
   "file": "ps2___14RandomGroupSeq_0x25ae88.cpp",
@@ -60784,6 +60740,28 @@
   ]
  },
  {
+  "file": "Lookup__Ff_0x3304d0.cpp",
+  "symbol": "Lookup__Ff",
+  "demangled": "Lookup(float)",
+  "addr": "0x3304d0",
+  "score": 23.0,
+  "kind": "",
+  "insns": 18,
+  "dispatch": 0,
+  "labels": 0,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 9,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 4,
+  "stores": 0,
+  "mult_div": 0,
+  "distinct_mem": 4,
+  "callees": []
+ },
+ {
   "file": "IsLoaded__13TutorialPanel_0x146878.cpp",
   "symbol": "IsLoaded__13TutorialPanel",
   "demangled": "TutorialPanel::IsLoaded()",
@@ -62233,6 +62211,28 @@
   "callees": []
  },
  {
+  "file": "GetTailPoints__C7Scoringi_0x11fc50.cpp",
+  "symbol": "GetTailPoints__C7Scoringi",
+  "demangled": "Scoring::GetTailPoints(int)",
+  "addr": "0x11fc50",
+  "score": 23.65,
+  "kind": "accessor",
+  "insns": 27,
+  "dispatch": 0,
+  "labels": 1,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 18,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 1,
+  "stores": 0,
+  "mult_div": 0,
+  "distinct_mem": 1,
+  "callees": []
+ },
+ {
   "file": "FretButtonDown__13PlayerMatcherif_0x1190f8.cpp",
   "symbol": "FretButtonDown__13PlayerMatcherif",
   "demangled": "PlayerMatcher::FretButtonDown(int, float)",
@@ -62421,28 +62421,6 @@
   "stores": 8,
   "mult_div": 0,
   "distinct_mem": 8,
-  "callees": []
- },
- {
-  "file": "SetSteps__8RndFlarei_0x22db90.cpp",
-  "symbol": "SetSteps__8RndFlarei",
-  "demangled": "RndFlare::SetSteps(int)",
-  "addr": "0x22db90",
-  "score": 23.85,
-  "kind": "accessor",
-  "insns": 29,
-  "dispatch": 0,
-  "labels": 2,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 6,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 4,
-  "stores": 6,
-  "mult_div": 1,
-  "distinct_mem": 5,
   "callees": []
  },
  {
@@ -64274,6 +64252,28 @@
   "callees": []
  },
  {
+  "file": "SetSteps__8RndFlarei_0x22db90.cpp",
+  "symbol": "SetSteps__8RndFlarei",
+  "demangled": "RndFlare::SetSteps(int)",
+  "addr": "0x22db90",
+  "score": 25.05,
+  "kind": "accessor",
+  "insns": 29,
+  "dispatch": 0,
+  "labels": 2,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 7,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 4,
+  "stores": 6,
+  "mult_div": 1,
+  "distinct_mem": 5,
+  "callees": []
+ },
+ {
   "file": "CreateGem__10GemRepPool_0x163d18.cpp",
   "symbol": "CreateGem__10GemRepPool",
   "demangled": "GemRepPool::CreateGem()",
@@ -65431,28 +65431,6 @@
    "func_3217A8",
    "func_322418"
   ]
- },
- {
-  "file": "OnClearColorPacked__3RndPC9DataArray_0x2037c8.cpp",
-  "symbol": "OnClearColorPacked__3RndPC9DataArray",
-  "demangled": "Rnd::OnClearColorPacked(DataArray * const)",
-  "addr": "0x2037c8",
-  "score": 26.25,
-  "kind": "",
-  "insns": 25,
-  "dispatch": 0,
-  "labels": 0,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 10,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 3,
-  "stores": 2,
-  "mult_div": 0,
-  "distinct_mem": 5,
-  "callees": []
  },
  {
   "file": "Init__4Tips_0x1461c0.cpp",
@@ -80690,6 +80668,28 @@
   ]
  },
  {
+  "file": "OnClearColorPacked__3RndPC9DataArray_0x2037c8.cpp",
+  "symbol": "OnClearColorPacked__3RndPC9DataArray",
+  "demangled": "Rnd::OnClearColorPacked(DataArray * const)",
+  "addr": "0x2037c8",
+  "score": 29.85,
+  "kind": "",
+  "insns": 25,
+  "dispatch": 0,
+  "labels": 0,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 13,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 3,
+  "stores": 2,
+  "mult_div": 0,
+  "distinct_mem": 5,
+  "callees": []
+ },
+ {
   "file": "ps2___eh_alloc_0x104530.cpp",
   "symbol": "ps2___eh_alloc",
   "demangled": "ps2___eh_alloc",
@@ -81267,30 +81267,6 @@
   "distinct_mem": 4,
   "callees": [
    "func_42B7E8"
-  ]
- },
- {
-  "file": "SetVolumeImpl__12SampleInstEEf_0x26a298.cpp",
-  "symbol": "SetVolumeImpl__12SampleInstEEf",
-  "demangled": "SampleInstEE::SetVolumeImpl(float)",
-  "addr": "0x26a298",
-  "score": 30.0,
-  "kind": "accessor",
-  "insns": 26,
-  "dispatch": 1,
-  "labels": 3,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 11,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 1,
-  "stores": 2,
-  "mult_div": 0,
-  "distinct_mem": 2,
-  "callees": [
-   "func_26A330"
   ]
  },
  {
@@ -82713,6 +82689,30 @@
   ]
  },
  {
+  "file": "SetVolumeImpl__12SampleInstEEf_0x26a298.cpp",
+  "symbol": "SetVolumeImpl__12SampleInstEEf",
+  "demangled": "SampleInstEE::SetVolumeImpl(float)",
+  "addr": "0x26a298",
+  "score": 31.2,
+  "kind": "accessor",
+  "insns": 26,
+  "dispatch": 1,
+  "labels": 3,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 12,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 1,
+  "stores": 2,
+  "mult_div": 0,
+  "distinct_mem": 2,
+  "callees": [
+   "func_26A330"
+  ]
+ },
+ {
   "file": "SetDualPerspective__10TrackPanelb_0x15df08.cpp",
   "symbol": "SetDualPerspective__10TrackPanelb",
   "demangled": "TrackPanel::SetDualPerspective(bool)",
@@ -82833,30 +82833,6 @@
   "distinct_mem": 7,
   "callees": [
    "func_34CB10"
-  ]
- },
- {
-  "file": "SetStartProgress__12SampleInstEEf_0x26aa88.cpp",
-  "symbol": "SetStartProgress__12SampleInstEEf",
-  "demangled": "SampleInstEE::SetStartProgress(float)",
-  "addr": "0x26aa88",
-  "score": 31.35,
-  "kind": "accessor",
-  "insns": 25,
-  "dispatch": 1,
-  "labels": 3,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 5,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 3,
-  "stores": 4,
-  "mult_div": 0,
-  "distinct_mem": 6,
-  "callees": [
-   "func_3EC2D0"
   ]
  },
  {
@@ -87669,6 +87645,30 @@
   ]
  },
  {
+  "file": "SetStartProgress__12SampleInstEEf_0x26aa88.cpp",
+  "symbol": "SetStartProgress__12SampleInstEEf",
+  "demangled": "SampleInstEE::SetStartProgress(float)",
+  "addr": "0x26aa88",
+  "score": 32.55,
+  "kind": "accessor",
+  "insns": 25,
+  "dispatch": 1,
+  "labels": 3,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 6,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 3,
+  "stores": 4,
+  "mult_div": 0,
+  "distinct_mem": 6,
+  "callees": [
+   "func_3EC2D0"
+  ]
+ },
+ {
   "file": "MovingSelf__C13CharacterTest_0x196aa0.cpp",
   "symbol": "MovingSelf__C13CharacterTest",
   "demangled": "CharacterTest::MovingSelf()",
@@ -92329,28 +92329,6 @@
   ]
  },
  {
-  "file": "FastSin__Ff_0x330610.cpp",
-  "symbol": "FastSin__Ff",
-  "demangled": "FastSin(float)",
-  "addr": "0x330610",
-  "score": 35.45,
-  "kind": "",
-  "insns": 39,
-  "dispatch": 0,
-  "labels": 1,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 16,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 2,
-  "stores": 0,
-  "mult_div": 0,
-  "distinct_mem": 1,
-  "callees": []
- },
- {
   "file": "SetCamera__8RndGraphP6RndCam_0x1e10c8.cpp",
   "symbol": "SetCamera__8RndGraphP6RndCam",
   "demangled": "RndGraph::SetCamera(RndCam *)",
@@ -92420,28 +92398,6 @@
   "stores": 17,
   "mult_div": 0,
   "distinct_mem": 18,
-  "callees": []
- },
- {
-  "file": "ps2___7GameGemRC12MultiGemInfo_0x273b18.cpp",
-  "symbol": "ps2___7GameGemRC12MultiGemInfo",
-  "demangled": "GameGem::ps2_(MultiGemInfo & const)",
-  "addr": "0x273b18",
-  "score": 35.55,
-  "kind": "",
-  "insns": 31,
-  "dispatch": 0,
-  "labels": 0,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 4,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 9,
-  "stores": 8,
-  "mult_div": 0,
-  "distinct_mem": 14,
   "callees": []
  },
  {
@@ -93699,28 +93655,6 @@
   ]
  },
  {
-  "file": "MapToDeadzone_0x2f65b8.cpp",
-  "symbol": "MapToDeadzone",
-  "demangled": "MapToDeadzone",
-  "addr": "0x2f65b8",
-  "score": 36.6,
-  "kind": "opaque",
-  "insns": 36,
-  "dispatch": 0,
-  "labels": 1,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 9,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 2,
-  "stores": 0,
-  "mult_div": 2,
-  "distinct_mem": 2,
-  "callees": []
- },
- {
   "file": "SwapVertex__FUsUsRQ27RndMesh10VertVector_0x223f78.cpp",
   "symbol": "SwapVertex__FUsUsRQ27RndMesh10VertVector",
   "demangled": "SwapVertex(short  unsigned, short  unsigned, RndMesh::VertVector &)",
@@ -93864,6 +93798,28 @@
   "callees": [
    "func_326F00"
   ]
+ },
+ {
+  "file": "ps2___7GameGemRC12MultiGemInfo_0x273b18.cpp",
+  "symbol": "ps2___7GameGemRC12MultiGemInfo",
+  "demangled": "GameGem::ps2_(MultiGemInfo & const)",
+  "addr": "0x273b18",
+  "score": 36.75,
+  "kind": "",
+  "insns": 31,
+  "dispatch": 0,
+  "labels": 0,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 5,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 9,
+  "stores": 8,
+  "mult_div": 0,
+  "distinct_mem": 14,
+  "callees": []
  },
  {
   "file": "FindOption__FPCc_0x3239c8.cpp",
@@ -112581,6 +112537,28 @@
   ]
  },
  {
+  "file": "MapToDeadzone_0x2f65b8.cpp",
+  "symbol": "MapToDeadzone",
+  "demangled": "MapToDeadzone",
+  "addr": "0x2f65b8",
+  "score": 37.8,
+  "kind": "opaque",
+  "insns": 36,
+  "dispatch": 0,
+  "labels": 1,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 10,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 2,
+  "stores": 0,
+  "mult_div": 2,
+  "distinct_mem": 2,
+  "callees": []
+ },
+ {
   "file": "Evaluate__CQ36OC3Ent4Face16FxConstantLinkFnfRCQ36OC3Ent4Face18FxLinkFnParameters_0x29cf38.cpp",
   "symbol": "Evaluate__CQ36OC3Ent4Face16FxConstantLinkFnfRCQ36OC3Ent4Face18FxLinkFnParameters",
   "demangled": "OC3Ent::Face::FxConstantLinkFn::Evaluate(float, OC3Ent::Face::FxLinkFnParameters & const)",
@@ -112630,6 +112608,28 @@
    "func_286788",
    "func_3191C8"
   ]
+ },
+ {
+  "file": "FastSin__Ff_0x330610.cpp",
+  "symbol": "FastSin__Ff",
+  "demangled": "FastSin(float)",
+  "addr": "0x330610",
+  "score": 37.85,
+  "kind": "",
+  "insns": 39,
+  "dispatch": 0,
+  "labels": 1,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 18,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 2,
+  "stores": 0,
+  "mult_div": 0,
+  "distinct_mem": 1,
+  "callees": []
  },
  {
   "file": "_lseek_r_0x364700.cpp",
@@ -123144,30 +123144,6 @@
   ]
  },
  {
-  "file": "Reset__12Distribution_0x157480.cpp",
-  "symbol": "Reset__12Distribution",
-  "demangled": "Distribution::Reset()",
-  "addr": "0x157480",
-  "score": 44.2,
-  "kind": "accessor",
-  "insns": 36,
-  "dispatch": 1,
-  "labels": 4,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 4,
-  "cop2": 0,
-  "branches": 4,
-  "loads": 7,
-  "stores": 6,
-  "mult_div": 0,
-  "distinct_mem": 8,
-  "callees": [
-   "func_374B88"
-  ]
- },
- {
   "file": "ps2____Q36OC3Ent4Facet16FxTempCharBuffer1Zc_0x3fb868.cpp",
   "symbol": "ps2____Q36OC3Ent4Facet16FxTempCharBuffer1Zc",
   "demangled": "ps2____Q36OC3Ent4Facet16FxTempCharBuffer1Zc",
@@ -125383,6 +125359,30 @@
   "mult_div": 0,
   "distinct_mem": 10,
   "callees": []
+ },
+ {
+  "file": "Reset__12Distribution_0x157480.cpp",
+  "symbol": "Reset__12Distribution",
+  "demangled": "Distribution::Reset()",
+  "addr": "0x157480",
+  "score": 45.4,
+  "kind": "accessor",
+  "insns": 36,
+  "dispatch": 1,
+  "labels": 4,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 5,
+  "cop2": 0,
+  "branches": 4,
+  "loads": 7,
+  "stores": 6,
+  "mult_div": 0,
+  "distinct_mem": 8,
+  "callees": [
+   "func_374B88"
+  ]
  },
  {
   "file": "SetInputFX__7SynthEEib_0x268df8.cpp",
@@ -134640,30 +134640,6 @@
   ]
  },
  {
-  "file": "MsToBytes__C17VAGFileReader_Oldf_0x270380.cpp",
-  "symbol": "MsToBytes__C17VAGFileReader_Oldf",
-  "demangled": "VAGFileReader_Old::MsToBytes(float)",
-  "addr": "0x270380",
-  "score": 48.15,
-  "kind": "",
-  "insns": 35,
-  "dispatch": 1,
-  "labels": 3,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 12,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 5,
-  "stores": 3,
-  "mult_div": 1,
-  "distinct_mem": 5,
-  "callees": [
-   "func_26E990"
-  ]
- },
- {
   "file": "Key__C9TypePropsi_0x317a60.cpp",
   "symbol": "Key__C9TypePropsi",
   "demangled": "TypeProps::Key(int)",
@@ -135814,6 +135790,30 @@
   "distinct_mem": 10,
   "callees": [
    "func_35A530"
+  ]
+ },
+ {
+  "file": "MsToBytes__C17VAGFileReader_Oldf_0x270380.cpp",
+  "symbol": "MsToBytes__C17VAGFileReader_Oldf",
+  "demangled": "VAGFileReader_Old::MsToBytes(float)",
+  "addr": "0x270380",
+  "score": 49.35,
+  "kind": "",
+  "insns": 35,
+  "dispatch": 1,
+  "labels": 3,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 13,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 5,
+  "stores": 3,
+  "mult_div": 1,
+  "distinct_mem": 5,
+  "callees": [
+   "func_26E990"
   ]
  },
  {
@@ -137560,30 +137560,6 @@
   ]
  },
  {
-  "file": "GetDateAndTime__FR8DateTime_0x2fa3f0.cpp",
-  "symbol": "GetDateAndTime__FR8DateTime",
-  "demangled": "GetDateAndTime(DateTime &)",
-  "addr": "0x2fa3f0",
-  "score": 50.05,
-  "kind": "accessor",
-  "insns": 43,
-  "dispatch": 1,
-  "labels": 3,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 15,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 5,
-  "stores": 1,
-  "mult_div": 0,
-  "distinct_mem": 5,
-  "callees": [
-   "func_2FA278"
-  ]
- },
- {
   "file": "FindTextTemplate__10UIResourceG6Symbol_0x24f248.cpp",
   "symbol": "FindTextTemplate__10UIResourceG6Symbol",
   "demangled": "UIResource::FindTextTemplate(?)",
@@ -138448,31 +138424,6 @@
   ]
  },
  {
-  "file": "GetFadeCenter__12TrackSurfaceRiT1P6RndCam_0x15ea88.cpp",
-  "symbol": "GetFadeCenter__12TrackSurfaceRiT1P6RndCam",
-  "demangled": "TrackSurface::GetFadeCenter(int &, T?, RndCam *)",
-  "addr": "0x15ea88",
-  "score": 50.95,
-  "kind": "accessor",
-  "insns": 35,
-  "dispatch": 2,
-  "labels": 2,
-  "calls": 2,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 10,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 11,
-  "stores": 6,
-  "mult_div": 0,
-  "distinct_mem": 12,
-  "callees": [
-   "func_1D7948",
-   "func_43F768"
-  ]
- },
- {
   "file": "Load__13CharClipGroupR9BinStream_0x176f90.cpp",
   "symbol": "Load__13CharClipGroupR9BinStream",
   "demangled": "CharClipGroup::Load(BinStream &)",
@@ -138698,6 +138649,30 @@
   "distinct_mem": 17,
   "callees": [
    "func_381D80"
+  ]
+ },
+ {
+  "file": "GetDateAndTime__FR8DateTime_0x2fa3f0.cpp",
+  "symbol": "GetDateAndTime__FR8DateTime",
+  "demangled": "GetDateAndTime(DateTime &)",
+  "addr": "0x2fa3f0",
+  "score": 51.25,
+  "kind": "accessor",
+  "insns": 43,
+  "dispatch": 1,
+  "labels": 3,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 16,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 5,
+  "stores": 1,
+  "mult_div": 0,
+  "distinct_mem": 5,
+  "callees": [
+   "func_2FA278"
   ]
  },
  {
@@ -141664,6 +141639,31 @@
    "func_243258",
    "func_2EBDA8",
    "func_3680E8"
+  ]
+ },
+ {
+  "file": "GetFadeCenter__12TrackSurfaceRiT1P6RndCam_0x15ea88.cpp",
+  "symbol": "GetFadeCenter__12TrackSurfaceRiT1P6RndCam",
+  "demangled": "TrackSurface::GetFadeCenter(int &, T?, RndCam *)",
+  "addr": "0x15ea88",
+  "score": 53.35,
+  "kind": "accessor",
+  "insns": 35,
+  "dispatch": 2,
+  "labels": 2,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 12,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 11,
+  "stores": 6,
+  "mult_div": 0,
+  "distinct_mem": 12,
+  "callees": [
+   "func_1D7948",
+   "func_43F768"
   ]
  },
  {
@@ -153099,31 +153099,6 @@
   ]
  },
  {
-  "file": "FormatTimeMSH__5GHUtlf_0x1230e8.cpp",
-  "symbol": "FormatTimeMSH__5GHUtlf",
-  "demangled": "GHUtl::FormatTimeMSH(float)",
-  "addr": "0x1230e8",
-  "score": 60.95,
-  "kind": "",
-  "insns": 37,
-  "dispatch": 3,
-  "labels": 3,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 13,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 4,
-  "stores": 4,
-  "mult_div": 0,
-  "distinct_mem": 4,
-  "callees": [
-   "func_353F88",
-   "func_36F8A0"
-  ]
- },
- {
   "file": "ps2___unguarded_insertion_sort_aux__H3ZP9BlockStatZ9BlockStatZPFRC9BlockStatRC9BlockSta_0x431e18.cpp",
   "symbol": "ps2___unguarded_insertion_sort_aux__H3ZP9BlockStatZ9BlockStatZPFRC9BlockStatRC9BlockSta",
   "demangled": "ps2___unguarded_insertion_sort_aux__H3ZP9BlockStatZ9BlockStatZPFRC9BlockStatRC9BlockSta",
@@ -154852,31 +154827,6 @@
   ]
  },
  {
-  "file": "SetMicVolume__7SynthEEf_0x268f48.cpp",
-  "symbol": "SetMicVolume__7SynthEEf",
-  "demangled": "SynthEE::SetMicVolume(float)",
-  "addr": "0x268f48",
-  "score": 63.0,
-  "kind": "accessor",
-  "insns": 42,
-  "dispatch": 2,
-  "labels": 6,
-  "calls": 2,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 20,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 1,
-  "stores": 3,
-  "mult_div": 0,
-  "distinct_mem": 3,
-  "callees": [
-   "func_32F1E8",
-   "func_3EB608"
-  ]
- },
- {
   "file": "DeleteUnusedGems__8SongData_0x283ba8.cpp",
   "symbol": "DeleteUnusedGems__8SongData",
   "demangled": "SongData::DeleteUnusedGems()",
@@ -155944,6 +155894,31 @@
   ]
  },
  {
+  "file": "SetMicVolume__7SynthEEf_0x268f48.cpp",
+  "symbol": "SetMicVolume__7SynthEEf",
+  "demangled": "SynthEE::SetMicVolume(float)",
+  "addr": "0x268f48",
+  "score": 64.2,
+  "kind": "accessor",
+  "insns": 42,
+  "dispatch": 2,
+  "labels": 6,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 21,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 1,
+  "stores": 3,
+  "mult_div": 0,
+  "distinct_mem": 3,
+  "callees": [
+   "func_32F1E8",
+   "func_3EB608"
+  ]
+ },
+ {
   "file": "ps2___ls__H1Z7Vector2_R9BinStreamRCt3Key1ZX01_R9BinStream_0x3b6c18.cpp",
   "symbol": "ps2___ls__H1Z7Vector2_R9BinStreamRCt3Key1ZX01_R9BinStream",
   "demangled": "ps2___ls__H1Z7Vector2_R9BinStreamRCt3Key1ZX01_R9BinStream",
@@ -156253,6 +156228,31 @@
    "func_1BA520",
    "func_1BD6A8",
    "func_324860"
+  ]
+ },
+ {
+  "file": "FormatTimeMSH__5GHUtlf_0x1230e8.cpp",
+  "symbol": "FormatTimeMSH__5GHUtlf",
+  "demangled": "GHUtl::FormatTimeMSH(float)",
+  "addr": "0x1230e8",
+  "score": 64.55,
+  "kind": "",
+  "insns": 37,
+  "dispatch": 3,
+  "labels": 3,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 16,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 4,
+  "stores": 4,
+  "mult_div": 0,
+  "distinct_mem": 4,
+  "callees": [
+   "func_353F88",
+   "func_36F8A0"
   ]
  },
  {
@@ -164866,33 +164866,6 @@
   ]
  },
  {
-  "file": "DataInt__FP9DataArray_0x3014e8.cpp",
-  "symbol": "DataInt__FP9DataArray",
-  "demangled": "DataInt(DataArray *)",
-  "addr": "0x3014e8",
-  "score": 70.5,
-  "kind": "accessor",
-  "insns": 36,
-  "dispatch": 4,
-  "labels": 8,
-  "calls": 4,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 1,
-  "cop2": 0,
-  "branches": 4,
-  "loads": 6,
-  "stores": 8,
-  "mult_div": 0,
-  "distinct_mem": 7,
-  "callees": [
-   "func_2FAC90",
-   "func_304E80",
-   "func_3055B8",
-   "func_35C658"
-  ]
- },
- {
   "file": "ps2___23PracticeSectionProvider_0x11e958.cpp",
   "symbol": "ps2___23PracticeSectionProvider",
   "demangled": "PracticeSectionProvider::ps2_()",
@@ -165999,6 +165972,33 @@
   ]
  },
  {
+  "file": "DataInt__FP9DataArray_0x3014e8.cpp",
+  "symbol": "DataInt__FP9DataArray",
+  "demangled": "DataInt(DataArray *)",
+  "addr": "0x3014e8",
+  "score": 71.7,
+  "kind": "accessor",
+  "insns": 36,
+  "dispatch": 4,
+  "labels": 8,
+  "calls": 4,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 2,
+  "cop2": 0,
+  "branches": 4,
+  "loads": 6,
+  "stores": 8,
+  "mult_div": 0,
+  "distinct_mem": 7,
+  "callees": [
+   "func_2FAC90",
+   "func_304E80",
+   "func_3055B8",
+   "func_35C658"
+  ]
+ },
+ {
   "file": "CritSecEnter__Fv_0x2eb9a8.cpp",
   "symbol": "CritSecEnter__Fv",
   "demangled": "CritSecEnter(void)",
@@ -166486,34 +166486,6 @@
   "callees": [
    "func_29E780",
    "func_3FE5E8"
-  ]
- },
- {
-  "file": "GetScoreForStars__C7Scoringi10Difficultyi_0x120030.cpp",
-  "symbol": "GetScoreForStars__C7Scoringi10Difficultyi",
-  "demangled": "Scoring::GetScoreForStars(int, Difficulty, int)",
-  "addr": "0x120030",
-  "score": 72.1,
-  "kind": "accessor",
-  "insns": 46,
-  "dispatch": 5,
-  "labels": 6,
-  "calls": 5,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 4,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 7,
-  "stores": 5,
-  "mult_div": 0,
-  "distinct_mem": 7,
-  "callees": [
-   "func_2FAC90",
-   "func_2FB6D8",
-   "func_2FB9B8",
-   "func_3054D0",
-   "func_326F00"
   ]
  },
  {
@@ -167675,6 +167647,34 @@
    "func_380000",
    "func_380460",
    "func_380750"
+  ]
+ },
+ {
+  "file": "GetScoreForStars__C7Scoringi10Difficultyi_0x120030.cpp",
+  "symbol": "GetScoreForStars__C7Scoringi10Difficultyi",
+  "demangled": "Scoring::GetScoreForStars(int, Difficulty, int)",
+  "addr": "0x120030",
+  "score": 73.3,
+  "kind": "accessor",
+  "insns": 46,
+  "dispatch": 5,
+  "labels": 6,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 5,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 7,
+  "stores": 5,
+  "mult_div": 0,
+  "distinct_mem": 7,
+  "callees": [
+   "func_2FAC90",
+   "func_2FB6D8",
+   "func_2FB9B8",
+   "func_3054D0",
+   "func_326F00"
   ]
  },
  {
@@ -173767,28 +173767,6 @@
   ]
  },
  {
-  "file": "InSoloNow__11BeatMatcher_0x273440.cpp",
-  "symbol": "InSoloNow__11BeatMatcher",
-  "demangled": "BeatMatcher::InSoloNow()",
-  "addr": "0x273440",
-  "score": 79.15,
-  "kind": "",
-  "insns": 15,
-  "dispatch": 13,
-  "labels": 13,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 2,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 5,
-  "stores": 1,
-  "mult_div": 0,
-  "distinct_mem": 5,
-  "callees": []
- },
- {
   "file": "Miss__6NowBarfi_0x168120.cpp",
   "symbol": "Miss__6NowBarfi",
   "demangled": "NowBar::Miss(float, int)",
@@ -174641,6 +174619,28 @@
    "func_11BC78",
    "func_30F790"
   ]
+ },
+ {
+  "file": "InSoloNow__11BeatMatcher_0x273440.cpp",
+  "symbol": "InSoloNow__11BeatMatcher",
+  "demangled": "BeatMatcher::InSoloNow()",
+  "addr": "0x273440",
+  "score": 80.35,
+  "kind": "",
+  "insns": 15,
+  "dispatch": 13,
+  "labels": 13,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 3,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 5,
+  "stores": 1,
+  "mult_div": 0,
+  "distinct_mem": 5,
+  "callees": []
  },
  {
   "file": "Save__15WorldReflectionR9BinStream_0x2d0408.cpp",
@@ -180756,32 +180756,6 @@
   ]
  },
  {
-  "file": "SetSlipSpeed__8StreamEEif_0x26cd28.cpp",
-  "symbol": "SetSlipSpeed__8StreamEEif",
-  "demangled": "StreamEE::SetSlipSpeed(int, float)",
-  "addr": "0x26cd28",
-  "score": 86.55,
-  "kind": "accessor",
-  "insns": 59,
-  "dispatch": 3,
-  "labels": 6,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 13,
-  "cop2": 0,
-  "branches": 3,
-  "loads": 11,
-  "stores": 7,
-  "mult_div": 0,
-  "distinct_mem": 13,
-  "callees": [
-   "func_2EBDA8",
-   "func_3680E8",
-   "func_3ED368"
-  ]
- },
- {
   "file": "SetPart__10ShotTargetP16RndTransformable_0x2a35b8.cpp",
   "symbol": "SetPart__10ShotTargetP16RndTransformable",
   "demangled": "ShotTarget::SetPart(RndTransformable *)",
@@ -181653,6 +181627,32 @@
    "func_29EB78",
    "func_3FDB48",
    "func_3FDB50"
+  ]
+ },
+ {
+  "file": "SetSlipSpeed__8StreamEEif_0x26cd28.cpp",
+  "symbol": "SetSlipSpeed__8StreamEEif",
+  "demangled": "StreamEE::SetSlipSpeed(int, float)",
+  "addr": "0x26cd28",
+  "score": 87.75,
+  "kind": "accessor",
+  "insns": 59,
+  "dispatch": 3,
+  "labels": 6,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 14,
+  "cop2": 0,
+  "branches": 3,
+  "loads": 11,
+  "stores": 7,
+  "mult_div": 0,
+  "distinct_mem": 13,
+  "callees": [
+   "func_2EBDA8",
+   "func_3680E8",
+   "func_3ED368"
   ]
  },
  {
@@ -187391,31 +187391,6 @@
   ]
  },
  {
-  "file": "DataPackColor__FP9DataArray_0x3001c0.cpp",
-  "symbol": "DataPackColor__FP9DataArray",
-  "demangled": "DataPackColor(DataArray *)",
-  "addr": "0x3001c0",
-  "score": 94.9,
-  "kind": "accessor",
-  "insns": 56,
-  "dispatch": 6,
-  "labels": 6,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 13,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 5,
-  "stores": 7,
-  "mult_div": 0,
-  "distinct_mem": 7,
-  "callees": [
-   "func_2FAC90",
-   "func_3054D0"
-  ]
- },
- {
   "file": "ps2____10BandPlayer_0x124668.cpp",
   "symbol": "ps2____10BandPlayer",
   "demangled": "BandPlayer::ps2__()",
@@ -189758,6 +189733,31 @@
   ]
  },
  {
+  "file": "DataPackColor__FP9DataArray_0x3001c0.cpp",
+  "symbol": "DataPackColor__FP9DataArray",
+  "demangled": "DataPackColor(DataArray *)",
+  "addr": "0x3001c0",
+  "score": 98.5,
+  "kind": "accessor",
+  "insns": 56,
+  "dispatch": 6,
+  "labels": 6,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 16,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 5,
+  "stores": 7,
+  "mult_div": 0,
+  "distinct_mem": 7,
+  "callees": [
+   "func_2FAC90",
+   "func_3054D0"
+  ]
+ },
+ {
   "file": "ps2___ls__H1ZQ23Hmx4Quat_R9BinStreamRCt3Key1ZX01_R9BinStream_0x3c7378.cpp",
   "symbol": "ps2___ls__H1ZQ23Hmx4Quat_R9BinStreamRCt3Key1ZX01_R9BinStream",
   "demangled": "ps2___ls__H1ZQ23Hmx4Quat_R9BinStreamRCt3Key1ZX01_R9BinStream",
@@ -190027,33 +190027,6 @@
   "callees": []
  },
  {
-  "file": "UpdateVolumePan__8StreamEEi_0x26c3c8.cpp",
-  "symbol": "UpdateVolumePan__8StreamEEi",
-  "demangled": "StreamEE::UpdateVolumePan(int)",
-  "addr": "0x26c3c8",
-  "score": 99.0,
-  "kind": "",
-  "insns": 56,
-  "dispatch": 4,
-  "labels": 6,
-  "calls": 4,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 12,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 10,
-  "stores": 11,
-  "mult_div": 0,
-  "distinct_mem": 15,
-  "callees": [
-   "func_2586F8",
-   "func_270590",
-   "func_32F1E8",
-   "func_3ECBC0"
-  ]
- },
- {
   "file": "_vfwrite_0x35fb38.cpp",
   "symbol": "_vfwrite",
   "demangled": "_vfwrite",
@@ -190278,33 +190251,6 @@
   "distinct_mem": 6,
   "callees": [
    "func_31C8A8"
-  ]
- },
- {
-  "file": "UpdateSpeed__8StreamEE_0x26c2d8.cpp",
-  "symbol": "UpdateSpeed__8StreamEE",
-  "demangled": "StreamEE::UpdateSpeed()",
-  "addr": "0x26c2d8",
-  "score": 99.3,
-  "kind": "",
-  "insns": 60,
-  "dispatch": 4,
-  "labels": 6,
-  "calls": 4,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 20,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 6,
-  "stores": 6,
-  "mult_div": 0,
-  "distinct_mem": 8,
-  "callees": [
-   "func_266F50",
-   "func_26DD98",
-   "func_327538",
-   "func_3ECBA0"
   ]
  },
  {
@@ -190801,6 +190747,33 @@
   "callees": []
  },
  {
+  "file": "UpdateVolumePan__8StreamEEi_0x26c3c8.cpp",
+  "symbol": "UpdateVolumePan__8StreamEEi",
+  "demangled": "StreamEE::UpdateVolumePan(int)",
+  "addr": "0x26c3c8",
+  "score": 100.2,
+  "kind": "",
+  "insns": 56,
+  "dispatch": 4,
+  "labels": 6,
+  "calls": 4,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 13,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 10,
+  "stores": 11,
+  "mult_div": 0,
+  "distinct_mem": 15,
+  "callees": [
+   "func_2586F8",
+   "func_270590",
+   "func_32F1E8",
+   "func_3ECBC0"
+  ]
+ },
+ {
   "file": "ps2____t9ObjVector1ZQ213CharBlendBone9BoneEntry_0x389b18.cpp",
   "symbol": "ps2____t9ObjVector1ZQ213CharBlendBone9BoneEntry",
   "demangled": "ps2____t9ObjVector1ZQ213CharBlendBone9BoneEntry",
@@ -190950,6 +190923,33 @@
   "distinct_mem": 8,
   "callees": [
    "func_32E858"
+  ]
+ },
+ {
+  "file": "UpdateSpeed__8StreamEE_0x26c2d8.cpp",
+  "symbol": "UpdateSpeed__8StreamEE",
+  "demangled": "StreamEE::UpdateSpeed()",
+  "addr": "0x26c2d8",
+  "score": 100.5,
+  "kind": "",
+  "insns": 60,
+  "dispatch": 4,
+  "labels": 6,
+  "calls": 4,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 21,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 6,
+  "stores": 6,
+  "mult_div": 0,
+  "distinct_mem": 8,
+  "callees": [
+   "func_266F50",
+   "func_26DD98",
+   "func_327538",
+   "func_3ECBA0"
   ]
  },
  {
@@ -191685,33 +191685,6 @@
   ]
  },
  {
-  "file": "SetFXFeedback__7SynthEEif_0x268c18.cpp",
-  "symbol": "SetFXFeedback__7SynthEEif",
-  "demangled": "SynthEE::SetFXFeedback(int, float)",
-  "addr": "0x268c18",
-  "score": 102.5,
-  "kind": "accessor",
-  "insns": 68,
-  "dispatch": 4,
-  "labels": 8,
-  "calls": 4,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 23,
-  "cop2": 0,
-  "branches": 3,
-  "loads": 5,
-  "stores": 5,
-  "mult_div": 1,
-  "distinct_mem": 6,
-  "callees": [
-   "func_2EBDA8",
-   "func_32F1E8",
-   "func_3680E8",
-   "func_3EB5E8"
-  ]
- },
- {
   "file": "OnSetTransConstraint__16RndTransformablePC9DataArray_0x20d628.cpp",
   "symbol": "OnSetTransConstraint__16RndTransformablePC9DataArray",
   "demangled": "RndTransformable::OnSetTransConstraint(DataArray * const)",
@@ -192042,30 +192015,6 @@
   ]
  },
  {
-  "file": "ps2___ls__12Distributionf_0x1576b0.cpp",
-  "symbol": "ps2___ls__12Distributionf",
-  "demangled": "Distribution::ps2___ls(float)",
-  "addr": "0x1576b0",
-  "score": 103.05,
-  "kind": "",
-  "insns": 71,
-  "dispatch": 1,
-  "labels": 7,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 22,
-  "cop2": 0,
-  "branches": 6,
-  "loads": 17,
-  "stores": 13,
-  "mult_div": 0,
-  "distinct_mem": 13,
-  "callees": [
-   "func_374B88"
-  ]
- },
- {
   "file": "GetBoneWeight__CQ36OC3Ent4Face6FxAnimUi_0x292c18.cpp",
   "symbol": "GetBoneWeight__CQ36OC3Ent4Face6FxAnimUi",
   "demangled": "OC3Ent::Face::FxAnim::GetBoneWeight(int  unsigned)",
@@ -192217,6 +192166,33 @@
    "func_38CDE8",
    "func_38CF40",
    "func_38CFD0"
+  ]
+ },
+ {
+  "file": "SetFXFeedback__7SynthEEif_0x268c18.cpp",
+  "symbol": "SetFXFeedback__7SynthEEif",
+  "demangled": "SynthEE::SetFXFeedback(int, float)",
+  "addr": "0x268c18",
+  "score": 103.7,
+  "kind": "accessor",
+  "insns": 68,
+  "dispatch": 4,
+  "labels": 8,
+  "calls": 4,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 24,
+  "cop2": 0,
+  "branches": 3,
+  "loads": 5,
+  "stores": 5,
+  "mult_div": 1,
+  "distinct_mem": 6,
+  "callees": [
+   "func_2EBDA8",
+   "func_32F1E8",
+   "func_3680E8",
+   "func_3EB5E8"
   ]
  },
  {
@@ -192485,6 +192461,30 @@
   "distinct_mem": 5,
   "callees": [
    "func_340CF8"
+  ]
+ },
+ {
+  "file": "ps2___ls__12Distributionf_0x1576b0.cpp",
+  "symbol": "ps2___ls__12Distributionf",
+  "demangled": "Distribution::ps2___ls(float)",
+  "addr": "0x1576b0",
+  "score": 104.25,
+  "kind": "",
+  "insns": 71,
+  "dispatch": 1,
+  "labels": 7,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 23,
+  "cop2": 0,
+  "branches": 6,
+  "loads": 17,
+  "stores": 13,
+  "mult_div": 0,
+  "distinct_mem": 13,
+  "callees": [
+   "func_374B88"
   ]
  },
  {
@@ -192841,33 +192841,6 @@
    "func_321688",
    "func_321720",
    "func_3B8D98"
-  ]
- },
- {
-  "file": "SetFXVolume__7SynthEEif_0x2688a0.cpp",
-  "symbol": "SetFXVolume__7SynthEEif",
-  "demangled": "SynthEE::SetFXVolume(int, float)",
-  "addr": "0x2688a0",
-  "score": 104.8,
-  "kind": "accessor",
-  "insns": 70,
-  "dispatch": 4,
-  "labels": 8,
-  "calls": 4,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 23,
-  "cop2": 0,
-  "branches": 3,
-  "loads": 5,
-  "stores": 6,
-  "mult_div": 1,
-  "distinct_mem": 7,
-  "callees": [
-   "func_2EBDA8",
-   "func_32F1E8",
-   "func_3680E8",
-   "func_3EB5E8"
   ]
  },
  {
@@ -193563,27 +193536,28 @@
   ]
  },
  {
-  "file": "SetFXDelay__7SynthEEif_0x268a58.cpp",
-  "symbol": "SetFXDelay__7SynthEEif",
-  "demangled": "SynthEE::SetFXDelay(int, float)",
-  "addr": "0x268a58",
+  "file": "SetFXVolume__7SynthEEif_0x2688a0.cpp",
+  "symbol": "SetFXVolume__7SynthEEif",
+  "demangled": "SynthEE::SetFXVolume(int, float)",
+  "addr": "0x2688a0",
   "score": 106.0,
   "kind": "accessor",
-  "insns": 76,
-  "dispatch": 5,
+  "insns": 70,
+  "dispatch": 4,
   "labels": 8,
-  "calls": 5,
+  "calls": 4,
   "tail_calls": 0,
   "indirect": 0,
-  "cop1": 19,
+  "cop1": 24,
   "cop2": 0,
-  "branches": 2,
-  "loads": 6,
-  "stores": 5,
+  "branches": 3,
+  "loads": 5,
+  "stores": 6,
   "mult_div": 1,
-  "distinct_mem": 6,
+  "distinct_mem": 7,
   "callees": [
    "func_2EBDA8",
+   "func_32F1E8",
    "func_3680E8",
    "func_3EB5E8"
   ]
@@ -194003,6 +193977,32 @@
   "callees": [
    "func_319258",
    "func_3C45A0"
+  ]
+ },
+ {
+  "file": "SetFXDelay__7SynthEEif_0x268a58.cpp",
+  "symbol": "SetFXDelay__7SynthEEif",
+  "demangled": "SynthEE::SetFXDelay(int, float)",
+  "addr": "0x268a58",
+  "score": 107.2,
+  "kind": "accessor",
+  "insns": 76,
+  "dispatch": 5,
+  "labels": 8,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 20,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 6,
+  "stores": 5,
+  "mult_div": 1,
+  "distinct_mem": 6,
+  "callees": [
+   "func_2EBDA8",
+   "func_3680E8",
+   "func_3EB5E8"
   ]
  },
  {
@@ -195654,28 +195654,6 @@
    "func_3680E8",
    "func_3F73F0"
   ]
- },
- {
-  "file": "MakeRGBAQ__FRCQ23Hmx5ColorfP5PsMat_0x1bdd08.cpp",
-  "symbol": "MakeRGBAQ__FRCQ23Hmx5ColorfP5PsMat",
-  "demangled": "MakeRGBAQ(Hmx::Color & const, float, PsMat *)",
-  "addr": "0x1bdd08",
-  "score": 110.2,
-  "kind": "",
-  "insns": 94,
-  "dispatch": 0,
-  "labels": 2,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 47,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 20,
-  "stores": 0,
-  "mult_div": 0,
-  "distinct_mem": 9,
-  "callees": []
  },
  {
   "file": "Poll__9MetaPanel_0x13a8b8.cpp",
@@ -198388,30 +198366,6 @@
   ]
  },
  {
-  "file": "SetFloatPan__9VolumePanf_0x270590.cpp",
-  "symbol": "SetFloatPan__9VolumePanf",
-  "demangled": "VolumePan::SetFloatPan(float)",
-  "addr": "0x270590",
-  "score": 113.9,
-  "kind": "accessor",
-  "insns": 92,
-  "dispatch": 1,
-  "labels": 8,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 48,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 7,
-  "stores": 6,
-  "mult_div": 0,
-  "distinct_mem": 6,
-  "callees": [
-   "func_353F88"
-  ]
- },
- {
   "file": "Save__8RndGroupR9BinStream_0x1e2048.cpp",
   "symbol": "Save__8RndGroupR9BinStream",
   "demangled": "RndGroup::Save(BinStream &)",
@@ -198914,56 +198868,6 @@
    "func_2FC3B0",
    "func_304E80",
    "func_3058D0"
-  ]
- },
- {
-  "file": "CalcHeight__11ClipDistMapf_0x1a3c78.cpp",
-  "symbol": "CalcHeight__11ClipDistMapf",
-  "demangled": "ClipDistMap::CalcHeight(float)",
-  "addr": "0x1a3c78",
-  "score": 114.4,
-  "kind": "",
-  "insns": 62,
-  "dispatch": 2,
-  "labels": 5,
-  "calls": 2,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 39,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 16,
-  "stores": 11,
-  "mult_div": 0,
-  "distinct_mem": 14,
-  "callees": [
-   "func_353710",
-   "func_353F88"
-  ]
- },
- {
-  "file": "CalcWidth__11ClipDistMapf_0x1a3b80.cpp",
-  "symbol": "CalcWidth__11ClipDistMapf",
-  "demangled": "ClipDistMap::CalcWidth(float)",
-  "addr": "0x1a3b80",
-  "score": 114.4,
-  "kind": "",
-  "insns": 62,
-  "dispatch": 2,
-  "labels": 5,
-  "calls": 2,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 39,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 16,
-  "stores": 11,
-  "mult_div": 0,
-  "distinct_mem": 14,
-  "callees": [
-   "func_353710",
-   "func_353F88"
   ]
  },
  {
@@ -199486,6 +199390,30 @@
   ]
  },
  {
+  "file": "SetFloatPan__9VolumePanf_0x270590.cpp",
+  "symbol": "SetFloatPan__9VolumePanf",
+  "demangled": "VolumePan::SetFloatPan(float)",
+  "addr": "0x270590",
+  "score": 115.1,
+  "kind": "accessor",
+  "insns": 92,
+  "dispatch": 1,
+  "labels": 8,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 49,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 7,
+  "stores": 6,
+  "mult_div": 0,
+  "distinct_mem": 6,
+  "callees": [
+   "func_353F88"
+  ]
+ },
+ {
   "file": "_copyrightExtension_0x3432b8.cpp",
   "symbol": "_copyrightExtension",
   "demangled": "_copyrightExtension",
@@ -199560,30 +199488,6 @@
   "distinct_mem": 15,
   "callees": [
    "func_3194A8"
-  ]
- },
- {
-  "file": "Sine__Ff_0x330518.cpp",
-  "symbol": "Sine__Ff",
-  "demangled": "Sine(float)",
-  "addr": "0x330518",
-  "score": 115.2,
-  "kind": "",
-  "insns": 58,
-  "dispatch": 3,
-  "labels": 11,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 23,
-  "cop2": 0,
-  "branches": 9,
-  "loads": 6,
-  "stores": 1,
-  "mult_div": 0,
-  "distinct_mem": 3,
-  "callees": [
-   "func_3304D0"
   ]
  },
  {
@@ -199774,6 +199678,56 @@
    "func_304980",
    "func_373A10",
    "func_429A68"
+  ]
+ },
+ {
+  "file": "CalcHeight__11ClipDistMapf_0x1a3c78.cpp",
+  "symbol": "CalcHeight__11ClipDistMapf",
+  "demangled": "ClipDistMap::CalcHeight(float)",
+  "addr": "0x1a3c78",
+  "score": 115.6,
+  "kind": "",
+  "insns": 62,
+  "dispatch": 2,
+  "labels": 5,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 40,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 16,
+  "stores": 11,
+  "mult_div": 0,
+  "distinct_mem": 14,
+  "callees": [
+   "func_353710",
+   "func_353F88"
+  ]
+ },
+ {
+  "file": "CalcWidth__11ClipDistMapf_0x1a3b80.cpp",
+  "symbol": "CalcWidth__11ClipDistMapf",
+  "demangled": "ClipDistMap::CalcWidth(float)",
+  "addr": "0x1a3b80",
+  "score": 115.6,
+  "kind": "",
+  "insns": 62,
+  "dispatch": 2,
+  "labels": 5,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 40,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 16,
+  "stores": 11,
+  "mult_div": 0,
+  "distinct_mem": 14,
+  "callees": [
+   "func_353710",
+   "func_353F88"
   ]
  },
  {
@@ -200443,28 +200397,27 @@
   ]
  },
  {
-  "file": "FracToSample__C16CharBonesSamplesPf_0x1b7a28.cpp",
-  "symbol": "FracToSample__C16CharBonesSamplesPf",
-  "demangled": "CharBonesSamples::FracToSample(float *)",
-  "addr": "0x1b7a28",
-  "score": 116.45,
+  "file": "Sine__Ff_0x330518.cpp",
+  "symbol": "Sine__Ff",
+  "demangled": "Sine(float)",
+  "addr": "0x330518",
+  "score": 116.4,
   "kind": "",
-  "insns": 83,
-  "dispatch": 2,
-  "labels": 8,
-  "calls": 2,
+  "insns": 58,
+  "dispatch": 3,
+  "labels": 11,
+  "calls": 3,
   "tail_calls": 0,
   "indirect": 0,
-  "cop1": 25,
+  "cop1": 24,
   "cop2": 0,
-  "branches": 7,
-  "loads": 11,
-  "stores": 11,
+  "branches": 9,
+  "loads": 6,
+  "stores": 1,
   "mult_div": 0,
-  "distinct_mem": 9,
+  "distinct_mem": 3,
   "callees": [
-   "func_2EBDA8",
-   "func_3680E8"
+   "func_3304D0"
   ]
  },
  {
@@ -201388,6 +201341,31 @@
    "func_305A90",
    "func_305D78",
    "func_323AB8"
+  ]
+ },
+ {
+  "file": "FracToSample__C16CharBonesSamplesPf_0x1b7a28.cpp",
+  "symbol": "FracToSample__C16CharBonesSamplesPf",
+  "demangled": "CharBonesSamples::FracToSample(float *)",
+  "addr": "0x1b7a28",
+  "score": 118.85,
+  "kind": "",
+  "insns": 83,
+  "dispatch": 2,
+  "labels": 8,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 27,
+  "cop2": 0,
+  "branches": 7,
+  "loads": 11,
+  "stores": 11,
+  "mult_div": 0,
+  "distinct_mem": 9,
+  "callees": [
+   "func_2EBDA8",
+   "func_3680E8"
   ]
  },
  {
@@ -205612,6 +205590,28 @@
    "func_304FB0",
    "func_326F00"
   ]
+ },
+ {
+  "file": "MakeRGBAQ__FRCQ23Hmx5ColorfP5PsMat_0x1bdd08.cpp",
+  "symbol": "MakeRGBAQ__FRCQ23Hmx5ColorfP5PsMat",
+  "demangled": "MakeRGBAQ(Hmx::Color & const, float, PsMat *)",
+  "addr": "0x1bdd08",
+  "score": 124.6,
+  "kind": "",
+  "insns": 94,
+  "dispatch": 0,
+  "labels": 2,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 59,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 20,
+  "stores": 0,
+  "mult_div": 0,
+  "distinct_mem": 9,
+  "callees": []
  },
  {
   "file": "topThread_0x34bd70.cpp",
@@ -217309,30 +217309,6 @@
   ]
  },
  {
-  "file": "SetCharInfo__7RndFontPQ27RndFont8CharInfoR9RndBitmapRC7Vector2_0x22e0b0.cpp",
-  "symbol": "SetCharInfo__7RndFontPQ27RndFont8CharInfoR9RndBitmapRC7Vector2",
-  "demangled": "RndFont::SetCharInfo(RndFont::CharInfo *, RndBitmap &, Vector2 & const)",
-  "addr": "0x22e0b0",
-  "score": 148.1,
-  "kind": "accessor",
-  "insns": 106,
-  "dispatch": 2,
-  "labels": 6,
-  "calls": 2,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 47,
-  "cop2": 0,
-  "branches": 3,
-  "loads": 22,
-  "stores": 17,
-  "mult_div": 0,
-  "distinct_mem": 21,
-  "callees": [
-   "func_22DED8"
-  ]
- },
- {
   "file": "Load__14RndRenderedTexR9BinStream_0x23e660.cpp",
   "symbol": "Load__14RndRenderedTexR9BinStream",
   "demangled": "RndRenderedTex::Load(BinStream &)",
@@ -218685,34 +218661,6 @@
   ]
  },
  {
-  "file": "PropSync__FRQ23Hmx5ColorR8DataNodeP9DataArrayi6PropOp_0x312308.cpp",
-  "symbol": "PropSync__FRQ23Hmx5ColorR8DataNodeP9DataArrayi6PropOp",
-  "demangled": "PropSync(Hmx::Color &, DataNode &, DataArray *, int, PropOp)",
-  "addr": "0x312308",
-  "score": 151.95,
-  "kind": "",
-  "insns": 99,
-  "dispatch": 5,
-  "labels": 10,
-  "calls": 5,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 23,
-  "cop2": 0,
-  "branches": 7,
-  "loads": 14,
-  "stores": 10,
-  "mult_div": 0,
-  "distinct_mem": 12,
-  "callees": [
-   "func_2EBDA8",
-   "func_2FC170",
-   "func_304FB0",
-   "func_305D78",
-   "func_3680E8"
-  ]
- },
- {
   "file": "add_separators_0x360d58.cpp",
   "symbol": "add_separators",
   "demangled": "add_separators",
@@ -218953,6 +218901,30 @@
   "distinct_mem": 4,
   "callees": [
    "func_319258"
+  ]
+ },
+ {
+  "file": "SetCharInfo__7RndFontPQ27RndFont8CharInfoR9RndBitmapRC7Vector2_0x22e0b0.cpp",
+  "symbol": "SetCharInfo__7RndFontPQ27RndFont8CharInfoR9RndBitmapRC7Vector2",
+  "demangled": "RndFont::SetCharInfo(RndFont::CharInfo *, RndBitmap &, Vector2 & const)",
+  "addr": "0x22e0b0",
+  "score": 152.9,
+  "kind": "accessor",
+  "insns": 106,
+  "dispatch": 2,
+  "labels": 6,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 51,
+  "cop2": 0,
+  "branches": 3,
+  "loads": 22,
+  "stores": 17,
+  "mult_div": 0,
+  "distinct_mem": 21,
+  "callees": [
+   "func_22DED8"
   ]
  },
  {
@@ -219226,32 +219198,6 @@
    "func_376E80",
    "func_37ED88",
    "func_3B3358"
-  ]
- },
- {
-  "file": "FillPresetData__9SpotlightRQ211LightPreset14SpotlightEntryi_0x2ba2a0.cpp",
-  "symbol": "FillPresetData__9SpotlightRQ211LightPreset14SpotlightEntryi",
-  "demangled": "Spotlight::FillPresetData(LightPreset::SpotlightEntry &, int)",
-  "addr": "0x2ba2a0",
-  "score": 153.35,
-  "kind": "",
-  "insns": 91,
-  "dispatch": 3,
-  "labels": 9,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 13,
-  "cop2": 0,
-  "branches": 10,
-  "loads": 23,
-  "stores": 17,
-  "mult_div": 0,
-  "distinct_mem": 29,
-  "callees": [
-   "func_310828",
-   "func_3108D0",
-   "func_32E140"
   ]
  },
  {
@@ -220156,6 +220102,34 @@
    "func_104188",
    "func_104328",
    "func_366838"
+  ]
+ },
+ {
+  "file": "PropSync__FRQ23Hmx5ColorR8DataNodeP9DataArrayi6PropOp_0x312308.cpp",
+  "symbol": "PropSync__FRQ23Hmx5ColorR8DataNodeP9DataArrayi6PropOp",
+  "demangled": "PropSync(Hmx::Color &, DataNode &, DataArray *, int, PropOp)",
+  "addr": "0x312308",
+  "score": 155.55,
+  "kind": "",
+  "insns": 99,
+  "dispatch": 5,
+  "labels": 10,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 26,
+  "cop2": 0,
+  "branches": 7,
+  "loads": 14,
+  "stores": 10,
+  "mult_div": 0,
+  "distinct_mem": 12,
+  "callees": [
+   "func_2EBDA8",
+   "func_2FC170",
+   "func_304FB0",
+   "func_305D78",
+   "func_3680E8"
   ]
  },
  {
@@ -221422,35 +221396,6 @@
   ]
  },
  {
-  "file": "ps2___11ClipDistMapP8CharClipT1fffPC9DataArray_0x1a1758.cpp",
-  "symbol": "ps2___11ClipDistMapP8CharClipT1fffPC9DataArray",
-  "demangled": "ClipDistMap::ps2_(CharClip *, T?, float, float, float, DataArray * const)",
-  "addr": "0x1a1758",
-  "score": 157.75,
-  "kind": "",
-  "insns": 85,
-  "dispatch": 6,
-  "labels": 8,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 27,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 9,
-  "stores": 22,
-  "mult_div": 1,
-  "distinct_mem": 21,
-  "callees": [
-   "func_1A3B80",
-   "func_1A3C78",
-   "func_1A4170",
-   "func_1A4188",
-   "func_1BAC88",
-   "func_3A0DF0"
-  ]
- },
- {
   "file": "ResetFill__24DrumFillTrackWatcherImpl_0x28abf8.cpp",
   "symbol": "ResetFill__24DrumFillTrackWatcherImpl",
   "demangled": "DrumFillTrackWatcherImpl::ResetFill()",
@@ -221626,6 +221571,32 @@
   "distinct_mem": 21,
   "callees": [
    "func_1DC4E8"
+  ]
+ },
+ {
+  "file": "FillPresetData__9SpotlightRQ211LightPreset14SpotlightEntryi_0x2ba2a0.cpp",
+  "symbol": "FillPresetData__9SpotlightRQ211LightPreset14SpotlightEntryi",
+  "demangled": "Spotlight::FillPresetData(LightPreset::SpotlightEntry &, int)",
+  "addr": "0x2ba2a0",
+  "score": 158.15,
+  "kind": "",
+  "insns": 91,
+  "dispatch": 3,
+  "labels": 9,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 17,
+  "cop2": 0,
+  "branches": 10,
+  "loads": 23,
+  "stores": 17,
+  "mult_div": 0,
+  "distinct_mem": 29,
+  "callees": [
+   "func_310828",
+   "func_3108D0",
+   "func_32E140"
   ]
  },
  {
@@ -225429,29 +225400,32 @@
   ]
  },
  {
-  "file": "FindBestNode__11ClipDistMapfffRQ211ClipDistMap4Node_0x1a3d70.cpp",
-  "symbol": "FindBestNode__11ClipDistMapfffRQ211ClipDistMap4Node",
-  "demangled": "ClipDistMap::FindBestNode(float, float, float, ClipDistMap::Node &)",
-  "addr": "0x1a3d70",
+  "file": "ps2___11ClipDistMapP8CharClipT1fffPC9DataArray_0x1a1758.cpp",
+  "symbol": "ps2___11ClipDistMapP8CharClipT1fffPC9DataArray",
+  "demangled": "ClipDistMap::ps2_(CharClip *, T?, float, float, float, DataArray * const)",
+  "addr": "0x1a1758",
   "score": 161.35,
-  "kind": "accessor",
-  "insns": 101,
+  "kind": "",
+  "insns": 85,
   "dispatch": 6,
-  "labels": 13,
-  "calls": 4,
+  "labels": 8,
+  "calls": 6,
   "tail_calls": 0,
   "indirect": 0,
-  "cop1": 24,
+  "cop1": 30,
   "cop2": 0,
-  "branches": 7,
-  "loads": 20,
-  "stores": 18,
+  "branches": 2,
+  "loads": 9,
+  "stores": 22,
   "mult_div": 1,
-  "distinct_mem": 22,
+  "distinct_mem": 21,
   "callees": [
-   "func_1A4110",
-   "func_1A4140",
-   "func_1A4188"
+   "func_1A3B80",
+   "func_1A3C78",
+   "func_1A4170",
+   "func_1A4188",
+   "func_1BAC88",
+   "func_3A0DF0"
   ]
  },
  {
@@ -226572,6 +226546,32 @@
   ]
  },
  {
+  "file": "FindBestNode__11ClipDistMapfffRQ211ClipDistMap4Node_0x1a3d70.cpp",
+  "symbol": "FindBestNode__11ClipDistMapfffRQ211ClipDistMap4Node",
+  "demangled": "ClipDistMap::FindBestNode(float, float, float, ClipDistMap::Node &)",
+  "addr": "0x1a3d70",
+  "score": 163.75,
+  "kind": "accessor",
+  "insns": 101,
+  "dispatch": 6,
+  "labels": 13,
+  "calls": 4,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 26,
+  "cop2": 0,
+  "branches": 7,
+  "loads": 20,
+  "stores": 18,
+  "mult_div": 1,
+  "distinct_mem": 22,
+  "callees": [
+   "func_1A4110",
+   "func_1A4140",
+   "func_1A4188"
+  ]
+ },
+ {
   "file": "ForwardPredict__8CharWalkR11ClipPredictfRiRf_0x19da90.cpp",
   "symbol": "ForwardPredict__8CharWalkR11ClipPredictfRiRf",
   "demangled": "CharWalk::ForwardPredict(ClipPredict &, float, int &, float &)",
@@ -227507,31 +227507,6 @@
   ]
  },
  {
-  "file": "erase__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9SpotlightZQ23_0x40c110.cpp",
-  "symbol": "erase__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9SpotlightZQ23",
-  "demangled": "erase__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9SpotlightZQ23",
-  "addr": "0x40c110",
-  "score": 166.6,
-  "kind": "opaque",
-  "insns": 116,
-  "dispatch": 6,
-  "labels": 11,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 10,
-  "cop2": 0,
-  "branches": 9,
-  "loads": 30,
-  "stores": 23,
-  "mult_div": 1,
-  "distinct_mem": 25,
-  "callees": [
-   "func_321760",
-   "func_40BD00"
-  ]
- },
- {
   "file": "PollDeps__8CharHairRQ211stlpmtx_stdt4list2ZPQ23Hmx6ObjectZQ211stlpmtx_stdt12StlNodeAllo_0x186af8.cpp",
   "symbol": "PollDeps__8CharHairRQ211stlpmtx_stdt4list2ZPQ23Hmx6ObjectZQ211stlpmtx_stdt12StlNodeAllo",
   "demangled": "CharHair::PollDeps(?)",
@@ -228311,30 +228286,6 @@
   "callees": []
  },
  {
-  "file": "GetPercentHit__C6Player_0x114b78.cpp",
-  "symbol": "GetPercentHit__C6Player",
-  "demangled": "Player::GetPercentHit()",
-  "addr": "0x114b78",
-  "score": 168.1,
-  "kind": "accessor",
-  "insns": 36,
-  "dispatch": 33,
-  "labels": 33,
-  "calls": 2,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 8,
-  "cop2": 0,
-  "branches": 0,
-  "loads": 10,
-  "stores": 3,
-  "mult_div": 0,
-  "distinct_mem": 9,
-  "callees": [
-   "func_121670"
-  ]
- },
- {
   "file": "ps2___rs__H1ZQ211LightPreset14SpotlightEntry_R9BinStreamRt9ObjVector1ZX01_R9BinStream_0x419518.cpp",
   "symbol": "ps2___rs__H1ZQ211LightPreset14SpotlightEntry_R9BinStreamRt9ObjVector1ZX01_R9BinStream",
   "demangled": "ps2___rs__H1ZQ211LightPreset14SpotlightEntry_R9BinStreamRt9ObjVector1ZX01_R9BinStream",
@@ -228731,6 +228682,30 @@
    "func_3216B0",
    "func_321760",
    "func_3F6240"
+  ]
+ },
+ {
+  "file": "GetPercentHit__C6Player_0x114b78.cpp",
+  "symbol": "GetPercentHit__C6Player",
+  "demangled": "Player::GetPercentHit()",
+  "addr": "0x114b78",
+  "score": 169.3,
+  "kind": "accessor",
+  "insns": 36,
+  "dispatch": 33,
+  "labels": 33,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 9,
+  "cop2": 0,
+  "branches": 0,
+  "loads": 10,
+  "stores": 3,
+  "mult_div": 0,
+  "distinct_mem": 9,
+  "callees": [
+   "func_121670"
   ]
  },
  {
@@ -229428,6 +229403,31 @@
    "func_304FB0",
    "func_305998",
    "func_305D78"
+  ]
+ },
+ {
+  "file": "erase__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9SpotlightZQ23_0x40c110.cpp",
+  "symbol": "erase__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9SpotlightZQ23",
+  "demangled": "erase__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9SpotlightZQ23",
+  "addr": "0x40c110",
+  "score": 170.2,
+  "kind": "opaque",
+  "insns": 116,
+  "dispatch": 6,
+  "labels": 11,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 13,
+  "cop2": 0,
+  "branches": 9,
+  "loads": 30,
+  "stores": 23,
+  "mult_div": 1,
+  "distinct_mem": 25,
+  "callees": [
+   "func_321760",
+   "func_40BD00"
   ]
  },
  {
@@ -230335,34 +230335,6 @@
   ]
  },
  {
-  "file": "Draw__13CharacterTesti_0x1962d8.cpp",
-  "symbol": "Draw__13CharacterTesti",
-  "demangled": "CharacterTest::Draw(int)",
-  "addr": "0x1962d8",
-  "score": 171.65,
-  "kind": "",
-  "insns": 91,
-  "dispatch": 7,
-  "labels": 8,
-  "calls": 7,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 29,
-  "cop2": 0,
-  "branches": 3,
-  "loads": 16,
-  "stores": 26,
-  "mult_div": 0,
-  "distinct_mem": 20,
-  "callees": [
-   "func_1A3140",
-   "func_1A4DC0",
-   "func_1A60E8",
-   "func_1A62B8",
-   "func_39C1D0"
-  ]
- },
- {
   "file": "ps2___13CharServoBonei_0x190fd8.cpp",
   "symbol": "ps2___13CharServoBonei",
   "demangled": "CharServoBone::ps2_(int)",
@@ -230803,6 +230775,34 @@
   ]
  },
  {
+  "file": "Draw__13CharacterTesti_0x1962d8.cpp",
+  "symbol": "Draw__13CharacterTesti",
+  "demangled": "CharacterTest::Draw(int)",
+  "addr": "0x1962d8",
+  "score": 172.85,
+  "kind": "",
+  "insns": 91,
+  "dispatch": 7,
+  "labels": 8,
+  "calls": 7,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 30,
+  "cop2": 0,
+  "branches": 3,
+  "loads": 16,
+  "stores": 26,
+  "mult_div": 0,
+  "distinct_mem": 20,
+  "callees": [
+   "func_1A3140",
+   "func_1A4DC0",
+   "func_1A60E8",
+   "func_1A62B8",
+   "func_39C1D0"
+  ]
+ },
+ {
   "file": "Randomize__13CharClipGroup_0x176940.cpp",
   "symbol": "Randomize__13CharClipGroup",
   "demangled": "CharClipGroup::Randomize()",
@@ -231008,31 +231008,6 @@
    "func_2FAFA8",
    "func_2FC170",
    "func_305A60"
-  ]
- },
- {
-  "file": "SetHoldTime__8HeldNotef_0x12f5d8.cpp",
-  "symbol": "SetHoldTime__8HeldNotef",
-  "demangled": "HeldNote::SetHoldTime(float)",
-  "addr": "0x12f5d8",
-  "score": 173.35,
-  "kind": "accessor",
-  "insns": 113,
-  "dispatch": 6,
-  "labels": 11,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 41,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 16,
-  "stores": 10,
-  "mult_div": 0,
-  "distinct_mem": 16,
-  "callees": [
-   "func_2EBDA8",
-   "func_3680E8"
   ]
  },
  {
@@ -231671,6 +231646,31 @@
   ]
  },
  {
+  "file": "SetHoldTime__8HeldNotef_0x12f5d8.cpp",
+  "symbol": "SetHoldTime__8HeldNotef",
+  "demangled": "HeldNote::SetHoldTime(float)",
+  "addr": "0x12f5d8",
+  "score": 174.55,
+  "kind": "accessor",
+  "insns": 113,
+  "dispatch": 6,
+  "labels": 11,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 42,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 16,
+  "stores": 10,
+  "mult_div": 0,
+  "distinct_mem": 16,
+  "callees": [
+   "func_2EBDA8",
+   "func_3680E8"
+  ]
+ },
+ {
   "file": "FinishLoad__20MultiSelectListPanel_0x13d770.cpp",
   "symbol": "FinishLoad__20MultiSelectListPanel",
   "demangled": "MultiSelectListPanel::FinishLoad()",
@@ -231907,35 +231907,6 @@
   "mult_div": 0,
   "distinct_mem": 8,
   "callees": []
- },
- {
-  "file": "SetSlipOffset__8StreamEEif_0x26ca90.cpp",
-  "symbol": "SetSlipOffset__8StreamEEif",
-  "demangled": "StreamEE::SetSlipOffset(int, float)",
-  "addr": "0x26ca90",
-  "score": 175.1,
-  "kind": "accessor",
-  "insns": 110,
-  "dispatch": 8,
-  "labels": 12,
-  "calls": 8,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 25,
-  "cop2": 0,
-  "branches": 4,
-  "loads": 17,
-  "stores": 9,
-  "mult_div": 0,
-  "distinct_mem": 16,
-  "callees": [
-   "func_26DD98",
-   "func_2EBDA8",
-   "func_325258",
-   "func_3680E8",
-   "func_36B6A8",
-   "func_3ED348"
-  ]
  },
  {
   "file": "PollDeps__10CharIKHandRQ211stlpmtx_stdt4list2ZPQ23Hmx6ObjectZQ211stlpmtx_stdt12StlNodeA_0x18a008.cpp",
@@ -232735,6 +232706,35 @@
    "func_2FBBC8",
    "func_2FF0B0",
    "func_326F00"
+  ]
+ },
+ {
+  "file": "SetSlipOffset__8StreamEEif_0x26ca90.cpp",
+  "symbol": "SetSlipOffset__8StreamEEif",
+  "demangled": "StreamEE::SetSlipOffset(int, float)",
+  "addr": "0x26ca90",
+  "score": 177.5,
+  "kind": "accessor",
+  "insns": 110,
+  "dispatch": 8,
+  "labels": 12,
+  "calls": 8,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 27,
+  "cop2": 0,
+  "branches": 4,
+  "loads": 17,
+  "stores": 9,
+  "mult_div": 0,
+  "distinct_mem": 16,
+  "callees": [
+   "func_26DD98",
+   "func_2EBDA8",
+   "func_325258",
+   "func_3680E8",
+   "func_36B6A8",
+   "func_3ED348"
   ]
  },
  {
@@ -235411,33 +235411,6 @@
   ]
  },
  {
-  "file": "CharUtlFootsteps__FR15ClipBonePredictP8CharClipRQ211stlpmtx_stdt6vector2Z9TransformZQ21_0x19c908.cpp",
-  "symbol": "CharUtlFootsteps__FR15ClipBonePredictP8CharClipRQ211stlpmtx_stdt6vector2Z9TransformZQ21",
-  "demangled": "CharUtlFootsteps(ClipBonePredict &, CharClip *, ?)",
-  "addr": "0x19c908",
-  "score": 182.95,
-  "kind": "",
-  "insns": 105,
-  "dispatch": 7,
-  "labels": 14,
-  "calls": 5,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 25,
-  "cop2": 0,
-  "branches": 7,
-  "loads": 22,
-  "stores": 15,
-  "mult_div": 0,
-  "distinct_mem": 22,
-  "callees": [
-   "func_19BEC0",
-   "func_19BFD8",
-   "func_353710",
-   "func_39CB88"
-  ]
- },
- {
   "file": "RemoveExcludedSongs__C13CampaignStateR15CampaignItemVec_0x137c98.cpp",
   "symbol": "RemoveExcludedSongs__C13CampaignStateR15CampaignItemVec",
   "demangled": "CampaignState::RemoveExcludedSongs(CampaignItemVec &)",
@@ -235908,6 +235881,33 @@
    "func_35A794",
    "func_35AC58",
    "func_3680E8"
+  ]
+ },
+ {
+  "file": "CharUtlFootsteps__FR15ClipBonePredictP8CharClipRQ211stlpmtx_stdt6vector2Z9TransformZQ21_0x19c908.cpp",
+  "symbol": "CharUtlFootsteps__FR15ClipBonePredictP8CharClipRQ211stlpmtx_stdt6vector2Z9TransformZQ21",
+  "demangled": "CharUtlFootsteps(ClipBonePredict &, CharClip *, ?)",
+  "addr": "0x19c908",
+  "score": 184.15,
+  "kind": "",
+  "insns": 105,
+  "dispatch": 7,
+  "labels": 14,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 26,
+  "cop2": 0,
+  "branches": 7,
+  "loads": 22,
+  "stores": 15,
+  "mult_div": 0,
+  "distinct_mem": 22,
+  "callees": [
+   "func_19BEC0",
+   "func_19BFD8",
+   "func_353710",
+   "func_39CB88"
   ]
  },
  {
@@ -237211,32 +237211,6 @@
   "mult_div": 0,
   "distinct_mem": 9,
   "callees": []
- },
- {
-  "file": "insert_equal_noresize__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5Color_0x40bf20.cpp",
-  "symbol": "insert_equal_noresize__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5Color",
-  "demangled": "insert_equal_noresize__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5Color",
-  "addr": "0x40bf20",
-  "score": 187.45,
-  "kind": "opaque",
-  "insns": 121,
-  "dispatch": 4,
-  "labels": 11,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 26,
-  "cop2": 0,
-  "branches": 8,
-  "loads": 30,
-  "stores": 17,
-  "mult_div": 1,
-  "distinct_mem": 29,
-  "callees": [
-   "func_321720",
-   "func_40BDD8",
-   "func_40CBB0"
-  ]
  },
  {
   "file": "FindAnimGroup__CQ36OC3Ent4Face7FxActorRCQ36OC3Ent4Face6FxName_0x291180.cpp",
@@ -238870,6 +238844,32 @@
   ]
  },
  {
+  "file": "insert_equal_noresize__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5Color_0x40bf20.cpp",
+  "symbol": "insert_equal_noresize__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5Color",
+  "demangled": "insert_equal_noresize__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5Color",
+  "addr": "0x40bf20",
+  "score": 191.05,
+  "kind": "opaque",
+  "insns": 121,
+  "dispatch": 4,
+  "labels": 11,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 29,
+  "cop2": 0,
+  "branches": 8,
+  "loads": 30,
+  "stores": 17,
+  "mult_div": 1,
+  "distinct_mem": 29,
+  "callees": [
+   "func_321720",
+   "func_40BDD8",
+   "func_40CBB0"
+  ]
+ },
+ {
   "file": "DrawFaces__6PsMesh_0x43eea0.cpp",
   "symbol": "DrawFaces__6PsMesh",
   "demangled": "PsMesh::DrawFaces()",
@@ -239457,31 +239457,6 @@
   ]
  },
  {
-  "file": "ParseMarkup__C7RndTextPCcPQ27RndText5Style_0x208b28.cpp",
-  "symbol": "ParseMarkup__C7RndTextPCcPQ27RndText5Style",
-  "demangled": "RndText::ParseMarkup(char * const, RndText::Style *)",
-  "addr": "0x208b28",
-  "score": 192.85,
-  "kind": "",
-  "insns": 123,
-  "dispatch": 5,
-  "labels": 14,
-  "calls": 4,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 27,
-  "cop2": 0,
-  "branches": 14,
-  "loads": 19,
-  "stores": 17,
-  "mult_div": 0,
-  "distinct_mem": 19,
-  "callees": [
-   "func_35AA90",
-   "func_35B740"
-  ]
- },
- {
   "file": "ConvertTo8Bpp__9RndBitmap_0x1d5528.cpp",
   "symbol": "ConvertTo8Bpp__9RndBitmap",
   "demangled": "RndBitmap::ConvertTo8Bpp()",
@@ -240050,6 +240025,31 @@
    "func_3108D0",
    "func_324860",
    "func_3680E8"
+  ]
+ },
+ {
+  "file": "ParseMarkup__C7RndTextPCcPQ27RndText5Style_0x208b28.cpp",
+  "symbol": "ParseMarkup__C7RndTextPCcPQ27RndText5Style",
+  "demangled": "RndText::ParseMarkup(char * const, RndText::Style *)",
+  "addr": "0x208b28",
+  "score": 194.05,
+  "kind": "",
+  "insns": 123,
+  "dispatch": 5,
+  "labels": 14,
+  "calls": 4,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 28,
+  "cop2": 0,
+  "branches": 14,
+  "loads": 19,
+  "stores": 17,
+  "mult_div": 0,
+  "distinct_mem": 19,
+  "callees": [
+   "func_35AA90",
+   "func_35B740"
   ]
  },
  {
@@ -241101,31 +241101,6 @@
    "func_3216B0",
    "func_369248",
    "func_3692B8"
-  ]
- },
- {
-  "file": "LongestPathRecurse__8WaypointP8Waypointf_0x1aff00.cpp",
-  "symbol": "LongestPathRecurse__8WaypointP8Waypointf",
-  "demangled": "Waypoint::LongestPathRecurse(Waypoint *, float)",
-  "addr": "0x1aff00",
-  "score": 198.1,
-  "kind": "",
-  "insns": 98,
-  "dispatch": 4,
-  "labels": 8,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 10,
-  "cop2": 7,
-  "branches": 6,
-  "loads": 28,
-  "stores": 13,
-  "mult_div": 2,
-  "distinct_mem": 23,
-  "callees": [
-   "func_1AFF00",
-   "func_43F768"
   ]
  },
  {
@@ -244632,6 +244607,31 @@
   "callees": []
  },
  {
+  "file": "LongestPathRecurse__8WaypointP8Waypointf_0x1aff00.cpp",
+  "symbol": "LongestPathRecurse__8WaypointP8Waypointf",
+  "demangled": "Waypoint::LongestPathRecurse(Waypoint *, float)",
+  "addr": "0x1aff00",
+  "score": 207.1,
+  "kind": "",
+  "insns": 98,
+  "dispatch": 4,
+  "labels": 8,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 10,
+  "cop2": 8,
+  "branches": 6,
+  "loads": 28,
+  "stores": 13,
+  "mult_div": 2,
+  "distinct_mem": 23,
+  "callees": [
+   "func_1AFF00",
+   "func_43F768"
+  ]
+ },
+ {
   "file": "ps2___12EventTrigger_0x2c17f8.cpp",
   "symbol": "ps2___12EventTrigger",
   "demangled": "EventTrigger::ps2_()",
@@ -248102,32 +248102,6 @@
   ]
  },
  {
-  "file": "FindWeights__FRQ211stlpmtx_stdt6vector2ZP16RndTransformableZQ211stlpmtx_stdt12StlNodeAl_0x1a1538.cpp",
-  "symbol": "FindWeights__FRQ211stlpmtx_stdt6vector2ZP16RndTransformableZQ211stlpmtx_stdt12StlNodeAl",
-  "demangled": "FindWeights(?)",
-  "addr": "0x1a1538",
-  "score": 215.2,
-  "kind": "accessor",
-  "insns": 134,
-  "dispatch": 5,
-  "labels": 12,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 24,
-  "cop2": 5,
-  "branches": 10,
-  "loads": 37,
-  "stores": 14,
-  "mult_div": 0,
-  "distinct_mem": 20,
-  "callees": [
-   "func_2FBB68",
-   "func_326F00",
-   "func_39F688"
-  ]
- },
- {
   "file": "AutoCapture__16TrackWatcherImplRC10PhraseInfob_0x287a10.cpp",
   "symbol": "AutoCapture__16TrackWatcherImplRC10PhraseInfob",
   "demangled": "TrackWatcherImpl::AutoCapture(PhraseInfo & const, bool)",
@@ -251199,6 +251173,32 @@
   ]
  },
  {
+  "file": "FindWeights__FRQ211stlpmtx_stdt6vector2ZP16RndTransformableZQ211stlpmtx_stdt12StlNodeAl_0x1a1538.cpp",
+  "symbol": "FindWeights__FRQ211stlpmtx_stdt6vector2ZP16RndTransformableZQ211stlpmtx_stdt12StlNodeAl",
+  "demangled": "FindWeights(?)",
+  "addr": "0x1a1538",
+  "score": 224.2,
+  "kind": "accessor",
+  "insns": 134,
+  "dispatch": 5,
+  "labels": 12,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 24,
+  "cop2": 6,
+  "branches": 10,
+  "loads": 37,
+  "stores": 14,
+  "mult_div": 0,
+  "distinct_mem": 20,
+  "callees": [
+   "func_2FBB68",
+   "func_326F00",
+   "func_39F688"
+  ]
+ },
+ {
   "file": "ps2____10CharLookAt_0x18d310.cpp",
   "symbol": "ps2____10CharLookAt",
   "demangled": "CharLookAt::ps2__()",
@@ -251562,30 +251562,6 @@
    "func_307AD0",
    "func_307CC0",
    "func_307D10"
-  ]
- },
- {
-  "file": "MsToBytes__C17VAGFileReader_Newf_0x26fc40.cpp",
-  "symbol": "MsToBytes__C17VAGFileReader_Newf",
-  "demangled": "VAGFileReader_New::MsToBytes(float)",
-  "addr": "0x26fc40",
-  "score": 224.95,
-  "kind": "",
-  "insns": 49,
-  "dispatch": 43,
-  "labels": 43,
-  "calls": 2,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 12,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 9,
-  "stores": 4,
-  "mult_div": 0,
-  "distinct_mem": 9,
-  "callees": [
-   "func_26E990"
   ]
  },
  {
@@ -251965,6 +251941,30 @@
    "func_34D9E8",
    "func_351CF8",
    "func_353080"
+  ]
+ },
+ {
+  "file": "MsToBytes__C17VAGFileReader_Newf_0x26fc40.cpp",
+  "symbol": "MsToBytes__C17VAGFileReader_Newf",
+  "demangled": "VAGFileReader_New::MsToBytes(float)",
+  "addr": "0x26fc40",
+  "score": 226.15,
+  "kind": "",
+  "insns": 49,
+  "dispatch": 43,
+  "labels": 43,
+  "calls": 2,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 13,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 9,
+  "stores": 4,
+  "mult_div": 0,
+  "distinct_mem": 9,
+  "callees": [
+   "func_26E990"
   ]
  },
  {
@@ -254479,32 +254479,6 @@
   ]
  },
  {
-  "file": "SpotlightColorChanged__8WorldDirP9SpotlightRCQ23Hmx5Color_0x2b3048.cpp",
-  "symbol": "SpotlightColorChanged__8WorldDirP9SpotlightRCQ23Hmx5Color",
-  "demangled": "WorldDir::SpotlightColorChanged(Spotlight *, Hmx::Color & const)",
-  "addr": "0x2b3048",
-  "score": 235.35,
-  "kind": "",
-  "insns": 167,
-  "dispatch": 5,
-  "labels": 13,
-  "calls": 3,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 46,
-  "cop2": 0,
-  "branches": 10,
-  "loads": 33,
-  "stores": 28,
-  "mult_div": 1,
-  "distinct_mem": 32,
-  "callees": [
-   "func_40BB28",
-   "func_40BF20",
-   "func_40C110"
-  ]
- },
- {
   "file": "Create__9RndBitmapPv_0x1d4ee8.cpp",
   "symbol": "Create__9RndBitmapPv",
   "demangled": "RndBitmap::Create(void *)",
@@ -255146,33 +255120,6 @@
   ]
  },
  {
-  "file": "UpdateRate__3Rnd_0x2020a8.cpp",
-  "symbol": "UpdateRate__3Rnd",
-  "demangled": "Rnd::UpdateRate()",
-  "addr": "0x2020a8",
-  "score": 238.3,
-  "kind": "",
-  "insns": 130,
-  "dispatch": 11,
-  "labels": 20,
-  "calls": 11,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 22,
-  "cop2": 0,
-  "branches": 8,
-  "loads": 26,
-  "stores": 14,
-  "mult_div": 0,
-  "distinct_mem": 19,
-  "callees": [
-   "func_2F2EA8",
-   "func_325108",
-   "func_325258",
-   "func_326F00"
-  ]
- },
- {
   "file": "Serialize__Q36OC3Ent4Face11FxAnimCurveRQ36OC3Ent4Face9FxArchive_0x2947d0.cpp",
   "symbol": "Serialize__Q36OC3Ent4Face11FxAnimCurveRQ36OC3Ent4Face9FxArchive",
   "demangled": "OC3Ent::Face::FxAnimCurve::Serialize(OC3Ent::Face::FxArchive &)",
@@ -255376,6 +255323,33 @@
    "func_3BF4A8",
    "func_41E210",
    "func_41E360"
+  ]
+ },
+ {
+  "file": "UpdateRate__3Rnd_0x2020a8.cpp",
+  "symbol": "UpdateRate__3Rnd",
+  "demangled": "Rnd::UpdateRate()",
+  "addr": "0x2020a8",
+  "score": 239.5,
+  "kind": "",
+  "insns": 130,
+  "dispatch": 11,
+  "labels": 20,
+  "calls": 11,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 23,
+  "cop2": 0,
+  "branches": 8,
+  "loads": 26,
+  "stores": 14,
+  "mult_div": 0,
+  "distinct_mem": 19,
+  "callees": [
+   "func_2F2EA8",
+   "func_325108",
+   "func_325258",
+   "func_326F00"
   ]
  },
  {
@@ -255795,28 +255769,6 @@
   ]
  },
  {
-  "file": "GrowToContain__6SphereRC6Sphere_0x32cac0.cpp",
-  "symbol": "GrowToContain__6SphereRC6Sphere",
-  "demangled": "Sphere::GrowToContain(Sphere & const)",
-  "addr": "0x32cac0",
-  "score": 241.2,
-  "kind": "",
-  "insns": 98,
-  "dispatch": 0,
-  "labels": 4,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 65,
-  "cop2": 10,
-  "branches": 2,
-  "loads": 17,
-  "stores": 16,
-  "mult_div": 0,
-  "distinct_mem": 19,
-  "callees": []
- },
- {
   "file": "SetOffsets__17CharDriverDisplayP10CharDriver_0x1a5960.cpp",
   "symbol": "SetOffsets__17CharDriverDisplayP10CharDriver",
   "demangled": "CharDriverDisplay::SetOffsets(CharDriver *)",
@@ -256126,6 +256078,32 @@
    "func_353B50",
    "func_3FF568",
    "func_3FF570"
+  ]
+ },
+ {
+  "file": "SpotlightColorChanged__8WorldDirP9SpotlightRCQ23Hmx5Color_0x2b3048.cpp",
+  "symbol": "SpotlightColorChanged__8WorldDirP9SpotlightRCQ23Hmx5Color",
+  "demangled": "WorldDir::SpotlightColorChanged(Spotlight *, Hmx::Color & const)",
+  "addr": "0x2b3048",
+  "score": 242.55,
+  "kind": "",
+  "insns": 167,
+  "dispatch": 5,
+  "labels": 13,
+  "calls": 3,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 52,
+  "cop2": 0,
+  "branches": 10,
+  "loads": 33,
+  "stores": 28,
+  "mult_div": 1,
+  "distinct_mem": 32,
+  "callees": [
+   "func_40BB28",
+   "func_40BF20",
+   "func_40C110"
   ]
  },
  {
@@ -257306,28 +257284,6 @@
   ]
  },
  {
-  "file": "MakeScale__FRCQ23Hmx7Matrix3R7Vector3_0x32dd80.cpp",
-  "symbol": "MakeScale__FRCQ23Hmx7Matrix3R7Vector3",
-  "demangled": "MakeScale(Hmx::Matrix3 & const, Vector3 &)",
-  "addr": "0x32dd80",
-  "score": 245.35,
-  "kind": "",
-  "insns": 55,
-  "dispatch": 0,
-  "labels": 1,
-  "calls": 0,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 22,
-  "cop2": 20,
-  "branches": 0,
-  "loads": 11,
-  "stores": 4,
-  "mult_div": 0,
-  "distinct_mem": 12,
-  "callees": []
- },
- {
   "file": "ps2__M_insert_overflow_aux__Q211stlpmtx_stdt6vector2Z8QuatDescZQ211stlpmtx_stdt12StlNod_0x38f8d0.cpp",
   "symbol": "ps2__M_insert_overflow_aux__Q211stlpmtx_stdt6vector2Z8QuatDescZQ211stlpmtx_stdt12StlNod",
   "demangled": "ps2__M_insert_overflow_aux__Q211stlpmtx_stdt6vector2Z8QuatDescZQ211stlpmtx_stdt12StlNod",
@@ -257733,30 +257689,6 @@
   ]
  },
  {
-  "file": "ps2___kernel_tanf_0x357618.cpp",
-  "symbol": "ps2___kernel_tanf",
-  "demangled": "ps2___kernel_tanf",
-  "addr": "0x357618",
-  "score": 246.5,
-  "kind": "opaque",
-  "insns": 162,
-  "dispatch": 1,
-  "labels": 10,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 92,
-  "cop2": 0,
-  "branches": 12,
-  "loads": 16,
-  "stores": 1,
-  "mult_div": 0,
-  "distinct_mem": 14,
-  "callees": [
-   "func_3538D0"
-  ]
- },
- {
   "file": "ps2____Q36OC3Ent4Face9FxArchive_0x295668.cpp",
   "symbol": "ps2____Q36OC3Ent4Face9FxArchive",
   "demangled": "OC3Ent::Face::FxArchive::ps2__()",
@@ -258059,6 +257991,30 @@
    "func_3B4A48",
    "func_41FD58",
    "func_41FE20"
+  ]
+ },
+ {
+  "file": "ps2___kernel_tanf_0x357618.cpp",
+  "symbol": "ps2___kernel_tanf",
+  "demangled": "ps2___kernel_tanf",
+  "addr": "0x357618",
+  "score": 247.7,
+  "kind": "opaque",
+  "insns": 162,
+  "dispatch": 1,
+  "labels": 10,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 93,
+  "cop2": 0,
+  "branches": 12,
+  "loads": 16,
+  "stores": 1,
+  "mult_div": 0,
+  "distinct_mem": 14,
+  "callees": [
+   "func_3538D0"
   ]
  },
  {
@@ -258484,6 +258440,28 @@
    "func_3431D0",
    "func_3431D8"
   ]
+ },
+ {
+  "file": "GrowToContain__6SphereRC6Sphere_0x32cac0.cpp",
+  "symbol": "GrowToContain__6SphereRC6Sphere",
+  "demangled": "Sphere::GrowToContain(Sphere & const)",
+  "addr": "0x32cac0",
+  "score": 250.2,
+  "kind": "",
+  "insns": 98,
+  "dispatch": 0,
+  "labels": 4,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 65,
+  "cop2": 11,
+  "branches": 2,
+  "loads": 17,
+  "stores": 16,
+  "mult_div": 0,
+  "distinct_mem": 19,
+  "callees": []
  },
  {
   "file": "_updateRefImage_0x339a38.cpp",
@@ -259137,32 +259115,6 @@
   ]
  },
  {
-  "file": "GetPercentHit__C9Performer_0x110d68.cpp",
-  "symbol": "GetPercentHit__C9Performer",
-  "demangled": "Performer::GetPercentHit()",
-  "addr": "0x110d68",
-  "score": 253.55,
-  "kind": "accessor",
-  "insns": 57,
-  "dispatch": 50,
-  "labels": 50,
-  "calls": 4,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 8,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 13,
-  "stores": 5,
-  "mult_div": 0,
-  "distinct_mem": 10,
-  "callees": [
-   "func_121670",
-   "func_12AAF0",
-   "func_12AC08"
-  ]
- },
- {
   "file": "Print__5DebugPCc_0x2ec018.cpp",
   "symbol": "Print__5DebugPCc",
   "demangled": "Debug::Print(char * const)",
@@ -259367,6 +259319,32 @@
   "callees": [
    "func_1C9CB0",
    "func_35B6B8"
+  ]
+ },
+ {
+  "file": "GetPercentHit__C9Performer_0x110d68.cpp",
+  "symbol": "GetPercentHit__C9Performer",
+  "demangled": "Performer::GetPercentHit()",
+  "addr": "0x110d68",
+  "score": 254.75,
+  "kind": "accessor",
+  "insns": 57,
+  "dispatch": 50,
+  "labels": 50,
+  "calls": 4,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 9,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 13,
+  "stores": 5,
+  "mult_div": 0,
+  "distinct_mem": 10,
+  "callees": [
+   "func_121670",
+   "func_12AAF0",
+   "func_12AC08"
   ]
  },
  {
@@ -261975,33 +261953,6 @@
   ]
  },
  {
-  "file": "Animate__Q211LightPreset14SpotlightEntryP9SpotlightRCQ211LightPreset14SpotlightEntryf_0x2cde60.cpp",
-  "symbol": "Animate__Q211LightPreset14SpotlightEntryP9SpotlightRCQ211LightPreset14SpotlightEntryf",
-  "demangled": "LightPreset::SpotlightEntry::Animate(Spotlight *, LightPreset::SpotlightEntry & const, float)",
-  "addr": "0x2cde60",
-  "score": 268.55,
-  "kind": "",
-  "insns": 155,
-  "dispatch": 5,
-  "labels": 7,
-  "calls": 5,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 57,
-  "cop2": 5,
-  "branches": 3,
-  "loads": 25,
-  "stores": 21,
-  "mult_div": 0,
-  "distinct_mem": 29,
-  "callees": [
-   "func_2CDCC0",
-   "func_310828",
-   "func_3108D0",
-   "func_32E4F8"
-  ]
- },
- {
   "file": "SortFirst__FRQ211stlpmtx_stdt4list2ZPQ23Hmx6ObjectZQ211stlpmtx_stdt12StlNodeAlloc1ZPQ23_0x30c248.cpp",
   "symbol": "SortFirst__FRQ211stlpmtx_stdt4list2ZPQ23Hmx6ObjectZQ211stlpmtx_stdt12StlNodeAlloc1ZPQ23",
   "demangled": "SortFirst(?)",
@@ -262560,35 +262511,6 @@
   ]
  },
  {
-  "file": "SetupPracticeSections__6SongDB_0x121090.cpp",
-  "symbol": "SetupPracticeSections__6SongDB",
-  "demangled": "SongDB::SetupPracticeSections()",
-  "addr": "0x121090",
-  "score": 271.9,
-  "kind": "accessor",
-  "insns": 168,
-  "dispatch": 11,
-  "labels": 19,
-  "calls": 9,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 10,
-  "cop2": 0,
-  "branches": 12,
-  "loads": 43,
-  "stores": 33,
-  "mult_div": 3,
-  "distinct_mem": 46,
-  "callees": [
-   "func_120E88",
-   "func_2FAC90",
-   "func_305148",
-   "func_305800",
-   "func_326F00",
-   "func_36E6F0"
-  ]
- },
- {
   "file": "Draw__8RndGraph_0x1e15a0.cpp",
   "symbol": "Draw__8RndGraph",
   "demangled": "RndGraph::Draw()",
@@ -262608,6 +262530,28 @@
   "stores": 4,
   "mult_div": 0,
   "distinct_mem": 15,
+  "callees": []
+ },
+ {
+  "file": "MakeScale__FRCQ23Hmx7Matrix3R7Vector3_0x32dd80.cpp",
+  "symbol": "MakeScale__FRCQ23Hmx7Matrix3R7Vector3",
+  "demangled": "MakeScale(Hmx::Matrix3 & const, Vector3 &)",
+  "addr": "0x32dd80",
+  "score": 272.35,
+  "kind": "",
+  "insns": 55,
+  "dispatch": 0,
+  "labels": 1,
+  "calls": 0,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 22,
+  "cop2": 23,
+  "branches": 0,
+  "loads": 11,
+  "stores": 4,
+  "mult_div": 0,
+  "distinct_mem": 12,
   "callees": []
  },
  {
@@ -262890,6 +262834,35 @@
   ]
  },
  {
+  "file": "SetupPracticeSections__6SongDB_0x121090.cpp",
+  "symbol": "SetupPracticeSections__6SongDB",
+  "demangled": "SongDB::SetupPracticeSections()",
+  "addr": "0x121090",
+  "score": 273.1,
+  "kind": "accessor",
+  "insns": 168,
+  "dispatch": 11,
+  "labels": 19,
+  "calls": 9,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 11,
+  "cop2": 0,
+  "branches": 12,
+  "loads": 43,
+  "stores": 33,
+  "mult_div": 3,
+  "distinct_mem": 46,
+  "callees": [
+   "func_120E88",
+   "func_2FAC90",
+   "func_305148",
+   "func_305800",
+   "func_326F00",
+   "func_36E6F0"
+  ]
+ },
+ {
   "file": "Save__17BandStreakDisplayR9BinStream_0x2ddfb0.cpp",
   "symbol": "Save__17BandStreakDisplayR9BinStream",
   "demangled": "BandStreakDisplay::Save(BinStream &)",
@@ -262919,6 +262892,33 @@
    "func_3BD360",
    "func_41E0E0",
    "func_41E178"
+  ]
+ },
+ {
+  "file": "Animate__Q211LightPreset14SpotlightEntryP9SpotlightRCQ211LightPreset14SpotlightEntryf_0x2cde60.cpp",
+  "symbol": "Animate__Q211LightPreset14SpotlightEntryP9SpotlightRCQ211LightPreset14SpotlightEntryf",
+  "demangled": "LightPreset::SpotlightEntry::Animate(Spotlight *, LightPreset::SpotlightEntry & const, float)",
+  "addr": "0x2cde60",
+  "score": 273.35,
+  "kind": "",
+  "insns": 155,
+  "dispatch": 5,
+  "labels": 7,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 61,
+  "cop2": 5,
+  "branches": 3,
+  "loads": 25,
+  "stores": 21,
+  "mult_div": 0,
+  "distinct_mem": 29,
+  "callees": [
+   "func_2CDCC0",
+   "func_310828",
+   "func_3108D0",
+   "func_32E4F8"
   ]
  },
  {
@@ -262977,30 +262977,6 @@
    "func_2EBDA8",
    "func_34B320",
    "func_3680E8"
-  ]
- },
- {
-  "file": "AngleBetween__FRC7Vector3N20_0x19ce10.cpp",
-  "symbol": "AngleBetween__FRC7Vector3N20",
-  "demangled": "AngleBetween(Vector3 & const, ?)",
-  "addr": "0x19ce10",
-  "score": 274.5,
-  "kind": "",
-  "insns": 86,
-  "dispatch": 1,
-  "labels": 5,
-  "calls": 1,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 45,
-  "cop2": 15,
-  "branches": 1,
-  "loads": 17,
-  "stores": 12,
-  "mult_div": 0,
-  "distinct_mem": 24,
-  "callees": [
-   "func_353D60"
   ]
  },
  {
@@ -263674,35 +263650,6 @@
   ]
  },
  {
-  "file": "FixFont__5PsRnd_0x1be7a0.cpp",
-  "symbol": "FixFont__5PsRnd",
-  "demangled": "PsRnd::FixFont()",
-  "addr": "0x1be7a0",
-  "score": 277.5,
-  "kind": "",
-  "insns": 142,
-  "dispatch": 17,
-  "labels": 22,
-  "calls": 14,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 14,
-  "cop2": 0,
-  "branches": 12,
-  "loads": 29,
-  "stores": 18,
-  "mult_div": 0,
-  "distinct_mem": 20,
-  "callees": [
-   "func_2FAC90",
-   "func_2FAD00",
-   "func_2FC170",
-   "func_3054D0",
-   "func_305800",
-   "func_305D78"
-  ]
- },
- {
   "file": "Save__7RndTextR9BinStream_0x207670.cpp",
   "symbol": "Save__7RndTextR9BinStream",
   "demangled": "RndText::Save(BinStream &)",
@@ -264051,6 +263998,35 @@
    "func_31E3E8",
    "func_31EEB8",
    "func_325258"
+  ]
+ },
+ {
+  "file": "FixFont__5PsRnd_0x1be7a0.cpp",
+  "symbol": "FixFont__5PsRnd",
+  "demangled": "PsRnd::FixFont()",
+  "addr": "0x1be7a0",
+  "score": 279.9,
+  "kind": "",
+  "insns": 142,
+  "dispatch": 17,
+  "labels": 22,
+  "calls": 14,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 16,
+  "cop2": 0,
+  "branches": 12,
+  "loads": 29,
+  "stores": 18,
+  "mult_div": 0,
+  "distinct_mem": 20,
+  "callees": [
+   "func_2FAC90",
+   "func_2FAD00",
+   "func_2FC170",
+   "func_3054D0",
+   "func_305800",
+   "func_305D78"
   ]
  },
  {
@@ -265861,6 +265837,30 @@
    "func_3216B0",
    "func_321760",
    "func_3787E0"
+  ]
+ },
+ {
+  "file": "AngleBetween__FRC7Vector3N20_0x19ce10.cpp",
+  "symbol": "AngleBetween__FRC7Vector3N20",
+  "demangled": "AngleBetween(Vector3 & const, ?)",
+  "addr": "0x19ce10",
+  "score": 292.5,
+  "kind": "",
+  "insns": 86,
+  "dispatch": 1,
+  "labels": 5,
+  "calls": 1,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 45,
+  "cop2": 17,
+  "branches": 1,
+  "loads": 17,
+  "stores": 12,
+  "mult_div": 0,
+  "distinct_mem": 24,
+  "callees": [
+   "func_353D60"
   ]
  },
  {
@@ -268696,34 +268696,6 @@
   "callees": []
  },
  {
-  "file": "UpdateHand__10CharIKHand_0x189d60.cpp",
-  "symbol": "UpdateHand__10CharIKHand",
-  "demangled": "CharIKHand::UpdateHand()",
-  "addr": "0x189d60",
-  "score": 309.3,
-  "kind": "",
-  "insns": 140,
-  "dispatch": 9,
-  "labels": 15,
-  "calls": 9,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 20,
-  "cop2": 10,
-  "branches": 10,
-  "loads": 36,
-  "stores": 16,
-  "mult_div": 0,
-  "distinct_mem": 18,
-  "callees": [
-   "func_2EBD88",
-   "func_2EBDA8",
-   "func_3108D0",
-   "func_3680E8",
-   "func_36F910"
-  ]
- },
- {
   "file": "ps2__M_insert_overflow_aux__Q211stlpmtx_stdt6vector2ZQ213CharBlendBone9BoneEntryZQ211st_0x388bc8.cpp",
   "symbol": "ps2__M_insert_overflow_aux__Q211stlpmtx_stdt6vector2ZQ213CharBlendBone9BoneEntryZQ211st",
   "demangled": "ps2__M_insert_overflow_aux__Q211stlpmtx_stdt6vector2ZQ213CharBlendBone9BoneEntryZQ211st",
@@ -270636,33 +270608,6 @@
   ]
  },
  {
-  "file": "AddHeadPoints__6PlayerfiQ27Scoring7HitType_0x114140.cpp",
-  "symbol": "AddHeadPoints__6PlayerfiQ27Scoring7HitType",
-  "demangled": "Player::AddHeadPoints(float, int, Scoring::HitType)",
-  "addr": "0x114140",
-  "score": 322.25,
-  "kind": "accessor",
-  "insns": 69,
-  "dispatch": 63,
-  "labels": 63,
-  "calls": 5,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 16,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 15,
-  "stores": 7,
-  "mult_div": 1,
-  "distinct_mem": 14,
-  "callees": [
-   "func_114670",
-   "func_11F6B0",
-   "func_1209E8",
-   "func_273B98"
-  ]
- },
- {
   "file": "Save__9CharIKRodR9BinStream_0x18c5f0.cpp",
   "symbol": "Save__9CharIKRodR9BinStream",
   "demangled": "CharIKRod::Save(BinStream &)",
@@ -270803,6 +270748,33 @@
   ]
  },
  {
+  "file": "AddHeadPoints__6PlayerfiQ27Scoring7HitType_0x114140.cpp",
+  "symbol": "AddHeadPoints__6PlayerfiQ27Scoring7HitType",
+  "demangled": "Player::AddHeadPoints(float, int, Scoring::HitType)",
+  "addr": "0x114140",
+  "score": 323.45,
+  "kind": "accessor",
+  "insns": 69,
+  "dispatch": 63,
+  "labels": 63,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 17,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 15,
+  "stores": 7,
+  "mult_div": 1,
+  "distinct_mem": 14,
+  "callees": [
+   "func_114670",
+   "func_11F6B0",
+   "func_1209E8",
+   "func_273B98"
+  ]
+ },
+ {
   "file": "OnFillEnd__10SongParseriUc_0x284ed0.cpp",
   "symbol": "OnFillEnd__10SongParseriUc",
   "demangled": "SongParser::OnFillEnd(int, char  unsigned)",
@@ -270852,30 +270824,6 @@
    "func_30F578",
    "func_3680E8",
    "func_3C1E40"
-  ]
- },
- {
-  "file": "OnMiss__16TrackWatcherImplfii_0x288e18.cpp",
-  "symbol": "OnMiss__16TrackWatcherImplfii",
-  "demangled": "TrackWatcherImpl::OnMiss(float, int, int)",
-  "addr": "0x288e18",
-  "score": 324.25,
-  "kind": "",
-  "insns": 59,
-  "dispatch": 51,
-  "labels": 51,
-  "calls": 5,
-  "tail_calls": 0,
-  "indirect": 4,
-  "cop1": 6,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 22,
-  "stores": 5,
-  "mult_div": 0,
-  "distinct_mem": 19,
-  "callees": [
-   "func_2890D0"
   ]
  },
  {
@@ -271117,6 +271065,30 @@
   ]
  },
  {
+  "file": "OnMiss__16TrackWatcherImplfii_0x288e18.cpp",
+  "symbol": "OnMiss__16TrackWatcherImplfii",
+  "demangled": "TrackWatcherImpl::OnMiss(float, int, int)",
+  "addr": "0x288e18",
+  "score": 325.45,
+  "kind": "",
+  "insns": 59,
+  "dispatch": 51,
+  "labels": 51,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 4,
+  "cop1": 7,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 22,
+  "stores": 5,
+  "mult_div": 0,
+  "distinct_mem": 19,
+  "callees": [
+   "func_2890D0"
+  ]
+ },
+ {
   "file": "ps2___16CharUtlBoneSaverP9ObjectDir_0x19ade0.cpp",
   "symbol": "ps2___16CharUtlBoneSaverP9ObjectDir",
   "demangled": "CharUtlBoneSaver::ps2_(ObjectDir *)",
@@ -271328,6 +271300,34 @@
    "func_305B50",
    "func_305D78",
    "func_3067B0"
+  ]
+ },
+ {
+  "file": "UpdateHand__10CharIKHand_0x189d60.cpp",
+  "symbol": "UpdateHand__10CharIKHand",
+  "demangled": "CharIKHand::UpdateHand()",
+  "addr": "0x189d60",
+  "score": 327.3,
+  "kind": "",
+  "insns": 140,
+  "dispatch": 9,
+  "labels": 15,
+  "calls": 9,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 20,
+  "cop2": 12,
+  "branches": 10,
+  "loads": 36,
+  "stores": 16,
+  "mult_div": 0,
+  "distinct_mem": 18,
+  "callees": [
+   "func_2EBD88",
+   "func_2EBDA8",
+   "func_3108D0",
+   "func_3680E8",
+   "func_36F910"
   ]
  },
  {
@@ -271738,32 +271738,6 @@
   ]
  },
  {
-  "file": "CopyBuf__5PsRndbffffUlUi_0x1bf238.cpp",
-  "symbol": "CopyBuf__5PsRndbffffUlUi",
-  "demangled": "PsRnd::CopyBuf(bool, float, float, float, float, long  unsigned, int  unsigned)",
-  "addr": "0x1bf238",
-  "score": 330.7,
-  "kind": "",
-  "insns": 278,
-  "dispatch": 17,
-  "labels": 18,
-  "calls": 16,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 28,
-  "cop2": 0,
-  "branches": 4,
-  "loads": 20,
-  "stores": 20,
-  "mult_div": 0,
-  "distinct_mem": 23,
-  "callees": [
-   "func_1BDCE8",
-   "func_43E320",
-   "func_43E988"
-  ]
- },
- {
   "file": "ps2___as__Q211stlpmtx_stdt4list2ZQ212EventTrigger4AnimZQ211stlpmtx_stdt12StlNodeAlloc1Z_0x411160.cpp",
   "symbol": "ps2___as__Q211stlpmtx_stdt4list2ZQ212EventTrigger4AnimZQ211stlpmtx_stdt12StlNodeAlloc1Z",
   "demangled": "ps2___as__Q211stlpmtx_stdt4list2ZQ212EventTrigger4AnimZQ211stlpmtx_stdt12StlNodeAlloc1Z",
@@ -272030,34 +272004,6 @@
   ]
  },
  {
-  "file": "ps2__M_rehash__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9Spotl_0x40b760.cpp",
-  "symbol": "ps2__M_rehash__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9Spotl",
-  "demangled": "ps2__M_rehash__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9Spotl",
-  "addr": "0x40b760",
-  "score": 331.5,
-  "kind": "opaque",
-  "insns": 242,
-  "dispatch": 11,
-  "labels": 22,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 12,
-  "cop2": 0,
-  "branches": 20,
-  "loads": 65,
-  "stores": 59,
-  "mult_div": 1,
-  "distinct_mem": 54,
-  "callees": [
-   "func_321720",
-   "func_321760",
-   "func_403430",
-   "func_404738",
-   "func_40B020"
-  ]
- },
- {
   "file": "ps2____9MetaMusic_0x258b30.cpp",
   "symbol": "ps2____9MetaMusic",
   "demangled": "MetaMusic::ps2__()",
@@ -272201,6 +272147,34 @@
   ]
  },
  {
+  "file": "ps2__M_rehash__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9Spotl_0x40b760.cpp",
+  "symbol": "ps2__M_rehash__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9Spotl",
+  "demangled": "ps2__M_rehash__Q211stlpmtx_stdt9hashtable7ZQ211stlpmtx_stdt4pair2ZCQ23Hmx5ColorZP9Spotl",
+  "addr": "0x40b760",
+  "score": 335.1,
+  "kind": "opaque",
+  "insns": 242,
+  "dispatch": 11,
+  "labels": 22,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 15,
+  "cop2": 0,
+  "branches": 20,
+  "loads": 65,
+  "stores": 59,
+  "mult_div": 1,
+  "distinct_mem": 54,
+  "callees": [
+   "func_321720",
+   "func_321760",
+   "func_403430",
+   "func_404738",
+   "func_40B020"
+  ]
+ },
+ {
   "file": "ps2___ieee754_acosf_0x354b50.cpp",
   "symbol": "ps2___ieee754_acosf",
   "demangled": "ps2___ieee754_acosf",
@@ -272252,6 +272226,32 @@
    "func_3216B0",
    "func_3B53E0",
    "func_3D0668"
+  ]
+ },
+ {
+  "file": "CopyBuf__5PsRndbffffUlUi_0x1bf238.cpp",
+  "symbol": "CopyBuf__5PsRndbffffUlUi",
+  "demangled": "PsRnd::CopyBuf(bool, float, float, float, float, long  unsigned, int  unsigned)",
+  "addr": "0x1bf238",
+  "score": 335.5,
+  "kind": "",
+  "insns": 278,
+  "dispatch": 17,
+  "labels": 18,
+  "calls": 16,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 32,
+  "cop2": 0,
+  "branches": 4,
+  "loads": 20,
+  "stores": 20,
+  "mult_div": 0,
+  "distinct_mem": 23,
+  "callees": [
+   "func_1BDCE8",
+   "func_43E320",
+   "func_43E988"
   ]
  },
  {
@@ -274141,34 +274141,6 @@
   ]
  },
  {
-  "file": "DrawBeat__17CharDriverDisplayifRCQ23Hmx5Color_0x1a60e8.cpp",
-  "symbol": "DrawBeat__17CharDriverDisplayifRCQ23Hmx5Color",
-  "demangled": "CharDriverDisplay::DrawBeat(int, float, Hmx::Color & const)",
-  "addr": "0x1a60e8",
-  "score": 346.65,
-  "kind": "",
-  "insns": 75,
-  "dispatch": 66,
-  "labels": 66,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 15,
-  "cop2": 0,
-  "branches": 1,
-  "loads": 12,
-  "stores": 10,
-  "mult_div": 0,
-  "distinct_mem": 14,
-  "callees": [
-   "func_1A63B8",
-   "func_1A63D8",
-   "func_3538F0",
-   "func_369508",
-   "func_37DAE8"
-  ]
- },
- {
   "file": "Select__5PsMatRUl_0x43ea70.cpp",
   "symbol": "Select__5PsMatRUl",
   "demangled": "PsMat::Select(long & unsigned)",
@@ -274367,6 +274339,34 @@
    "func_3FFB70",
    "func_3FFEA0",
    "func_3FFFA8"
+  ]
+ },
+ {
+  "file": "DrawBeat__17CharDriverDisplayifRCQ23Hmx5Color_0x1a60e8.cpp",
+  "symbol": "DrawBeat__17CharDriverDisplayifRCQ23Hmx5Color",
+  "demangled": "CharDriverDisplay::DrawBeat(int, float, Hmx::Color & const)",
+  "addr": "0x1a60e8",
+  "score": 347.85,
+  "kind": "",
+  "insns": 75,
+  "dispatch": 66,
+  "labels": 66,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 16,
+  "cop2": 0,
+  "branches": 1,
+  "loads": 12,
+  "stores": 10,
+  "mult_div": 0,
+  "distinct_mem": 14,
+  "callees": [
+   "func_1A63B8",
+   "func_1A63D8",
+   "func_3538F0",
+   "func_369508",
+   "func_37DAE8"
   ]
  },
  {
@@ -274603,38 +274603,6 @@
   ]
  },
  {
-  "file": "GetStarsForCoopScore__Fi_0x120438.cpp",
-  "symbol": "GetStarsForCoopScore__Fi",
-  "demangled": "GetStarsForCoopScore(int)",
-  "addr": "0x120438",
-  "score": 349.05,
-  "kind": "accessor",
-  "insns": 153,
-  "dispatch": 26,
-  "labels": 29,
-  "calls": 25,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 5,
-  "cop2": 0,
-  "branches": 5,
-  "loads": 25,
-  "stores": 12,
-  "mult_div": 0,
-  "distinct_mem": 25,
-  "callees": [
-   "func_2EBD88",
-   "func_2F29C0",
-   "func_2FAC90",
-   "func_2FB898",
-   "func_304FB0",
-   "func_3054D0",
-   "func_305800",
-   "func_326F00",
-   "func_3697A8"
-  ]
- },
- {
   "file": "SetPointColor__7RndLineiRCQ23Hmx5Color_0x1e5ac8.cpp",
   "symbol": "SetPointColor__7RndLineiRCQ23Hmx5Color",
   "demangled": "RndLine::SetPointColor(int, Hmx::Color & const)",
@@ -274774,6 +274742,38 @@
   ]
  },
  {
+  "file": "GetStarsForCoopScore__Fi_0x120438.cpp",
+  "symbol": "GetStarsForCoopScore__Fi",
+  "demangled": "GetStarsForCoopScore(int)",
+  "addr": "0x120438",
+  "score": 350.25,
+  "kind": "accessor",
+  "insns": 153,
+  "dispatch": 26,
+  "labels": 29,
+  "calls": 25,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 6,
+  "cop2": 0,
+  "branches": 5,
+  "loads": 25,
+  "stores": 12,
+  "mult_div": 0,
+  "distinct_mem": 25,
+  "callees": [
+   "func_2EBD88",
+   "func_2F29C0",
+   "func_2FAC90",
+   "func_2FB898",
+   "func_304FB0",
+   "func_3054D0",
+   "func_305800",
+   "func_326F00",
+   "func_3697A8"
+  ]
+ },
+ {
   "file": "ResetController__13PlayerMatcherb_0x117a08.cpp",
   "symbol": "ResetController__13PlayerMatcherb",
   "demangled": "PlayerMatcher::ResetController(bool)",
@@ -274897,33 +274897,6 @@
    "func_310DC8",
    "func_31C8A8",
    "func_326F00"
-  ]
- },
- {
-  "file": "MakeWorldSphere__12RndGeneratorR6Sphereb_0x231f30.cpp",
-  "symbol": "MakeWorldSphere__12RndGeneratorR6Sphereb",
-  "demangled": "RndGenerator::MakeWorldSphere(Sphere &, bool)",
-  "addr": "0x231f30",
-  "score": 351.45,
-  "kind": "",
-  "insns": 125,
-  "dispatch": 6,
-  "labels": 15,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 26,
-  "cop2": 16,
-  "branches": 10,
-  "loads": 33,
-  "stores": 10,
-  "mult_div": 0,
-  "distinct_mem": 25,
-  "callees": [
-   "func_216380",
-   "func_2EBDA8",
-   "func_3680E8",
-   "func_43F768"
   ]
  },
  {
@@ -275450,38 +275423,6 @@
   ]
  },
  {
-  "file": "GetCoopScoreForStars__Fi_0x1201c8.cpp",
-  "symbol": "GetCoopScoreForStars__Fi",
-  "demangled": "GetCoopScoreForStars(int)",
-  "addr": "0x1201c8",
-  "score": 354.1,
-  "kind": "accessor",
-  "insns": 156,
-  "dispatch": 26,
-  "labels": 30,
-  "calls": 25,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 5,
-  "cop2": 0,
-  "branches": 6,
-  "loads": 25,
-  "stores": 12,
-  "mult_div": 0,
-  "distinct_mem": 25,
-  "callees": [
-   "func_2EBD88",
-   "func_2F29C0",
-   "func_2FAC90",
-   "func_2FB898",
-   "func_304FB0",
-   "func_3054D0",
-   "func_305800",
-   "func_326F00",
-   "func_3697A8"
-  ]
- },
- {
   "file": "LoadGuitar__Q218GuitarDisplayPanel8GuitarElP7UIProxyP9DataArrayP13RndAnimatablef_0x14ee28.cpp",
   "symbol": "LoadGuitar__Q218GuitarDisplayPanel8GuitarElP7UIProxyP9DataArrayP13RndAnimatablef",
   "demangled": "GuitarDisplayPanel::GuitarEl::LoadGuitar(UIProxy *, DataArray *, RndAnimatable *, float)",
@@ -275730,6 +275671,38 @@
   ]
  },
  {
+  "file": "GetCoopScoreForStars__Fi_0x1201c8.cpp",
+  "symbol": "GetCoopScoreForStars__Fi",
+  "demangled": "GetCoopScoreForStars(int)",
+  "addr": "0x1201c8",
+  "score": 355.3,
+  "kind": "accessor",
+  "insns": 156,
+  "dispatch": 26,
+  "labels": 30,
+  "calls": 25,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 6,
+  "cop2": 0,
+  "branches": 6,
+  "loads": 25,
+  "stores": 12,
+  "mult_div": 0,
+  "distinct_mem": 25,
+  "callees": [
+   "func_2EBD88",
+   "func_2F29C0",
+   "func_2FAC90",
+   "func_2FB898",
+   "func_304FB0",
+   "func_3054D0",
+   "func_305800",
+   "func_326F00",
+   "func_3697A8"
+  ]
+ },
+ {
   "file": "Intersect__FRC9TransformRCQ23Hmx7PolygonPC7BSPNode_0x32aa78.cpp",
   "symbol": "Intersect__FRC9TransformRCQ23Hmx7PolygonPC7BSPNode",
   "demangled": "Intersect(Transform & const, Hmx::Polygon & const, BSPNode * const)",
@@ -275956,37 +275929,6 @@
    "func_427EE8",
    "func_428038",
    "func_428088"
-  ]
- },
- {
-  "file": "DrawString__5PsRndPCcRC7Vector2RCQ23Hmx5Color_0x1bde80.cpp",
-  "symbol": "DrawString__5PsRndPCcRC7Vector2RCQ23Hmx5Color",
-  "demangled": "PsRnd::DrawString(char * const, Vector2 & const, Hmx::Color & const)",
-  "addr": "0x1bde80",
-  "score": 357.2,
-  "kind": "",
-  "insns": 208,
-  "dispatch": 19,
-  "labels": 25,
-  "calls": 16,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 32,
-  "cop2": 0,
-  "branches": 12,
-  "loads": 36,
-  "stores": 19,
-  "mult_div": 0,
-  "distinct_mem": 30,
-  "callees": [
-   "func_1BDD08",
-   "func_1BF020",
-   "func_2EBDA8",
-   "func_2FAC90",
-   "func_3680E8",
-   "func_43E320",
-   "func_43E400",
-   "func_43E988"
   ]
  },
  {
@@ -276352,6 +276294,33 @@
   ]
  },
  {
+  "file": "MakeWorldSphere__12RndGeneratorR6Sphereb_0x231f30.cpp",
+  "symbol": "MakeWorldSphere__12RndGeneratorR6Sphereb",
+  "demangled": "RndGenerator::MakeWorldSphere(Sphere &, bool)",
+  "addr": "0x231f30",
+  "score": 360.45,
+  "kind": "",
+  "insns": 125,
+  "dispatch": 6,
+  "labels": 15,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 26,
+  "cop2": 17,
+  "branches": 10,
+  "loads": 33,
+  "stores": 10,
+  "mult_div": 0,
+  "distinct_mem": 25,
+  "callees": [
+   "func_216380",
+   "func_2EBDA8",
+   "func_3680E8",
+   "func_43F768"
+  ]
+ },
+ {
   "file": "Handle__9BandLabelP9DataArrayb_0x2d66f0.cpp",
   "symbol": "Handle__9BandLabelP9DataArrayb",
   "demangled": "BandLabel::Handle(DataArray *, bool)",
@@ -276384,6 +276353,37 @@
    "func_305218",
    "func_305308",
    "func_3054D0"
+  ]
+ },
+ {
+  "file": "DrawString__5PsRndPCcRC7Vector2RCQ23Hmx5Color_0x1bde80.cpp",
+  "symbol": "DrawString__5PsRndPCcRC7Vector2RCQ23Hmx5Color",
+  "demangled": "PsRnd::DrawString(char * const, Vector2 & const, Hmx::Color & const)",
+  "addr": "0x1bde80",
+  "score": 360.8,
+  "kind": "",
+  "insns": 208,
+  "dispatch": 19,
+  "labels": 25,
+  "calls": 16,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 35,
+  "cop2": 0,
+  "branches": 12,
+  "loads": 36,
+  "stores": 19,
+  "mult_div": 0,
+  "distinct_mem": 30,
+  "callees": [
+   "func_1BDD08",
+   "func_1BF020",
+   "func_2EBDA8",
+   "func_2FAC90",
+   "func_3680E8",
+   "func_43E320",
+   "func_43E400",
+   "func_43E988"
   ]
  },
  {
@@ -276484,32 +276484,6 @@
   ]
  },
  {
-  "file": "CalcSongPos__8SongDataf_0x283c60.cpp",
-  "symbol": "CalcSongPos__8SongDataf",
-  "demangled": "SongData::CalcSongPos(float)",
-  "addr": "0x283c60",
-  "score": 361.3,
-  "kind": "",
-  "insns": 78,
-  "dispatch": 69,
-  "labels": 69,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 8,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 19,
-  "stores": 9,
-  "mult_div": 0,
-  "distinct_mem": 19,
-  "callees": [
-   "func_2EBDA8",
-   "func_31F100",
-   "func_3680E8"
-  ]
- },
- {
   "file": "PreLoad__13BandStarMeterR9BinStream_0x2dbdc8.cpp",
   "symbol": "PreLoad__13BandStarMeterR9BinStream",
   "demangled": "BandStarMeter::PreLoad(BinStream &)",
@@ -276599,6 +276573,32 @@
    "func_3A68A0",
    "func_3FAF08",
    "func_3FAF50"
+  ]
+ },
+ {
+  "file": "CalcSongPos__8SongDataf_0x283c60.cpp",
+  "symbol": "CalcSongPos__8SongDataf",
+  "demangled": "SongData::CalcSongPos(float)",
+  "addr": "0x283c60",
+  "score": 362.5,
+  "kind": "",
+  "insns": 78,
+  "dispatch": 69,
+  "labels": 69,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 9,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 19,
+  "stores": 9,
+  "mult_div": 0,
+  "distinct_mem": 19,
+  "callees": [
+   "func_2EBDA8",
+   "func_31F100",
+   "func_3680E8"
   ]
  },
  {
@@ -278035,64 +278035,6 @@
   ]
  },
  {
-  "file": "NextLook__8CharEyes_0x182b28.cpp",
-  "symbol": "NextLook__8CharEyes",
-  "demangled": "CharEyes::NextLook()",
-  "addr": "0x182b28",
-  "score": 374.05,
-  "kind": "",
-  "insns": 169,
-  "dispatch": 10,
-  "labels": 14,
-  "calls": 9,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 89,
-  "cop2": 5,
-  "branches": 5,
-  "loads": 48,
-  "stores": 30,
-  "mult_div": 0,
-  "distinct_mem": 36,
-  "callees": [
-   "func_182AA8",
-   "func_20B5B0",
-   "func_310828",
-   "func_3108D0",
-   "func_3164D8",
-   "func_353AC8",
-   "func_43F768"
-  ]
- },
- {
-  "file": "Poll__10BeatMasterf_0x2710f8.cpp",
-  "symbol": "Poll__10BeatMasterf",
-  "demangled": "BeatMaster::Poll(float)",
-  "addr": "0x2710f8",
-  "score": 374.35,
-  "kind": "",
-  "insns": 79,
-  "dispatch": 70,
-  "labels": 70,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 9,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 23,
-  "stores": 10,
-  "mult_div": 0,
-  "distinct_mem": 24,
-  "callees": [
-   "func_271340",
-   "func_271410",
-   "func_2715E8",
-   "func_27E270",
-   "func_283C60"
-  ]
- },
- {
   "file": "Terminate__5Synth_0x2607c8.cpp",
   "symbol": "Terminate__5Synth",
   "demangled": "Synth::Terminate()",
@@ -278223,6 +278165,34 @@
   "mult_div": 0,
   "distinct_mem": 11,
   "callees": []
+ },
+ {
+  "file": "Poll__10BeatMasterf_0x2710f8.cpp",
+  "symbol": "Poll__10BeatMasterf",
+  "demangled": "BeatMaster::Poll(float)",
+  "addr": "0x2710f8",
+  "score": 375.55,
+  "kind": "",
+  "insns": 79,
+  "dispatch": 70,
+  "labels": 70,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 10,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 23,
+  "stores": 10,
+  "mult_div": 0,
+  "distinct_mem": 24,
+  "callees": [
+   "func_271340",
+   "func_271410",
+   "func_2715E8",
+   "func_27E270",
+   "func_283C60"
+  ]
  },
  {
   "file": "UpdateMeshes__10UIResourceG6Symbol_0x24f120.cpp",
@@ -279010,6 +278980,36 @@
   ]
  },
  {
+  "file": "NextLook__8CharEyes_0x182b28.cpp",
+  "symbol": "NextLook__8CharEyes",
+  "demangled": "CharEyes::NextLook()",
+  "addr": "0x182b28",
+  "score": 383.05,
+  "kind": "",
+  "insns": 169,
+  "dispatch": 10,
+  "labels": 14,
+  "calls": 9,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 89,
+  "cop2": 6,
+  "branches": 5,
+  "loads": 48,
+  "stores": 30,
+  "mult_div": 0,
+  "distinct_mem": 36,
+  "callees": [
+   "func_182AA8",
+   "func_20B5B0",
+   "func_310828",
+   "func_3108D0",
+   "func_3164D8",
+   "func_353AC8",
+   "func_43F768"
+  ]
+ },
+ {
   "file": "Copy__6RndSetPCQ23Hmx6ObjectQ33Hmx6Object8CopyType_0x204e28.cpp",
   "symbol": "Copy__6RndSetPCQ23Hmx6ObjectQ33Hmx6Object8CopyType",
   "demangled": "RndSet::Copy(Hmx::Object * const, Hmx::Object::CopyType)",
@@ -279163,36 +279163,6 @@
   ]
  },
  {
-  "file": "SoloSwing__23MelodicTrackWatcherImplfi_0x28f680.cpp",
-  "symbol": "SoloSwing__23MelodicTrackWatcherImplfi",
-  "demangled": "MelodicTrackWatcherImpl::SoloSwing(float, int)",
-  "addr": "0x28f680",
-  "score": 385.05,
-  "kind": "",
-  "insns": 81,
-  "dispatch": 70,
-  "labels": 70,
-  "calls": 9,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 10,
-  "cop2": 0,
-  "branches": 3,
-  "loads": 19,
-  "stores": 10,
-  "mult_div": 0,
-  "distinct_mem": 17,
-  "callees": [
-   "func_25E478",
-   "func_25E510",
-   "func_282378",
-   "func_283E50",
-   "func_2EBDA8",
-   "func_369508",
-   "func_3E84F0"
-  ]
- },
- {
   "file": "inflate_fast_0x338708.cpp",
   "symbol": "inflate_fast",
   "demangled": "inflate_fast",
@@ -279307,36 +279277,6 @@
   ]
  },
  {
-  "file": "CharUtlFootExtent__FP8CharClipR3BoxRffb_0x19c028.cpp",
-  "symbol": "CharUtlFootExtent__FP8CharClipR3BoxRffb",
-  "demangled": "CharUtlFootExtent(CharClip *, Box &, float &, float, bool)",
-  "addr": "0x19c028",
-  "score": 386.2,
-  "kind": "",
-  "insns": 150,
-  "dispatch": 12,
-  "labels": 16,
-  "calls": 9,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 39,
-  "cop2": 13,
-  "branches": 3,
-  "loads": 33,
-  "stores": 25,
-  "mult_div": 0,
-  "distinct_mem": 39,
-  "callees": [
-   "func_19BD10",
-   "func_19BEC0",
-   "func_19BFD8",
-   "func_1BAC88",
-   "func_329AE8",
-   "func_32F008",
-   "func_39A2F0"
-  ]
- },
- {
   "file": "ps2____16CharUtlBoneSaver_0x19b078.cpp",
   "symbol": "ps2____16CharUtlBoneSaver",
   "demangled": "CharUtlBoneSaver::ps2__()",
@@ -279365,6 +279305,36 @@
    "func_35AA90",
    "func_36A2A8",
    "func_3873B0"
+  ]
+ },
+ {
+  "file": "SoloSwing__23MelodicTrackWatcherImplfi_0x28f680.cpp",
+  "symbol": "SoloSwing__23MelodicTrackWatcherImplfi",
+  "demangled": "MelodicTrackWatcherImpl::SoloSwing(float, int)",
+  "addr": "0x28f680",
+  "score": 386.25,
+  "kind": "",
+  "insns": 81,
+  "dispatch": 70,
+  "labels": 70,
+  "calls": 9,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 11,
+  "cop2": 0,
+  "branches": 3,
+  "loads": 19,
+  "stores": 10,
+  "mult_div": 0,
+  "distinct_mem": 17,
+  "callees": [
+   "func_25E478",
+   "func_25E510",
+   "func_282378",
+   "func_283E50",
+   "func_2EBDA8",
+   "func_369508",
+   "func_3E84F0"
   ]
  },
  {
@@ -280228,6 +280198,36 @@
    "func_3273F8",
    "func_3274D0",
    "func_3EB608"
+  ]
+ },
+ {
+  "file": "CharUtlFootExtent__FP8CharClipR3BoxRffb_0x19c028.cpp",
+  "symbol": "CharUtlFootExtent__FP8CharClipR3BoxRffb",
+  "demangled": "CharUtlFootExtent(CharClip *, Box &, float &, float, bool)",
+  "addr": "0x19c028",
+  "score": 395.2,
+  "kind": "",
+  "insns": 150,
+  "dispatch": 12,
+  "labels": 16,
+  "calls": 9,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 39,
+  "cop2": 14,
+  "branches": 3,
+  "loads": 33,
+  "stores": 25,
+  "mult_div": 0,
+  "distinct_mem": 39,
+  "callees": [
+   "func_19BD10",
+   "func_19BEC0",
+   "func_19BFD8",
+   "func_1BAC88",
+   "func_329AE8",
+   "func_32F008",
+   "func_39A2F0"
   ]
  },
  {
@@ -281425,7 +281425,7 @@
   "symbol": "Increment__9ParamEditP9DataArray",
   "demangled": "ParamEdit::Increment(DataArray *)",
   "addr": "0x238648",
-  "score": 405.4,
+  "score": 406.6,
   "kind": "",
   "insns": 176,
   "dispatch": 25,
@@ -281433,7 +281433,7 @@
   "calls": 25,
   "tail_calls": 0,
   "indirect": 0,
-  "cop1": 21,
+  "cop1": 22,
   "cop2": 0,
   "branches": 16,
   "loads": 20,
@@ -284486,33 +284486,6 @@
   ]
  },
  {
-  "file": "OnMidiMessageVocalNoteOff__10SongParseriUc_0x285370.cpp",
-  "symbol": "OnMidiMessageVocalNoteOff__10SongParseriUc",
-  "demangled": "SongParser::OnMidiMessageVocalNoteOff(int, char  unsigned)",
-  "addr": "0x285370",
-  "score": 434.7,
-  "kind": "",
-  "insns": 88,
-  "dispatch": 77,
-  "labels": 77,
-  "calls": 8,
-  "tail_calls": 0,
-  "indirect": 3,
-  "cop1": 14,
-  "cop2": 0,
-  "branches": 2,
-  "loads": 23,
-  "stores": 8,
-  "mult_div": 0,
-  "distinct_mem": 16,
-  "callees": [
-   "func_2845B8",
-   "func_2866F0",
-   "func_2EBDA8",
-   "func_3680E8"
-  ]
- },
- {
   "file": "Stop__9MetaMusic_0x2594a0.cpp",
   "symbol": "Stop__9MetaMusic",
   "demangled": "MetaMusic::Stop()",
@@ -284617,6 +284590,33 @@
    "func_2EBDA8",
    "func_2FAC90",
    "func_304FB0",
+   "func_3680E8"
+  ]
+ },
+ {
+  "file": "OnMidiMessageVocalNoteOff__10SongParseriUc_0x285370.cpp",
+  "symbol": "OnMidiMessageVocalNoteOff__10SongParseriUc",
+  "demangled": "SongParser::OnMidiMessageVocalNoteOff(int, char  unsigned)",
+  "addr": "0x285370",
+  "score": 435.9,
+  "kind": "",
+  "insns": 88,
+  "dispatch": 77,
+  "labels": 77,
+  "calls": 8,
+  "tail_calls": 0,
+  "indirect": 3,
+  "cop1": 15,
+  "cop2": 0,
+  "branches": 2,
+  "loads": 23,
+  "stores": 8,
+  "mult_div": 0,
+  "distinct_mem": 16,
+  "callees": [
+   "func_2845B8",
+   "func_2866F0",
+   "func_2EBDA8",
    "func_3680E8"
   ]
  },
@@ -285022,35 +285022,6 @@
   ]
  },
  {
-  "file": "SetFullness__10WorldCrowdff_0x2af3f8.cpp",
-  "symbol": "SetFullness__10WorldCrowdff",
-  "demangled": "WorldCrowd::SetFullness(float, float)",
-  "addr": "0x2af3f8",
-  "score": 441.4,
-  "kind": "accessor",
-  "insns": 290,
-  "dispatch": 17,
-  "labels": 32,
-  "calls": 9,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 21,
-  "cop2": 0,
-  "branches": 31,
-  "loads": 85,
-  "stores": 50,
-  "mult_div": 5,
-  "distinct_mem": 67,
-  "callees": [
-   "func_1F6278",
-   "func_2F2EA8",
-   "func_326F00",
-   "func_376E80",
-   "func_3C39D0",
-   "func_409278"
-  ]
- },
- {
   "file": "ps2___as__Q211stlpmtx_stdt6vector2ZQ218FaceFxLipSyncServo11RegisterMapZQ211stlpmtx_stdt_0x3a75d0.cpp",
   "symbol": "ps2___as__Q211stlpmtx_stdt6vector2ZQ218FaceFxLipSyncServo11RegisterMapZQ211stlpmtx_stdt",
   "demangled": "ps2___as__Q211stlpmtx_stdt6vector2ZQ218FaceFxLipSyncServo11RegisterMapZQ211stlpmtx_stdt",
@@ -285238,6 +285209,35 @@
    "func_324798",
    "func_326F00",
    "func_3757D8"
+  ]
+ },
+ {
+  "file": "SetFullness__10WorldCrowdff_0x2af3f8.cpp",
+  "symbol": "SetFullness__10WorldCrowdff",
+  "demangled": "WorldCrowd::SetFullness(float, float)",
+  "addr": "0x2af3f8",
+  "score": 443.8,
+  "kind": "accessor",
+  "insns": 290,
+  "dispatch": 17,
+  "labels": 32,
+  "calls": 9,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 23,
+  "cop2": 0,
+  "branches": 31,
+  "loads": 85,
+  "stores": 50,
+  "mult_div": 5,
+  "distinct_mem": 67,
+  "callees": [
+   "func_1F6278",
+   "func_2F2EA8",
+   "func_326F00",
+   "func_376E80",
+   "func_3C39D0",
+   "func_409278"
   ]
  },
  {
@@ -286535,38 +286535,6 @@
   ]
  },
  {
-  "file": "Load__Q211LightPreset14SpotlightEntryR9BinStream_0x2cd908.cpp",
-  "symbol": "Load__Q211LightPreset14SpotlightEntryR9BinStream",
-  "demangled": "LightPreset::SpotlightEntry::Load(BinStream &)",
-  "addr": "0x2cd908",
-  "score": 455.1,
-  "kind": "",
-  "insns": 236,
-  "dispatch": 22,
-  "labels": 39,
-  "calls": 22,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 17,
-  "cop2": 0,
-  "branches": 25,
-  "loads": 45,
-  "stores": 21,
-  "mult_div": 0,
-  "distinct_mem": 36,
-  "callees": [
-   "func_1020A8",
-   "func_3093D8",
-   "func_310828",
-   "func_3108D0",
-   "func_318D70",
-   "func_318E08",
-   "func_319020",
-   "func_319258",
-   "func_326F00"
-  ]
- },
- {
   "file": "ps2____12CreditsPanel_0x14b260.cpp",
   "symbol": "ps2____12CreditsPanel",
   "demangled": "CreditsPanel::ps2__()",
@@ -287105,6 +287073,38 @@
    "func_305760",
    "func_305A60",
    "func_3108D0"
+  ]
+ },
+ {
+  "file": "Load__Q211LightPreset14SpotlightEntryR9BinStream_0x2cd908.cpp",
+  "symbol": "Load__Q211LightPreset14SpotlightEntryR9BinStream",
+  "demangled": "LightPreset::SpotlightEntry::Load(BinStream &)",
+  "addr": "0x2cd908",
+  "score": 459.9,
+  "kind": "",
+  "insns": 236,
+  "dispatch": 22,
+  "labels": 39,
+  "calls": 22,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 21,
+  "cop2": 0,
+  "branches": 25,
+  "loads": 45,
+  "stores": 21,
+  "mult_div": 0,
+  "distinct_mem": 36,
+  "callees": [
+   "func_1020A8",
+   "func_3093D8",
+   "func_310828",
+   "func_3108D0",
+   "func_318D70",
+   "func_318E08",
+   "func_319020",
+   "func_319258",
+   "func_326F00"
   ]
  },
  {
@@ -293346,32 +293346,6 @@
   ]
  },
  {
-  "file": "CharDebugDraw__Fi_0x16c710.cpp",
-  "symbol": "CharDebugDraw__Fi",
-  "demangled": "CharDebugDraw(int)",
-  "addr": "0x16c710",
-  "score": 483.85,
-  "kind": "",
-  "insns": 109,
-  "dispatch": 93,
-  "labels": 93,
-  "calls": 6,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 12,
-  "cop2": 0,
-  "branches": 11,
-  "loads": 29,
-  "stores": 10,
-  "mult_div": 0,
-  "distinct_mem": 18,
-  "callees": [
-   "func_1020A8",
-   "func_1A4D20",
-   "func_1A6448"
-  ]
- },
- {
   "file": "ps2___rs__H1Zt11ObjOwnerPtr1Z8CharClip_R9BinStreamRt9ObjVector1ZX01_R9BinStream_0x38b6a0.cpp",
   "symbol": "ps2___rs__H1Zt11ObjOwnerPtr1Z8CharClip_R9BinStreamRt9ObjVector1ZX01_R9BinStream",
   "demangled": "ps2___rs__H1Zt11ObjOwnerPtr1Z8CharClip_R9BinStreamRt9ObjVector1ZX01_R9BinStream",
@@ -293427,6 +293401,32 @@
    "func_3680E8",
    "func_3A9A10",
    "func_3A9F30"
+  ]
+ },
+ {
+  "file": "CharDebugDraw__Fi_0x16c710.cpp",
+  "symbol": "CharDebugDraw__Fi",
+  "demangled": "CharDebugDraw(int)",
+  "addr": "0x16c710",
+  "score": 485.05,
+  "kind": "",
+  "insns": 109,
+  "dispatch": 93,
+  "labels": 93,
+  "calls": 6,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 13,
+  "cop2": 0,
+  "branches": 11,
+  "loads": 29,
+  "stores": 10,
+  "mult_div": 0,
+  "distinct_mem": 18,
+  "callees": [
+   "func_1020A8",
+   "func_1A4D20",
+   "func_1A6448"
   ]
  },
  {
@@ -294692,39 +294692,6 @@
   ]
  },
  {
-  "file": "PlanPath__8CharWalkiiii_0x19fc80.cpp",
-  "symbol": "PlanPath__8CharWalkiiii",
-  "demangled": "CharWalk::PlanPath(int, int, int, int)",
-  "addr": "0x19fc80",
-  "score": 503.25,
-  "kind": "",
-  "insns": 203,
-  "dispatch": 14,
-  "labels": 20,
-  "calls": 12,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 49,
-  "cop2": 17,
-  "branches": 12,
-  "loads": 48,
-  "stores": 26,
-  "mult_div": 2,
-  "distinct_mem": 39,
-  "callees": [
-   "func_19B680",
-   "func_19B770",
-   "func_19B828",
-   "func_19E388",
-   "func_19EE90",
-   "func_1BAF00",
-   "func_2EBD88",
-   "func_353710",
-   "func_39D768",
-   "func_39D9B8"
-  ]
- },
- {
   "file": "ps2___introsort_loop__H4ZPQ229_GLOBAL__N_WaveFile_cppbraaaa8CuePointZQ229_GLOBAL__N_Wav_0x4342a8.cpp",
   "symbol": "ps2___introsort_loop__H4ZPQ229_GLOBAL__N_WaveFile_cppbraaaa8CuePointZQ229_GLOBAL__N_Wav",
   "demangled": "ps2___introsort_loop__H4ZPQ229_GLOBAL__N_WaveFile_cppbraaaa8CuePointZQ229_GLOBAL__N_Wav",
@@ -294864,34 +294831,6 @@
    "func_321720",
    "func_321760",
    "func_3E7ED8"
-  ]
- },
- {
-  "file": "DrawRect__5PsRndRCQ23Hmx4RectRCQ23Hmx5ColorP6RndMatPCQ23Hmx5ColorT4_0x1c0258.cpp",
-  "symbol": "DrawRect__5PsRndRCQ23Hmx4RectRCQ23Hmx5ColorP6RndMatPCQ23Hmx5ColorT4",
-  "demangled": "PsRnd::DrawRect(Hmx::Rect & const, Hmx::Color & const, RndMat *, Hmx::Color * const, T?)",
-  "addr": "0x1c0258",
-  "score": 504.35,
-  "kind": "",
-  "insns": 351,
-  "dispatch": 11,
-  "labels": 31,
-  "calls": 10,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 96,
-  "cop2": 0,
-  "branches": 26,
-  "loads": 70,
-  "stores": 71,
-  "mult_div": 0,
-  "distinct_mem": 48,
-  "callees": [
-   "func_1BDD08",
-   "func_43E320",
-   "func_43E400",
-   "func_43E988",
-   "func_43EA70"
   ]
  },
  {
@@ -295184,38 +295123,31 @@
   ]
  },
  {
-  "file": "DrawClipFeet__FP8CharClipP8RndGraphfb_0x1957a8.cpp",
-  "symbol": "DrawClipFeet__FP8CharClipP8RndGraphfb",
-  "demangled": "DrawClipFeet(CharClip *, RndGraph *, float, bool)",
-  "addr": "0x1957a8",
-  "score": 509.1,
+  "file": "DrawRect__5PsRndRCQ23Hmx4RectRCQ23Hmx5ColorP6RndMatPCQ23Hmx5ColorT4_0x1c0258.cpp",
+  "symbol": "DrawRect__5PsRndRCQ23Hmx4RectRCQ23Hmx5ColorP6RndMatPCQ23Hmx5ColorT4",
+  "demangled": "PsRnd::DrawRect(Hmx::Rect & const, Hmx::Color & const, RndMat *, Hmx::Color * const, T?)",
+  "addr": "0x1c0258",
+  "score": 509.15,
   "kind": "",
-  "insns": 236,
-  "dispatch": 18,
-  "labels": 28,
-  "calls": 16,
+  "insns": 351,
+  "dispatch": 11,
+  "labels": 31,
+  "calls": 10,
   "tail_calls": 0,
   "indirect": 0,
-  "cop1": 51,
-  "cop2": 9,
-  "branches": 11,
-  "loads": 43,
-  "stores": 46,
+  "cop1": 100,
+  "cop2": 0,
+  "branches": 26,
+  "loads": 70,
+  "stores": 71,
   "mult_div": 0,
-  "distinct_mem": 53,
+  "distinct_mem": 48,
   "callees": [
-   "func_19B680",
-   "func_19BD10",
-   "func_19BEC0",
-   "func_19C908",
-   "func_19ECE8",
-   "func_1BAC88",
-   "func_1E18E0",
-   "func_1E19B8",
-   "func_1E1A90",
-   "func_321760",
-   "func_32F008",
-   "func_353710"
+   "func_1BDD08",
+   "func_43E320",
+   "func_43E400",
+   "func_43E988",
+   "func_43EA70"
   ]
  },
  {
@@ -295345,6 +295277,41 @@
    "func_324798",
    "func_325698",
    "func_325820"
+  ]
+ },
+ {
+  "file": "DrawClipFeet__FP8CharClipP8RndGraphfb_0x1957a8.cpp",
+  "symbol": "DrawClipFeet__FP8CharClipP8RndGraphfb",
+  "demangled": "DrawClipFeet(CharClip *, RndGraph *, float, bool)",
+  "addr": "0x1957a8",
+  "score": 511.5,
+  "kind": "",
+  "insns": 236,
+  "dispatch": 18,
+  "labels": 28,
+  "calls": 16,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 53,
+  "cop2": 9,
+  "branches": 11,
+  "loads": 43,
+  "stores": 46,
+  "mult_div": 0,
+  "distinct_mem": 53,
+  "callees": [
+   "func_19B680",
+   "func_19BD10",
+   "func_19BEC0",
+   "func_19C908",
+   "func_19ECE8",
+   "func_1BAC88",
+   "func_1E18E0",
+   "func_1E19B8",
+   "func_1E1A90",
+   "func_321760",
+   "func_32F008",
+   "func_353710"
   ]
  },
  {
@@ -296392,6 +296359,39 @@
   ]
  },
  {
+  "file": "PlanPath__8CharWalkiiii_0x19fc80.cpp",
+  "symbol": "PlanPath__8CharWalkiiii",
+  "demangled": "CharWalk::PlanPath(int, int, int, int)",
+  "addr": "0x19fc80",
+  "score": 530.25,
+  "kind": "",
+  "insns": 203,
+  "dispatch": 14,
+  "labels": 20,
+  "calls": 12,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 49,
+  "cop2": 20,
+  "branches": 12,
+  "loads": 48,
+  "stores": 26,
+  "mult_div": 2,
+  "distinct_mem": 39,
+  "callees": [
+   "func_19B680",
+   "func_19B770",
+   "func_19B828",
+   "func_19E388",
+   "func_19EE90",
+   "func_1BAF00",
+   "func_2EBD88",
+   "func_353710",
+   "func_39D768",
+   "func_39D9B8"
+  ]
+ },
+ {
   "file": "ps2____12EventTrigger_0x4136a8.cpp",
   "symbol": "ps2____12EventTrigger",
   "demangled": "EventTrigger::ps2__()",
@@ -296643,39 +296643,6 @@
   ]
  },
  {
-  "file": "SoloSwing__24DrumFillTrackWatcherImplfi_0x28aa78.cpp",
-  "symbol": "SoloSwing__24DrumFillTrackWatcherImplfi",
-  "demangled": "DrumFillTrackWatcherImpl::SoloSwing(float, int)",
-  "addr": "0x28aa78",
-  "score": 531.7,
-  "kind": "",
-  "insns": 114,
-  "dispatch": 96,
-  "labels": 96,
-  "calls": 13,
-  "tail_calls": 0,
-  "indirect": 2,
-  "cop1": 5,
-  "cop2": 0,
-  "branches": 4,
-  "loads": 30,
-  "stores": 6,
-  "mult_div": 0,
-  "distinct_mem": 23,
-  "callees": [
-   "func_259918",
-   "func_282118",
-   "func_2EBDA8",
-   "func_2FAC90",
-   "func_2FB898",
-   "func_305308",
-   "func_305800",
-   "func_326F00",
-   "func_3680E8",
-   "func_3E8EC8"
-  ]
- },
- {
   "file": "Configure__11CrowdRating10Difficulty_0x128f38.cpp",
   "symbol": "Configure__11CrowdRating10Difficulty",
   "demangled": "CrowdRating::Configure(Difficulty)",
@@ -296770,6 +296737,39 @@
    "func_305800",
    "func_305A60",
    "func_368720"
+  ]
+ },
+ {
+  "file": "SoloSwing__24DrumFillTrackWatcherImplfi_0x28aa78.cpp",
+  "symbol": "SoloSwing__24DrumFillTrackWatcherImplfi",
+  "demangled": "DrumFillTrackWatcherImpl::SoloSwing(float, int)",
+  "addr": "0x28aa78",
+  "score": 532.9,
+  "kind": "",
+  "insns": 114,
+  "dispatch": 96,
+  "labels": 96,
+  "calls": 13,
+  "tail_calls": 0,
+  "indirect": 2,
+  "cop1": 6,
+  "cop2": 0,
+  "branches": 4,
+  "loads": 30,
+  "stores": 6,
+  "mult_div": 0,
+  "distinct_mem": 23,
+  "callees": [
+   "func_259918",
+   "func_282118",
+   "func_2EBDA8",
+   "func_2FAC90",
+   "func_2FB898",
+   "func_305308",
+   "func_305800",
+   "func_326F00",
+   "func_3680E8",
+   "func_3E8EC8"
   ]
  },
  {
@@ -296928,34 +296928,6 @@
   "callees": []
  },
  {
-  "file": "ProcessPicture__5Video_0x255180.cpp",
-  "symbol": "ProcessPicture__5Video",
-  "demangled": "Video::ProcessPicture()",
-  "addr": "0x255180",
-  "score": 535.45,
-  "kind": "",
-  "insns": 115,
-  "dispatch": 100,
-  "labels": 100,
-  "calls": 8,
-  "tail_calls": 0,
-  "indirect": 3,
-  "cop1": 5,
-  "cop2": 0,
-  "branches": 6,
-  "loads": 40,
-  "stores": 9,
-  "mult_div": 1,
-  "distinct_mem": 22,
-  "callees": [
-   "func_1BDCE8",
-   "func_1C5700",
-   "func_1C5880",
-   "func_255118",
-   "func_33A0E8"
-  ]
- },
- {
   "file": "PropSync__H1ZQ216CompositeTexture5Layer_Rt7ObjList1ZX01R8DataNodeP9DataArrayi6PropOp_b_0x424ea8.cpp",
   "symbol": "PropSync__H1ZQ216CompositeTexture5Layer_Rt7ObjList1ZX01R8DataNodeP9DataArrayi6PropOp_b",
   "demangled": "PropSync__H1ZQ216CompositeTexture5Layer_Rt7ObjList1ZX01R8DataNodeP9DataArrayi6PropOp_b",
@@ -296988,6 +296960,34 @@
    "func_325630",
    "func_325820",
    "func_35A0CC"
+  ]
+ },
+ {
+  "file": "ProcessPicture__5Video_0x255180.cpp",
+  "symbol": "ProcessPicture__5Video",
+  "demangled": "Video::ProcessPicture()",
+  "addr": "0x255180",
+  "score": 536.65,
+  "kind": "",
+  "insns": 115,
+  "dispatch": 100,
+  "labels": 100,
+  "calls": 8,
+  "tail_calls": 0,
+  "indirect": 3,
+  "cop1": 6,
+  "cop2": 0,
+  "branches": 6,
+  "loads": 40,
+  "stores": 9,
+  "mult_div": 1,
+  "distinct_mem": 22,
+  "callees": [
+   "func_1BDCE8",
+   "func_1C5700",
+   "func_1C5880",
+   "func_255118",
+   "func_33A0E8"
   ]
  },
  {
@@ -299864,34 +299864,6 @@
   ]
  },
  {
-  "file": "OnLoseTeleport__15GuitarCharacterP9DataArray_0x10e0d8.cpp",
-  "symbol": "OnLoseTeleport__15GuitarCharacterP9DataArray",
-  "demangled": "GuitarCharacter::OnLoseTeleport(DataArray *)",
-  "addr": "0x10e0d8",
-  "score": 601.45,
-  "kind": "",
-  "insns": 123,
-  "dispatch": 106,
-  "labels": 106,
-  "calls": 10,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 7,
-  "cop2": 7,
-  "branches": 5,
-  "loads": 23,
-  "stores": 17,
-  "mult_div": 0,
-  "distinct_mem": 20,
-  "callees": [
-   "func_1020A8",
-   "func_16EDD8",
-   "func_1AFB98",
-   "func_3093D8",
-   "func_43F768"
-  ]
- },
- {
   "file": "OnSetPos__7CamShotP9DataArray_0x2a5640.cpp",
   "symbol": "OnSetPos__7CamShotP9DataArray",
   "demangled": "CamShot::OnSetPos(DataArray *)",
@@ -300132,6 +300104,34 @@
    "func_2EBDA8",
    "func_32DB38",
    "func_3680E8"
+  ]
+ },
+ {
+  "file": "OnLoseTeleport__15GuitarCharacterP9DataArray_0x10e0d8.cpp",
+  "symbol": "OnLoseTeleport__15GuitarCharacterP9DataArray",
+  "demangled": "GuitarCharacter::OnLoseTeleport(DataArray *)",
+  "addr": "0x10e0d8",
+  "score": 610.45,
+  "kind": "",
+  "insns": 123,
+  "dispatch": 106,
+  "labels": 106,
+  "calls": 10,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 7,
+  "cop2": 8,
+  "branches": 5,
+  "loads": 23,
+  "stores": 17,
+  "mult_div": 0,
+  "distinct_mem": 20,
+  "callees": [
+   "func_1020A8",
+   "func_16EDD8",
+   "func_1AFB98",
+   "func_3093D8",
+   "func_43F768"
   ]
  },
  {
@@ -300704,39 +300704,6 @@
   ]
  },
  {
-  "file": "SyncBitmap__5PsTex_0x1c6bd0.cpp",
-  "symbol": "SyncBitmap__5PsTex",
-  "demangled": "PsTex::SyncBitmap()",
-  "addr": "0x1c6bd0",
-  "score": 624.5,
-  "kind": "",
-  "insns": 652,
-  "dispatch": 22,
-  "labels": 51,
-  "calls": 14,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 8,
-  "cop2": 0,
-  "branches": 50,
-  "loads": 73,
-  "stores": 45,
-  "mult_div": 0,
-  "distinct_mem": 37,
-  "callees": [
-   "func_1BDCE8",
-   "func_1C5700",
-   "func_1C6840",
-   "func_1C7608",
-   "func_1D4CA8",
-   "func_2EBDA8",
-   "func_320E98",
-   "func_3680E8",
-   "func_3B0228",
-   "func_3B0710"
-  ]
- },
- {
   "file": "OnMsg__7OptionsRC13ButtonDownMsg_0x10f9c8.cpp",
   "symbol": "OnMsg__7OptionsRC13ButtonDownMsg",
   "demangled": "Options::OnMsg(ButtonDownMsg & const)",
@@ -300894,6 +300861,39 @@
    "func_29E7E8",
    "func_3A6578",
    "func_3A6628"
+  ]
+ },
+ {
+  "file": "SyncBitmap__5PsTex_0x1c6bd0.cpp",
+  "symbol": "SyncBitmap__5PsTex",
+  "demangled": "PsTex::SyncBitmap()",
+  "addr": "0x1c6bd0",
+  "score": 626.9,
+  "kind": "",
+  "insns": 652,
+  "dispatch": 22,
+  "labels": 51,
+  "calls": 14,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 10,
+  "cop2": 0,
+  "branches": 50,
+  "loads": 73,
+  "stores": 45,
+  "mult_div": 0,
+  "distinct_mem": 37,
+  "callees": [
+   "func_1BDCE8",
+   "func_1C5700",
+   "func_1C6840",
+   "func_1C7608",
+   "func_1D4CA8",
+   "func_2EBDA8",
+   "func_320E98",
+   "func_3680E8",
+   "func_3B0228",
+   "func_3B0710"
   ]
  },
  {
@@ -301695,35 +301695,6 @@
   ]
  },
  {
-  "file": "SetFrame__13RndAnimFilterff_0x1d3190.cpp",
-  "symbol": "SetFrame__13RndAnimFilterff",
-  "demangled": "RndAnimFilter::SetFrame(float, float)",
-  "addr": "0x1d3190",
-  "score": 645.3,
-  "kind": "accessor",
-  "insns": 136,
-  "dispatch": 119,
-  "labels": 119,
-  "calls": 7,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 70,
-  "cop2": 0,
-  "branches": 10,
-  "loads": 21,
-  "stores": 8,
-  "mult_div": 0,
-  "distinct_mem": 17,
-  "callees": [
-   "func_1D30E0",
-   "func_1D3160",
-   "func_2EBDA8",
-   "func_3538F0",
-   "func_353F88",
-   "func_3680E8"
-  ]
- },
- {
   "file": "OnMsg__16GuitarControllerRC13ButtonDownMsg_0x273f20.cpp",
   "symbol": "OnMsg__16GuitarControllerRC13ButtonDownMsg",
   "demangled": "GuitarController::OnMsg(ButtonDownMsg & const)",
@@ -301959,6 +301930,35 @@
    "func_3108D0",
    "func_324798",
    "func_324860",
+   "func_3680E8"
+  ]
+ },
+ {
+  "file": "SetFrame__13RndAnimFilterff_0x1d3190.cpp",
+  "symbol": "SetFrame__13RndAnimFilterff",
+  "demangled": "RndAnimFilter::SetFrame(float, float)",
+  "addr": "0x1d3190",
+  "score": 646.5,
+  "kind": "accessor",
+  "insns": 136,
+  "dispatch": 119,
+  "labels": 119,
+  "calls": 7,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 71,
+  "cop2": 0,
+  "branches": 10,
+  "loads": 21,
+  "stores": 8,
+  "mult_div": 0,
+  "distinct_mem": 17,
+  "callees": [
+   "func_1D30E0",
+   "func_1D3160",
+   "func_2EBDA8",
+   "func_3538F0",
+   "func_353F88",
    "func_3680E8"
   ]
  },
@@ -304222,36 +304222,6 @@
   ]
  },
  {
-  "file": "TestPoint__3RndRC7Vector3P8RndFlare_0x2014a0.cpp",
-  "symbol": "TestPoint__3RndRC7Vector3P8RndFlare",
-  "demangled": "Rnd::TestPoint(Vector3 & const, RndFlare *)",
-  "addr": "0x2014a0",
-  "score": 707.25,
-  "kind": "",
-  "insns": 155,
-  "dispatch": 135,
-  "labels": 135,
-  "calls": 8,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 32,
-  "cop2": 0,
-  "branches": 7,
-  "loads": 35,
-  "stores": 35,
-  "mult_div": 0,
-  "distinct_mem": 41,
-  "callees": [
-   "func_1D7948",
-   "func_2EBD88",
-   "func_321720",
-   "func_35A530",
-   "func_35A67C",
-   "func_368950",
-   "func_3C5408"
-  ]
- },
- {
   "file": "ps2___ieee754_powf_0x355cb0.cpp",
   "symbol": "ps2___ieee754_powf",
   "demangled": "ps2___ieee754_powf",
@@ -304310,6 +304280,36 @@
    "func_304FB0",
    "func_305148",
    "func_305308"
+  ]
+ },
+ {
+  "file": "TestPoint__3RndRC7Vector3P8RndFlare_0x2014a0.cpp",
+  "symbol": "TestPoint__3RndRC7Vector3P8RndFlare",
+  "demangled": "Rnd::TestPoint(Vector3 & const, RndFlare *)",
+  "addr": "0x2014a0",
+  "score": 709.65,
+  "kind": "",
+  "insns": 155,
+  "dispatch": 135,
+  "labels": 135,
+  "calls": 8,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 34,
+  "cop2": 0,
+  "branches": 7,
+  "loads": 35,
+  "stores": 35,
+  "mult_div": 0,
+  "distinct_mem": 41,
+  "callees": [
+   "func_1D7948",
+   "func_2EBD88",
+   "func_321720",
+   "func_35A530",
+   "func_35A67C",
+   "func_368950",
+   "func_3C5408"
   ]
  },
  {
@@ -305109,66 +305109,6 @@
   ]
  },
  {
-  "file": "Shake__7CamShotffRC7Vector2R7Vector3T4_0x2a4ce8.cpp",
-  "symbol": "Shake__7CamShotffRC7Vector2R7Vector3T4",
-  "demangled": "CamShot::Shake(float, float, Vector2 & const, Vector3 &, T?)",
-  "addr": "0x2a4ce8",
-  "score": 744.85,
-  "kind": "",
-  "insns": 309,
-  "dispatch": 7,
-  "labels": 13,
-  "calls": 7,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 220,
-  "cop2": 26,
-  "branches": 0,
-  "loads": 89,
-  "stores": 60,
-  "mult_div": 0,
-  "distinct_mem": 42,
-  "callees": [
-   "func_32DB60",
-   "func_32DB80",
-   "func_330518"
-  ]
- },
- {
-  "file": "Select__5PsCam_0x1c1770.cpp",
-  "symbol": "Select__5PsCam",
-  "demangled": "PsCam::Select()",
-  "addr": "0x1c1770",
-  "score": 746.5,
-  "kind": "",
-  "insns": 488,
-  "dispatch": 20,
-  "labels": 36,
-  "calls": 19,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 189,
-  "cop2": 0,
-  "branches": 13,
-  "loads": 77,
-  "stores": 71,
-  "mult_div": 0,
-  "distinct_mem": 69,
-  "callees": [
-   "func_1BF048",
-   "func_1C6008",
-   "func_1C61E8",
-   "func_1D7A30",
-   "func_2EBDA8",
-   "func_32F188",
-   "func_3680E8",
-   "func_43E320",
-   "func_43E860",
-   "func_43E988",
-   "func_43F768"
-  ]
- },
- {
   "file": "Handle__12RndTransAnimP9DataArrayb_0x210390.cpp",
   "symbol": "Handle__12RndTransAnimP9DataArrayb",
   "demangled": "RndTransAnim::Handle(DataArray *, bool)",
@@ -305327,6 +305267,40 @@
    "func_3164C0",
    "func_3680E8",
    "func_40E140"
+  ]
+ },
+ {
+  "file": "Select__5PsCam_0x1c1770.cpp",
+  "symbol": "Select__5PsCam",
+  "demangled": "PsCam::Select()",
+  "addr": "0x1c1770",
+  "score": 751.3,
+  "kind": "",
+  "insns": 488,
+  "dispatch": 20,
+  "labels": 36,
+  "calls": 19,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 193,
+  "cop2": 0,
+  "branches": 13,
+  "loads": 77,
+  "stores": 71,
+  "mult_div": 0,
+  "distinct_mem": 69,
+  "callees": [
+   "func_1BF048",
+   "func_1C6008",
+   "func_1C61E8",
+   "func_1D7A30",
+   "func_2EBDA8",
+   "func_32F188",
+   "func_3680E8",
+   "func_43E320",
+   "func_43E860",
+   "func_43E988",
+   "func_43F768"
   ]
  },
  {
@@ -305642,6 +305616,32 @@
   ]
  },
  {
+  "file": "Shake__7CamShotffRC7Vector2R7Vector3T4_0x2a4ce8.cpp",
+  "symbol": "Shake__7CamShotffRC7Vector2R7Vector3T4",
+  "demangled": "CamShot::Shake(float, float, Vector2 & const, Vector3 &, T?)",
+  "addr": "0x2a4ce8",
+  "score": 762.85,
+  "kind": "",
+  "insns": 309,
+  "dispatch": 7,
+  "labels": 13,
+  "calls": 7,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 220,
+  "cop2": 28,
+  "branches": 0,
+  "loads": 89,
+  "stores": 60,
+  "mult_div": 0,
+  "distinct_mem": 42,
+  "callees": [
+   "func_32DB60",
+   "func_32DB80",
+   "func_330518"
+  ]
+ },
+ {
   "file": "Show__6SplashRC8FilePath_0x24b970.cpp",
   "symbol": "Show__6SplashRC8FilePath",
   "demangled": "Splash::Show(FilePath & const)",
@@ -305830,37 +305830,6 @@
    "func_376E80",
    "func_41C3F8",
    "func_424230"
-  ]
- },
- {
-  "file": "MakeWorldSphere__9CharacterR6Sphereb_0x16e0b8.cpp",
-  "symbol": "MakeWorldSphere__9CharacterR6Sphereb",
-  "demangled": "Character::MakeWorldSphere(Sphere &, bool)",
-  "addr": "0x16e0b8",
-  "score": 771.6,
-  "kind": "",
-  "insns": 298,
-  "dispatch": 29,
-  "labels": 41,
-  "calls": 26,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 22,
-  "cop2": 25,
-  "branches": 26,
-  "loads": 73,
-  "stores": 56,
-  "mult_div": 0,
-  "distinct_mem": 49,
-  "callees": [
-   "func_1020A8",
-   "func_19CAB0",
-   "func_30A348",
-   "func_32CAC0",
-   "func_35AA90",
-   "func_36A2A8",
-   "func_3873B0",
-   "func_43F768"
   ]
  },
  {
@@ -306082,40 +306051,6 @@
   ]
  },
  {
-  "file": "Poll__10CharIKFoot_0x1889f0.cpp",
-  "symbol": "Poll__10CharIKFoot",
-  "demangled": "CharIKFoot::Poll()",
-  "addr": "0x1889f0",
-  "score": 778.2,
-  "kind": "",
-  "insns": 334,
-  "dispatch": 36,
-  "labels": 50,
-  "calls": 36,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 67,
-  "cop2": 12,
-  "branches": 23,
-  "loads": 75,
-  "stores": 22,
-  "mult_div": 0,
-  "distinct_mem": 34,
-  "callees": [
-   "func_1896B8",
-   "func_20B620",
-   "func_2EBDA8",
-   "func_310828",
-   "func_3108D0",
-   "func_325258",
-   "func_32E630",
-   "func_3538F0",
-   "func_3680E8",
-   "func_396FE8",
-   "func_43F768"
-  ]
- },
- {
   "file": "SyncProperty__10BandButtonP9DataArrayR8DataNode6PropOp_0x2d4d58.cpp",
   "symbol": "SyncProperty__10BandButtonP9DataArrayR8DataNode6PropOp",
   "demangled": "BandButton::SyncProperty(DataArray *, DataNode &, PropOp)",
@@ -306282,6 +306217,40 @@
   ]
  },
  {
+  "file": "Poll__10CharIKFoot_0x1889f0.cpp",
+  "symbol": "Poll__10CharIKFoot",
+  "demangled": "CharIKFoot::Poll()",
+  "addr": "0x1889f0",
+  "score": 787.2,
+  "kind": "",
+  "insns": 334,
+  "dispatch": 36,
+  "labels": 50,
+  "calls": 36,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 67,
+  "cop2": 13,
+  "branches": 23,
+  "loads": 75,
+  "stores": 22,
+  "mult_div": 0,
+  "distinct_mem": 34,
+  "callees": [
+   "func_1896B8",
+   "func_20B620",
+   "func_2EBDA8",
+   "func_310828",
+   "func_3108D0",
+   "func_325258",
+   "func_32E630",
+   "func_3538F0",
+   "func_3680E8",
+   "func_396FE8",
+   "func_43F768"
+  ]
+ },
+ {
   "file": "SetupWalks__15GuitarCharacter_0x10cc08.cpp",
   "symbol": "SetupWalks__15GuitarCharacter",
   "demangled": "GuitarCharacter::SetupWalks()",
@@ -306314,6 +306283,37 @@
    "func_192888",
    "func_19F728",
    "func_1AFB38"
+  ]
+ },
+ {
+  "file": "MakeWorldSphere__9CharacterR6Sphereb_0x16e0b8.cpp",
+  "symbol": "MakeWorldSphere__9CharacterR6Sphereb",
+  "demangled": "Character::MakeWorldSphere(Sphere &, bool)",
+  "addr": "0x16e0b8",
+  "score": 789.6,
+  "kind": "",
+  "insns": 298,
+  "dispatch": 29,
+  "labels": 41,
+  "calls": 26,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 22,
+  "cop2": 27,
+  "branches": 26,
+  "loads": 73,
+  "stores": 56,
+  "mult_div": 0,
+  "distinct_mem": 49,
+  "callees": [
+   "func_1020A8",
+   "func_19CAB0",
+   "func_30A348",
+   "func_32CAC0",
+   "func_35AA90",
+   "func_36A2A8",
+   "func_3873B0",
+   "func_43F768"
   ]
  },
  {
@@ -307014,31 +307014,6 @@
   ]
  },
  {
-  "file": "ps2___kernel_rem_pio2f_0x356bc0.cpp",
-  "symbol": "ps2___kernel_rem_pio2f",
-  "demangled": "ps2___kernel_rem_pio2f",
-  "addr": "0x356bc0",
-  "score": 817.0,
-  "kind": "opaque",
-  "insns": 584,
-  "dispatch": 25,
-  "labels": 80,
-  "calls": 5,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 135,
-  "cop2": 0,
-  "branches": 82,
-  "loads": 67,
-  "stores": 54,
-  "mult_div": 0,
-  "distinct_mem": 26,
-  "callees": [
-   "func_3538F0",
-   "func_357B70"
-  ]
- },
- {
   "file": "OnTeleportNext__15GuitarCharacterP9DataArray_0x10e280.cpp",
   "symbol": "OnTeleportNext__15GuitarCharacterP9DataArray",
   "demangled": "GuitarCharacter::OnTeleportNext(DataArray *)",
@@ -307192,6 +307167,31 @@
    "func_30F828",
    "func_3216B0",
    "func_3DEAD8"
+  ]
+ },
+ {
+  "file": "ps2___kernel_rem_pio2f_0x356bc0.cpp",
+  "symbol": "ps2___kernel_rem_pio2f",
+  "demangled": "ps2___kernel_rem_pio2f",
+  "addr": "0x356bc0",
+  "score": 825.4,
+  "kind": "opaque",
+  "insns": 584,
+  "dispatch": 25,
+  "labels": 80,
+  "calls": 5,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 142,
+  "cop2": 0,
+  "branches": 82,
+  "loads": 67,
+  "stores": 54,
+  "mult_div": 0,
+  "distinct_mem": 26,
+  "callees": [
+   "func_3538F0",
+   "func_357B70"
   ]
  },
  {
@@ -307728,7 +307728,7 @@
   "symbol": "DrawLine__5PsRndRC7Vector3T1RCQ23Hmx5Colorb",
   "demangled": "PsRnd::DrawLine(Vector3 & const, T?, Hmx::Color & const, bool)",
   "addr": "0x1be1c8",
-  "score": 852.2,
+  "score": 857.0,
   "kind": "",
   "insns": 182,
   "dispatch": 166,
@@ -307736,7 +307736,7 @@
   "calls": 12,
   "tail_calls": 0,
   "indirect": 2,
-  "cop1": 48,
+  "cop1": 52,
   "cop2": 0,
   "branches": 3,
   "loads": 32,
@@ -308001,41 +308001,6 @@
    "func_251E98",
    "func_30F828",
    "func_3216B0"
-  ]
- },
- {
-  "file": "RegulateWalk__8CharWalk_0x19ddb8.cpp",
-  "symbol": "RegulateWalk__8CharWalk",
-  "demangled": "CharWalk::RegulateWalk()",
-  "addr": "0x19ddb8",
-  "score": 873.0,
-  "kind": "",
-  "insns": 370,
-  "dispatch": 13,
-  "labels": 22,
-  "calls": 12,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 120,
-  "cop2": 37,
-  "branches": 11,
-  "loads": 101,
-  "stores": 42,
-  "mult_div": 6,
-  "distinct_mem": 65,
-  "callees": [
-   "func_16EDB8",
-   "func_17FAF8",
-   "func_19CE10",
-   "func_19DA90",
-   "func_19DC48",
-   "func_19FFB0",
-   "func_20B5B0",
-   "func_2EBDA8",
-   "func_3108D0",
-   "func_32DFD0",
-   "func_32EA38",
-   "func_3680E8"
   ]
  },
  {
@@ -308326,41 +308291,6 @@
   ]
  },
  {
-  "file": "SyncObjects__8WorldDir_0x2b2920.cpp",
-  "symbol": "SyncObjects__8WorldDir",
-  "demangled": "WorldDir::SyncObjects()",
-  "addr": "0x2b2920",
-  "score": 891.35,
-  "kind": "",
-  "insns": 455,
-  "dispatch": 47,
-  "labels": 83,
-  "calls": 40,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 22,
-  "cop2": 0,
-  "branches": 60,
-  "loads": 119,
-  "stores": 86,
-  "mult_div": 0,
-  "distinct_mem": 62,
-  "callees": [
-   "func_1020A8",
-   "func_247818",
-   "func_2A1048",
-   "func_2B5500",
-   "func_2EBDA8",
-   "func_30A348",
-   "func_310828",
-   "func_3108D0",
-   "func_324798",
-   "func_324860",
-   "func_3680E8",
-   "func_36A2A8"
-  ]
- },
- {
   "file": "PropSync__H1Zt6ObjPtr1Z7RndMesh_Rt9ObjVector1ZX01R8DataNodeP9DataArrayi6PropOp_b_0x41f300.cpp",
   "symbol": "PropSync__H1Zt6ObjPtr1Z7RndMesh_Rt9ObjVector1ZX01R8DataNodeP9DataArrayi6PropOp_b",
   "demangled": "PropSync__H1Zt6ObjPtr1Z7RndMesh_Rt9ObjVector1ZX01R8DataNodeP9DataArrayi6PropOp_b",
@@ -308424,6 +308354,41 @@
    "func_305800",
    "func_326F00",
    "func_35B6B8"
+  ]
+ },
+ {
+  "file": "SyncObjects__8WorldDir_0x2b2920.cpp",
+  "symbol": "SyncObjects__8WorldDir",
+  "demangled": "WorldDir::SyncObjects()",
+  "addr": "0x2b2920",
+  "score": 894.95,
+  "kind": "",
+  "insns": 455,
+  "dispatch": 47,
+  "labels": 83,
+  "calls": 40,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 25,
+  "cop2": 0,
+  "branches": 60,
+  "loads": 119,
+  "stores": 86,
+  "mult_div": 0,
+  "distinct_mem": 62,
+  "callees": [
+   "func_1020A8",
+   "func_247818",
+   "func_2A1048",
+   "func_2B5500",
+   "func_2EBDA8",
+   "func_30A348",
+   "func_310828",
+   "func_3108D0",
+   "func_324798",
+   "func_324860",
+   "func_3680E8",
+   "func_36A2A8"
   ]
  },
  {
@@ -308508,6 +308473,41 @@
    "func_3216B0",
    "func_3896E0",
    "func_39E120"
+  ]
+ },
+ {
+  "file": "RegulateWalk__8CharWalk_0x19ddb8.cpp",
+  "symbol": "RegulateWalk__8CharWalk",
+  "demangled": "CharWalk::RegulateWalk()",
+  "addr": "0x19ddb8",
+  "score": 900.0,
+  "kind": "",
+  "insns": 370,
+  "dispatch": 13,
+  "labels": 22,
+  "calls": 12,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 120,
+  "cop2": 40,
+  "branches": 11,
+  "loads": 101,
+  "stores": 42,
+  "mult_div": 6,
+  "distinct_mem": 65,
+  "callees": [
+   "func_16EDB8",
+   "func_17FAF8",
+   "func_19CE10",
+   "func_19DA90",
+   "func_19DC48",
+   "func_19FFB0",
+   "func_20B5B0",
+   "func_2EBDA8",
+   "func_3108D0",
+   "func_32DFD0",
+   "func_32EA38",
+   "func_3680E8"
   ]
  },
  {
@@ -309368,30 +309368,6 @@
   ]
  },
  {
-  "file": "SetFrame__10GridLayoutf_0x3c9c08.cpp",
-  "symbol": "SetFrame__10GridLayoutf",
-  "demangled": "GridLayout::SetFrame(float)",
-  "addr": "0x3c9c08",
-  "score": 938.05,
-  "kind": "accessor",
-  "insns": 639,
-  "dispatch": 32,
-  "labels": 83,
-  "calls": 28,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 113,
-  "cop2": 0,
-  "branches": 56,
-  "loads": 168,
-  "stores": 75,
-  "mult_div": 0,
-  "distinct_mem": 58,
-  "callees": [
-   "func_3BE670"
-  ]
- },
- {
   "file": "OnGenerateHeadline__12EndGamePanelPC9DataArray_0x14c220.cpp",
   "symbol": "OnGenerateHeadline__12EndGamePanelPC9DataArray",
   "demangled": "EndGamePanel::OnGenerateHeadline(DataArray * const)",
@@ -309458,6 +309434,30 @@
    "func_2EBDA8",
    "func_31E3E8",
    "func_31EEB8"
+  ]
+ },
+ {
+  "file": "SetFrame__10GridLayoutf_0x3c9c08.cpp",
+  "symbol": "SetFrame__10GridLayoutf",
+  "demangled": "GridLayout::SetFrame(float)",
+  "addr": "0x3c9c08",
+  "score": 940.45,
+  "kind": "accessor",
+  "insns": 639,
+  "dispatch": 32,
+  "labels": 83,
+  "calls": 28,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 115,
+  "cop2": 0,
+  "branches": 56,
+  "loads": 168,
+  "stores": 75,
+  "mult_div": 0,
+  "distinct_mem": 58,
+  "callees": [
+   "func_3BE670"
   ]
  },
  {
@@ -310315,40 +310315,6 @@
   ]
  },
  {
-  "file": "Sync__7RndMeshi_0x43cb98.cpp",
-  "symbol": "Sync__7RndMeshi",
-  "demangled": "RndMesh::Sync(int)",
-  "addr": "0x43cb98",
-  "score": 976.25,
-  "kind": "",
-  "insns": 591,
-  "dispatch": 32,
-  "labels": 72,
-  "calls": 25,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 60,
-  "cop2": 10,
-  "branches": 53,
-  "loads": 162,
-  "stores": 106,
-  "mult_div": 5,
-  "distinct_mem": 94,
-  "callees": [
-   "func_1F34C8",
-   "func_1F3518",
-   "func_1F3640",
-   "func_321720",
-   "func_321760",
-   "func_325258",
-   "func_368950",
-   "func_3818B0",
-   "func_3AFAF8",
-   "func_3BFAB8",
-   "func_3C2110"
-  ]
- },
- {
   "file": "ps2____7RndText_0x2086e8.cpp",
   "symbol": "ps2____7RndText",
   "demangled": "RndText::ps2__()",
@@ -310465,41 +310431,6 @@
    "func_286B28",
    "func_3216B0",
    "func_321760"
-  ]
- },
- {
-  "file": "CharUtlValidateStops__FP11CharClipSet_0x19c280.cpp",
-  "symbol": "CharUtlValidateStops__FP11CharClipSet",
-  "demangled": "CharUtlValidateStops(CharClipSet *)",
-  "addr": "0x19c280",
-  "score": 987.1,
-  "kind": "",
-  "insns": 412,
-  "dispatch": 37,
-  "labels": 62,
-  "calls": 34,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 79,
-  "cop2": 24,
-  "branches": 32,
-  "loads": 80,
-  "stores": 51,
-  "mult_div": 0,
-  "distinct_mem": 51,
-  "callees": [
-   "func_1020A8",
-   "func_1792D0",
-   "func_19B680",
-   "func_19BAC0",
-   "func_19ECE8",
-   "func_2EBD88",
-   "func_2FC170",
-   "func_305A90",
-   "func_30A348",
-   "func_317CA8",
-   "func_353F88",
-   "func_35A67C"
   ]
  },
  {
@@ -310700,6 +310631,40 @@
   ]
  },
  {
+  "file": "Sync__7RndMeshi_0x43cb98.cpp",
+  "symbol": "Sync__7RndMeshi",
+  "demangled": "RndMesh::Sync(int)",
+  "addr": "0x43cb98",
+  "score": 994.25,
+  "kind": "",
+  "insns": 591,
+  "dispatch": 32,
+  "labels": 72,
+  "calls": 25,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 60,
+  "cop2": 12,
+  "branches": 53,
+  "loads": 162,
+  "stores": 106,
+  "mult_div": 5,
+  "distinct_mem": 94,
+  "callees": [
+   "func_1F34C8",
+   "func_1F3518",
+   "func_1F3640",
+   "func_321720",
+   "func_321760",
+   "func_325258",
+   "func_368950",
+   "func_3818B0",
+   "func_3AFAF8",
+   "func_3BFAB8",
+   "func_3C2110"
+  ]
+ },
+ {
   "file": "UtilDrawCylinder__FRC9TransformffRCQ23Hmx5Colori_0x219cc8.cpp",
   "symbol": "UtilDrawCylinder__FRC9TransformffRCQ23Hmx5Colori",
   "demangled": "UtilDrawCylinder(Transform & const, float, float, Hmx::Color & const, int)",
@@ -310829,41 +310794,6 @@
   ]
  },
  {
-  "file": "MakeTransform__12RndTransAnimfR9Transformbf_0x20ed30.cpp",
-  "symbol": "MakeTransform__12RndTransAnimfR9Transformbf",
-  "demangled": "RndTransAnim::MakeTransform(float, Transform &, bool, float)",
-  "addr": "0x20ed30",
-  "score": 1002.15,
-  "kind": "",
-  "insns": 543,
-  "dispatch": 26,
-  "labels": 63,
-  "calls": 25,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 182,
-  "cop2": 11,
-  "branches": 38,
-  "loads": 152,
-  "stores": 80,
-  "mult_div": 0,
-  "distinct_mem": 67,
-  "callees": [
-   "func_20ED30",
-   "func_2EBDA8",
-   "func_32DD80",
-   "func_32E140",
-   "func_32E3A0",
-   "func_32E4F8",
-   "func_32E7D8",
-   "func_32E858",
-   "func_330AF8",
-   "func_3538F0",
-   "func_3680E8",
-   "func_3C7EB8"
-  ]
- },
- {
   "file": "SyncWaypoint__11VenueVerify_0x1b2780.cpp",
   "symbol": "SyncWaypoint__11VenueVerify",
   "demangled": "VenueVerify::SyncWaypoint()",
@@ -310890,6 +310820,41 @@
    "func_326F00",
    "func_3680E8",
    "func_43F768"
+  ]
+ },
+ {
+  "file": "MakeTransform__12RndTransAnimfR9Transformbf_0x20ed30.cpp",
+  "symbol": "MakeTransform__12RndTransAnimfR9Transformbf",
+  "demangled": "RndTransAnim::MakeTransform(float, Transform &, bool, float)",
+  "addr": "0x20ed30",
+  "score": 1003.35,
+  "kind": "",
+  "insns": 543,
+  "dispatch": 26,
+  "labels": 63,
+  "calls": 25,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 183,
+  "cop2": 11,
+  "branches": 38,
+  "loads": 152,
+  "stores": 80,
+  "mult_div": 0,
+  "distinct_mem": 67,
+  "callees": [
+   "func_20ED30",
+   "func_2EBDA8",
+   "func_32DD80",
+   "func_32E140",
+   "func_32E3A0",
+   "func_32E4F8",
+   "func_32E7D8",
+   "func_32E858",
+   "func_330AF8",
+   "func_3538F0",
+   "func_3680E8",
+   "func_3C7EB8"
   ]
  },
  {
@@ -310983,7 +310948,7 @@
   "symbol": "SetFrame__7PsMovieff",
   "demangled": "PsMovie::SetFrame(float, float)",
   "addr": "0x1c4488",
-  "score": 1010.7,
+  "score": 1013.1,
   "kind": "accessor",
   "insns": 224,
   "dispatch": 191,
@@ -310991,7 +310956,7 @@
   "calls": 16,
   "tail_calls": 0,
   "indirect": 4,
-  "cop1": 6,
+  "cop1": 8,
   "cop2": 0,
   "branches": 26,
   "loads": 69,
@@ -311200,6 +311165,41 @@
   ]
  },
  {
+  "file": "CharUtlValidateStops__FP11CharClipSet_0x19c280.cpp",
+  "symbol": "CharUtlValidateStops__FP11CharClipSet",
+  "demangled": "CharUtlValidateStops(CharClipSet *)",
+  "addr": "0x19c280",
+  "score": 1026.7,
+  "kind": "",
+  "insns": 412,
+  "dispatch": 37,
+  "labels": 62,
+  "calls": 34,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 82,
+  "cop2": 28,
+  "branches": 32,
+  "loads": 80,
+  "stores": 51,
+  "mult_div": 0,
+  "distinct_mem": 51,
+  "callees": [
+   "func_1020A8",
+   "func_1792D0",
+   "func_19B680",
+   "func_19BAC0",
+   "func_19ECE8",
+   "func_2EBD88",
+   "func_2FC170",
+   "func_305A90",
+   "func_30A348",
+   "func_317CA8",
+   "func_353F88",
+   "func_35A67C"
+  ]
+ },
+ {
   "file": "SendSelect__11UIComponent12JoypadButtoni_0x244f50.cpp",
   "symbol": "SendSelect__11UIComponent12JoypadButtoni",
   "demangled": "UIComponent::SendSelect(JoypadButton, int)",
@@ -311400,7 +311400,7 @@
   "symbol": "TryToHopo__22GuitarTrackWatcherImplfib",
   "demangled": "GuitarTrackWatcherImpl::TryToHopo(float, int, bool)",
   "addr": "0x28e9e8",
-  "score": 1038.5,
+  "score": 1039.7,
   "kind": "",
   "insns": 230,
   "dispatch": 194,
@@ -311408,7 +311408,7 @@
   "calls": 15,
   "tail_calls": 0,
   "indirect": 4,
-  "cop1": 29,
+  "cop1": 30,
   "cop2": 0,
   "branches": 17,
   "loads": 72,
@@ -312012,7 +312012,7 @@
   "symbol": "DrawHud__5Synthi",
   "demangled": "Synth::DrawHud(int)",
   "addr": "0x262fe0",
-  "score": 1090.3,
+  "score": 1091.5,
   "kind": "",
   "insns": 214,
   "dispatch": 182,
@@ -312020,7 +312020,7 @@
   "calls": 22,
   "tail_calls": 0,
   "indirect": 8,
-  "cop1": 42,
+  "cop1": 43,
   "cop2": 0,
   "branches": 9,
   "loads": 53,
@@ -312361,37 +312361,6 @@
   ]
  },
  {
-  "file": "DrawShadowBuffer__9Character_0x16daa8.cpp",
-  "symbol": "DrawShadowBuffer__9Character",
-  "demangled": "Character::DrawShadowBuffer()",
-  "addr": "0x16daa8",
-  "score": 1105.0,
-  "kind": "",
-  "insns": 190,
-  "dispatch": 169,
-  "labels": 169,
-  "calls": 12,
-  "tail_calls": 0,
-  "indirect": 4,
-  "cop1": 34,
-  "cop2": 20,
-  "branches": 10,
-  "loads": 60,
-  "stores": 22,
-  "mult_div": 0,
-  "distinct_mem": 47,
-  "callees": [
-   "func_16CF08",
-   "func_1D8668",
-   "func_20B620",
-   "func_2EBDA8",
-   "func_2F2010",
-   "func_3539D8",
-   "func_3680E8",
-   "func_43F768"
-  ]
- },
- {
   "file": "ps2___as__Q211stlpmtx_stdt6vector2Zt11ObjOwnerPtr1Z8CharClipZQ211stlpmtx_stdt12StlNodeA_0x38b820.cpp",
   "symbol": "ps2___as__Q211stlpmtx_stdt6vector2Zt11ObjOwnerPtr1Z8CharClipZQ211stlpmtx_stdt12StlNodeA",
   "demangled": "ps2___as__Q211stlpmtx_stdt6vector2Zt11ObjOwnerPtr1Z8CharClipZQ211stlpmtx_stdt12StlNodeA",
@@ -312591,6 +312560,37 @@
    "func_3108D0",
    "func_3216B0",
    "func_3B53E0"
+  ]
+ },
+ {
+  "file": "DrawShadowBuffer__9Character_0x16daa8.cpp",
+  "symbol": "DrawShadowBuffer__9Character",
+  "demangled": "Character::DrawShadowBuffer()",
+  "addr": "0x16daa8",
+  "score": 1123.0,
+  "kind": "",
+  "insns": 190,
+  "dispatch": 169,
+  "labels": 169,
+  "calls": 12,
+  "tail_calls": 0,
+  "indirect": 4,
+  "cop1": 34,
+  "cop2": 22,
+  "branches": 10,
+  "loads": 60,
+  "stores": 22,
+  "mult_div": 0,
+  "distinct_mem": 47,
+  "callees": [
+   "func_16CF08",
+   "func_1D8668",
+   "func_20B620",
+   "func_2EBDA8",
+   "func_2F2010",
+   "func_3539D8",
+   "func_3680E8",
+   "func_43F768"
   ]
  },
  {
@@ -313225,7 +313225,7 @@
   "symbol": "ReadMetaEvent__10MidiReaderiUcR9BinStream",
   "demangled": "MidiReader::ReadMetaEvent(int, char  unsigned, BinStream &)",
   "addr": "0x358b88",
-  "score": 1173.65,
+  "score": 1174.85,
   "kind": "",
   "insns": 239,
   "dispatch": 210,
@@ -313233,7 +313233,7 @@
   "calls": 26,
   "tail_calls": 0,
   "indirect": 8,
-  "cop1": 4,
+  "cop1": 5,
   "cop2": 0,
   "branches": 11,
   "loads": 70,
@@ -313875,7 +313875,7 @@
   "symbol": "Load__6SongDBPC9DataArrayiP21PlayerTrackConfigList",
   "demangled": "SongDB::Load(DataArray * const, int, PlayerTrackConfigList *)",
   "addr": "0x120a20",
-  "score": 1225.5,
+  "score": 1227.9,
   "kind": "",
   "insns": 268,
   "dispatch": 228,
@@ -313883,7 +313883,7 @@
   "calls": 33,
   "tail_calls": 0,
   "indirect": 1,
-  "cop1": 22,
+  "cop1": 24,
   "cop2": 0,
   "branches": 12,
   "loads": 69,
@@ -314030,40 +314030,6 @@
   ]
  },
  {
-  "file": "SyncProperty__8RndLightP9DataArrayR8DataNode6PropOp_0x1e72f0.cpp",
-  "symbol": "SyncProperty__8RndLightP9DataArrayR8DataNode6PropOp",
-  "demangled": "RndLight::SyncProperty(DataArray *, DataNode &, PropOp)",
-  "addr": "0x1e72f0",
-  "score": 1239.6,
-  "kind": "",
-  "insns": 290,
-  "dispatch": 239,
-  "labels": 239,
-  "calls": 21,
-  "tail_calls": 0,
-  "indirect": 2,
-  "cop1": 16,
-  "cop2": 0,
-  "branches": 31,
-  "loads": 46,
-  "stores": 29,
-  "mult_div": 0,
-  "distinct_mem": 34,
-  "callees": [
-   "func_1E7138",
-   "func_20D710",
-   "func_2EBDA8",
-   "func_2FAC90",
-   "func_2FC170",
-   "func_304FB0",
-   "func_305148",
-   "func_3054D0",
-   "func_305D78",
-   "func_326F00",
-   "func_3680E8"
-  ]
- },
- {
   "file": "GotoScreen__9UIManagerP8UIScreenbT2_0x24ce40.cpp",
   "symbol": "GotoScreen__9UIManagerP8UIScreenbT2",
   "demangled": "UIManager::GotoScreen(UIScreen *, bool, T?)",
@@ -314095,6 +314061,40 @@
    "func_324798",
    "func_36F910",
    "func_3DC678"
+  ]
+ },
+ {
+  "file": "SyncProperty__8RndLightP9DataArrayR8DataNode6PropOp_0x1e72f0.cpp",
+  "symbol": "SyncProperty__8RndLightP9DataArrayR8DataNode6PropOp",
+  "demangled": "RndLight::SyncProperty(DataArray *, DataNode &, PropOp)",
+  "addr": "0x1e72f0",
+  "score": 1243.2,
+  "kind": "",
+  "insns": 290,
+  "dispatch": 239,
+  "labels": 239,
+  "calls": 21,
+  "tail_calls": 0,
+  "indirect": 2,
+  "cop1": 19,
+  "cop2": 0,
+  "branches": 31,
+  "loads": 46,
+  "stores": 29,
+  "mult_div": 0,
+  "distinct_mem": 34,
+  "callees": [
+   "func_1E7138",
+   "func_20D710",
+   "func_2EBDA8",
+   "func_2FAC90",
+   "func_2FC170",
+   "func_304FB0",
+   "func_305148",
+   "func_3054D0",
+   "func_305D78",
+   "func_326F00",
+   "func_3680E8"
   ]
  },
  {
@@ -315092,71 +315092,6 @@
   ]
  },
  {
-  "file": "Poll__12SynthEmitter_0x265ae8.cpp",
-  "symbol": "Poll__12SynthEmitter",
-  "demangled": "SynthEmitter::Poll()",
-  "addr": "0x265ae8",
-  "score": 1370.05,
-  "kind": "",
-  "insns": 259,
-  "dispatch": 221,
-  "labels": 221,
-  "calls": 22,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 47,
-  "cop2": 23,
-  "branches": 17,
-  "loads": 75,
-  "stores": 15,
-  "mult_div": 0,
-  "distinct_mem": 35,
-  "callees": [
-   "func_25D5B0",
-   "func_25D828",
-   "func_25D8E8",
-   "func_25E670",
-   "func_2EBDA8",
-   "func_310828",
-   "func_3108D0",
-   "func_32F008",
-   "func_353E60",
-   "func_3680E8",
-   "func_43F768"
-  ]
- },
- {
-  "file": "Relativize__16CharBonesSamples_0x1b81c0.cpp",
-  "symbol": "Relativize__16CharBonesSamples",
-  "demangled": "CharBonesSamples::Relativize()",
-  "addr": "0x1b81c0",
-  "score": 1370.35,
-  "kind": "",
-  "insns": 473,
-  "dispatch": 25,
-  "labels": 46,
-  "calls": 19,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 141,
-  "cop2": 72,
-  "branches": 20,
-  "loads": 113,
-  "stores": 47,
-  "mult_div": 1,
-  "distinct_mem": 66,
-  "callees": [
-   "func_1749A0",
-   "func_2EBDA8",
-   "func_32E140",
-   "func_32E858",
-   "func_32EF28",
-   "func_3538F0",
-   "func_353F88",
-   "func_3680E8"
-  ]
- },
- {
   "file": "ShotOk__7CamShotP7CamShot_0x2a5a80.cpp",
   "symbol": "ShotOk__7CamShotP7CamShot",
   "demangled": "CamShot::ShotOk(CamShot *)",
@@ -315247,6 +315182,71 @@
   ]
  },
  {
+  "file": "Relativize__16CharBonesSamples_0x1b81c0.cpp",
+  "symbol": "Relativize__16CharBonesSamples",
+  "demangled": "CharBonesSamples::Relativize()",
+  "addr": "0x1b81c0",
+  "score": 1376.35,
+  "kind": "",
+  "insns": 473,
+  "dispatch": 25,
+  "labels": 46,
+  "calls": 19,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 146,
+  "cop2": 72,
+  "branches": 20,
+  "loads": 113,
+  "stores": 47,
+  "mult_div": 1,
+  "distinct_mem": 66,
+  "callees": [
+   "func_1749A0",
+   "func_2EBDA8",
+   "func_32E140",
+   "func_32E858",
+   "func_32EF28",
+   "func_3538F0",
+   "func_353F88",
+   "func_3680E8"
+  ]
+ },
+ {
+  "file": "Poll__12SynthEmitter_0x265ae8.cpp",
+  "symbol": "Poll__12SynthEmitter",
+  "demangled": "SynthEmitter::Poll()",
+  "addr": "0x265ae8",
+  "score": 1379.05,
+  "kind": "",
+  "insns": 259,
+  "dispatch": 221,
+  "labels": 221,
+  "calls": 22,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 47,
+  "cop2": 24,
+  "branches": 17,
+  "loads": 75,
+  "stores": 15,
+  "mult_div": 0,
+  "distinct_mem": 35,
+  "callees": [
+   "func_25D5B0",
+   "func_25D828",
+   "func_25D8E8",
+   "func_25E670",
+   "func_2EBDA8",
+   "func_310828",
+   "func_3108D0",
+   "func_32F008",
+   "func_353E60",
+   "func_3680E8",
+   "func_43F768"
+  ]
+ },
+ {
   "file": "PropSync__FR12CamShotFrameR8DataNodeP9DataArrayi6PropOp_0x2a9f78.cpp",
   "symbol": "PropSync__FR12CamShotFrameR8DataNodeP9DataArrayi6PropOp",
   "demangled": "PropSync(CamShotFrame &, DataNode &, DataArray *, int, PropOp)",
@@ -315315,7 +315315,7 @@
   "symbol": "OnRebuild__10WorldCrowdP9DataArray",
   "demangled": "WorldCrowd::OnRebuild(DataArray *)",
   "addr": "0x2ac928",
-  "score": 1398.95,
+  "score": 1409.15,
   "kind": "",
   "insns": 689,
   "dispatch": 63,
@@ -315323,8 +315323,8 @@
   "calls": 52,
   "tail_calls": 0,
   "indirect": 0,
-  "cop1": 92,
-  "cop2": 17,
+  "cop1": 93,
+  "cop2": 18,
   "branches": 61,
   "loads": 198,
   "stores": 111,
@@ -316260,7 +316260,7 @@
   "symbol": "Poll__10CharDriver",
   "demangled": "CharDriver::Poll()",
   "addr": "0x17f4d8",
-  "score": 1519.85,
+  "score": 1522.25,
   "kind": "",
   "insns": 341,
   "dispatch": 287,
@@ -316268,7 +316268,7 @@
   "calls": 24,
   "tail_calls": 0,
   "indirect": 2,
-  "cop1": 66,
+  "cop1": 68,
   "cop2": 0,
   "branches": 28,
   "loads": 79,
@@ -316832,37 +316832,6 @@
   ]
  },
  {
-  "file": "Highlight__8CharHair_0x1856e0.cpp",
-  "symbol": "Highlight__8CharHair",
-  "demangled": "CharHair::Highlight()",
-  "addr": "0x1856e0",
-  "score": 1612.85,
-  "kind": "",
-  "insns": 525,
-  "dispatch": 37,
-  "labels": 49,
-  "calls": 34,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 75,
-  "cop2": 87,
-  "branches": 24,
-  "loads": 163,
-  "stores": 83,
-  "mult_div": 9,
-  "distinct_mem": 86,
-  "callees": [
-   "func_1E1130",
-   "func_1E1728",
-   "func_2198B8",
-   "func_219CC8",
-   "func_2EBDA8",
-   "func_32EEC8",
-   "func_3680E8",
-   "func_43F768"
-  ]
- },
- {
   "file": "PreLoad__10BandButtonR9BinStream_0x2d3160.cpp",
   "symbol": "PreLoad__10BandButtonR9BinStream",
   "demangled": "BandButton::PreLoad(BinStream &)",
@@ -316998,6 +316967,37 @@
    "func_3054D0",
    "func_305A90",
    "func_305D78"
+  ]
+ },
+ {
+  "file": "Highlight__8CharHair_0x1856e0.cpp",
+  "symbol": "Highlight__8CharHair",
+  "demangled": "CharHair::Highlight()",
+  "addr": "0x1856e0",
+  "score": 1639.85,
+  "kind": "",
+  "insns": 525,
+  "dispatch": 37,
+  "labels": 49,
+  "calls": 34,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 75,
+  "cop2": 90,
+  "branches": 24,
+  "loads": 163,
+  "stores": 83,
+  "mult_div": 9,
+  "distinct_mem": 86,
+  "callees": [
+   "func_1E1130",
+   "func_1E1728",
+   "func_2198B8",
+   "func_219CC8",
+   "func_2EBDA8",
+   "func_32EEC8",
+   "func_3680E8",
+   "func_43F768"
   ]
  },
  {
@@ -317374,41 +317374,6 @@
   ]
  },
  {
-  "file": "LinearizeKeys__FP12RndTransAnimfffff_0x220810.cpp",
-  "symbol": "LinearizeKeys__FP12RndTransAnimfffff",
-  "demangled": "LinearizeKeys(RndTransAnim *, float, float, float, float, float)",
-  "addr": "0x220810",
-  "score": 1692.7,
-  "kind": "",
-  "insns": 1056,
-  "dispatch": 79,
-  "labels": 128,
-  "calls": 69,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 127,
-  "cop2": 10,
-  "branches": 75,
-  "loads": 275,
-  "stores": 96,
-  "mult_div": 0,
-  "distinct_mem": 82,
-  "callees": [
-   "func_2261F8",
-   "func_2267A0",
-   "func_2EBDA8",
-   "func_32E4F8",
-   "func_330AF8",
-   "func_353C60",
-   "func_3680E8",
-   "func_3BD798",
-   "func_3BE690",
-   "func_3BED18",
-   "func_3C79D0",
-   "func_3C7EB8"
-  ]
- },
- {
   "file": "PostLoad__8WorldDirR9BinStream_0x2b23f8.cpp",
   "symbol": "PostLoad__8WorldDirR9BinStream",
   "demangled": "WorldDir::PostLoad(BinStream &)",
@@ -317500,6 +317465,41 @@
    "func_387630",
    "func_387760",
    "func_3877B0"
+  ]
+ },
+ {
+  "file": "LinearizeKeys__FP12RndTransAnimfffff_0x220810.cpp",
+  "symbol": "LinearizeKeys__FP12RndTransAnimfffff",
+  "demangled": "LinearizeKeys(RndTransAnim *, float, float, float, float, float)",
+  "addr": "0x220810",
+  "score": 1710.7,
+  "kind": "",
+  "insns": 1056,
+  "dispatch": 79,
+  "labels": 128,
+  "calls": 69,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 127,
+  "cop2": 12,
+  "branches": 75,
+  "loads": 275,
+  "stores": 96,
+  "mult_div": 0,
+  "distinct_mem": 82,
+  "callees": [
+   "func_2261F8",
+   "func_2267A0",
+   "func_2EBDA8",
+   "func_32E4F8",
+   "func_330AF8",
+   "func_353C60",
+   "func_3680E8",
+   "func_3BD798",
+   "func_3BE690",
+   "func_3BED18",
+   "func_3C79D0",
+   "func_3C7EB8"
   ]
  },
  {
@@ -317608,39 +317608,6 @@
   ]
  },
  {
-  "file": "UpdateSongPos__9BeatMatchRC7SongPos_0x1260a0.cpp",
-  "symbol": "UpdateSongPos__9BeatMatchRC7SongPos",
-  "demangled": "BeatMatch::UpdateSongPos(SongPos & const)",
-  "addr": "0x1260a0",
-  "score": 1722.45,
-  "kind": "",
-  "insns": 403,
-  "dispatch": 335,
-  "labels": 335,
-  "calls": 33,
-  "tail_calls": 0,
-  "indirect": 2,
-  "cop1": 4,
-  "cop2": 0,
-  "branches": 36,
-  "loads": 89,
-  "stores": 61,
-  "mult_div": 1,
-  "distinct_mem": 56,
-  "callees": [
-   "func_126D40",
-   "func_2F2EA8",
-   "func_2FAD00",
-   "func_2FC070",
-   "func_2FC170",
-   "func_304BD0",
-   "func_305D78",
-   "func_324798",
-   "func_326F00",
-   "func_35C598"
-  ]
- },
- {
   "file": "MergeCharacter__11CharClipSetRC8FilePath_0x17bdb0.cpp",
   "symbol": "MergeCharacter__11CharClipSetRC8FilePath",
   "demangled": "CharClipSet::MergeCharacter(FilePath & const)",
@@ -317708,6 +317675,39 @@
    "func_304FB0",
    "func_305148",
    "func_305800"
+  ]
+ },
+ {
+  "file": "UpdateSongPos__9BeatMatchRC7SongPos_0x1260a0.cpp",
+  "symbol": "UpdateSongPos__9BeatMatchRC7SongPos",
+  "demangled": "BeatMatch::UpdateSongPos(SongPos & const)",
+  "addr": "0x1260a0",
+  "score": 1724.85,
+  "kind": "",
+  "insns": 403,
+  "dispatch": 335,
+  "labels": 335,
+  "calls": 33,
+  "tail_calls": 0,
+  "indirect": 2,
+  "cop1": 6,
+  "cop2": 0,
+  "branches": 36,
+  "loads": 89,
+  "stores": 61,
+  "mult_div": 1,
+  "distinct_mem": 56,
+  "callees": [
+   "func_126D40",
+   "func_2F2EA8",
+   "func_2FAD00",
+   "func_2FC070",
+   "func_2FC170",
+   "func_304BD0",
+   "func_305D78",
+   "func_324798",
+   "func_326F00",
+   "func_35C598"
   ]
  },
  {
@@ -317811,39 +317811,6 @@
   ]
  },
  {
-  "file": "Estimator__8CharWalkRf_0x19f728.cpp",
-  "symbol": "Estimator__8CharWalkRf",
-  "demangled": "CharWalk::Estimator(float &)",
-  "addr": "0x19f728",
-  "score": 1750.75,
-  "kind": "",
-  "insns": 393,
-  "dispatch": 341,
-  "labels": 341,
-  "calls": 24,
-  "tail_calls": 0,
-  "indirect": 3,
-  "cop1": 39,
-  "cop2": 5,
-  "branches": 24,
-  "loads": 97,
-  "stores": 31,
-  "mult_div": 6,
-  "distinct_mem": 49,
-  "callees": [
-   "func_1020A8",
-   "func_19B5F8",
-   "func_19B770",
-   "func_2EBDA8",
-   "func_3093D8",
-   "func_310828",
-   "func_3108D0",
-   "func_310D18",
-   "func_3680E8",
-   "func_368950"
-  ]
- },
- {
   "file": "DrawFlare__8RndFlareb_0x22d5e8.cpp",
   "symbol": "DrawFlare__8RndFlareb",
   "demangled": "RndFlare::DrawFlare(bool)",
@@ -317870,6 +317837,39 @@
    "func_330518",
    "func_3680E8",
    "func_43F768"
+  ]
+ },
+ {
+  "file": "Estimator__8CharWalkRf_0x19f728.cpp",
+  "symbol": "Estimator__8CharWalkRf",
+  "demangled": "CharWalk::Estimator(float &)",
+  "addr": "0x19f728",
+  "score": 1759.75,
+  "kind": "",
+  "insns": 393,
+  "dispatch": 341,
+  "labels": 341,
+  "calls": 24,
+  "tail_calls": 0,
+  "indirect": 3,
+  "cop1": 39,
+  "cop2": 6,
+  "branches": 24,
+  "loads": 97,
+  "stores": 31,
+  "mult_div": 6,
+  "distinct_mem": 49,
+  "callees": [
+   "func_1020A8",
+   "func_19B5F8",
+   "func_19B770",
+   "func_2EBDA8",
+   "func_3093D8",
+   "func_310828",
+   "func_3108D0",
+   "func_310D18",
+   "func_3680E8",
+   "func_368950"
   ]
  },
  {
@@ -318654,39 +318654,6 @@
   ]
  },
  {
-  "file": "Poll__10CharLookAt_0x18d7c8.cpp",
-  "symbol": "Poll__10CharLookAt",
-  "demangled": "CharLookAt::Poll()",
-  "addr": "0x18d7c8",
-  "score": 1913.0,
-  "kind": "",
-  "insns": 618,
-  "dispatch": 48,
-  "labels": 75,
-  "calls": 40,
-  "tail_calls": 0,
-  "indirect": 1,
-  "cop1": 172,
-  "cop2": 94,
-  "branches": 30,
-  "loads": 153,
-  "stores": 55,
-  "mult_div": 0,
-  "distinct_mem": 68,
-  "callees": [
-   "func_20B5B0",
-   "func_20B620",
-   "func_2EBDA8",
-   "func_3164D8",
-   "func_329B80",
-   "func_32E858",
-   "func_32EB68",
-   "func_353C60",
-   "func_3680E8",
-   "func_43F768"
-  ]
- },
- {
   "file": "DataInitFuncs__Fv_0x303f28.cpp",
   "symbol": "DataInitFuncs__Fv",
   "demangled": "DataInitFuncs(void)",
@@ -318739,6 +318706,39 @@
   ]
  },
  {
+  "file": "Poll__10CharLookAt_0x18d7c8.cpp",
+  "symbol": "Poll__10CharLookAt",
+  "demangled": "CharLookAt::Poll()",
+  "addr": "0x18d7c8",
+  "score": 1932.2,
+  "kind": "",
+  "insns": 618,
+  "dispatch": 48,
+  "labels": 75,
+  "calls": 40,
+  "tail_calls": 0,
+  "indirect": 1,
+  "cop1": 173,
+  "cop2": 96,
+  "branches": 30,
+  "loads": 153,
+  "stores": 55,
+  "mult_div": 0,
+  "distinct_mem": 68,
+  "callees": [
+   "func_20B5B0",
+   "func_20B620",
+   "func_2EBDA8",
+   "func_3164D8",
+   "func_329B80",
+   "func_32E858",
+   "func_32EB68",
+   "func_353C60",
+   "func_3680E8",
+   "func_43F768"
+  ]
+ },
+ {
   "file": "AttachMesh__FP7RndMeshT0_0x218e70.cpp",
   "symbol": "AttachMesh__FP7RndMeshT0",
   "demangled": "AttachMesh(RndMesh *, T?)",
@@ -318773,7 +318773,7 @@
   "symbol": "RefreshLayer__16CompositeTextureRQ216CompositeTexture5Layer",
   "demangled": "CompositeTexture::RefreshLayer(CompositeTexture::Layer &)",
   "addr": "0x2e9ea8",
-  "score": 1942.2,
+  "score": 1945.8,
   "kind": "",
   "insns": 448,
   "dispatch": 368,
@@ -318781,7 +318781,7 @@
   "calls": 44,
   "tail_calls": 0,
   "indirect": 2,
-  "cop1": 23,
+  "cop1": 26,
   "cop2": 0,
   "branches": 35,
   "loads": 106,
@@ -319376,7 +319376,7 @@
   "symbol": "Poll__8StreamEE",
   "demangled": "StreamEE::Poll()",
   "addr": "0x26cf58",
-  "score": 2113.8,
+  "score": 2116.2,
   "kind": "",
   "insns": 488,
   "dispatch": 412,
@@ -319384,7 +319384,7 @@
   "calls": 36,
   "tail_calls": 0,
   "indirect": 3,
-  "cop1": 32,
+  "cop1": 34,
   "cop2": 0,
   "branches": 46,
   "loads": 97,
@@ -319801,34 +319801,6 @@
   ]
  },
  {
-  "file": "Poll__8CharHair_0x185f18.cpp",
-  "symbol": "Poll__8CharHair",
-  "demangled": "CharHair::Poll()",
-  "addr": "0x185f18",
-  "score": 2285.1,
-  "kind": "",
-  "insns": 754,
-  "dispatch": 18,
-  "labels": 45,
-  "calls": 16,
-  "tail_calls": 0,
-  "indirect": 0,
-  "cop1": 254,
-  "cop2": 144,
-  "branches": 33,
-  "loads": 218,
-  "stores": 89,
-  "mult_div": 6,
-  "distinct_mem": 84,
-  "callees": [
-   "func_1851E0",
-   "func_20B620",
-   "func_2EBDA8",
-   "func_3680E8",
-   "func_43F768"
-  ]
- },
- {
   "file": "Draw__11ClipDistMapffP10CharDriver_0x1a3140.cpp",
   "symbol": "Draw__11ClipDistMapffP10CharDriver",
   "demangled": "ClipDistMap::Draw(float, float, CharDriver *)",
@@ -319857,6 +319829,34 @@
    "func_1A4170",
    "func_1A4188",
    "func_353710"
+  ]
+ },
+ {
+  "file": "Poll__8CharHair_0x185f18.cpp",
+  "symbol": "Poll__8CharHair",
+  "demangled": "CharHair::Poll()",
+  "addr": "0x185f18",
+  "score": 2294.1,
+  "kind": "",
+  "insns": 754,
+  "dispatch": 18,
+  "labels": 45,
+  "calls": 16,
+  "tail_calls": 0,
+  "indirect": 0,
+  "cop1": 254,
+  "cop2": 145,
+  "branches": 33,
+  "loads": 218,
+  "stores": 89,
+  "mult_div": 6,
+  "distinct_mem": 84,
+  "callees": [
+   "func_1851E0",
+   "func_20B620",
+   "func_2EBDA8",
+   "func_3680E8",
+   "func_43F768"
   ]
  },
  {
@@ -320065,7 +320065,7 @@
   "symbol": "BuildBeam__9SpotlightRQ29Spotlight7BeamDef",
   "demangled": "Spotlight::BuildBeam(Spotlight::BeamDef &)",
   "addr": "0x2bd640",
-  "score": 2397.25,
+  "score": 2399.65,
   "kind": "",
   "insns": 547,
   "dispatch": 508,
@@ -320073,7 +320073,7 @@
   "calls": 15,
   "tail_calls": 0,
   "indirect": 1,
-  "cop1": 116,
+  "cop1": 118,
   "cop2": 0,
   "branches": 23,
   "loads": 87,
@@ -320508,7 +320508,7 @@
   "symbol": "BuildTransform__C12CamShotFrameP7CamShotP6RndCamR9Transformb",
   "demangled": "CamShotFrame::BuildTransform(CamShot *, RndCam *, Transform &, bool)",
   "addr": "0x2a9590",
-  "score": 2799.8,
+  "score": 2808.8,
   "kind": "",
   "insns": 506,
   "dispatch": 461,
@@ -320517,7 +320517,7 @@
   "tail_calls": 0,
   "indirect": 2,
   "cop1": 146,
-  "cop2": 54,
+  "cop2": 55,
   "branches": 20,
   "loads": 126,
   "stores": 73,
@@ -320578,7 +320578,7 @@
   "symbol": "Poll__6GemRepffff",
   "demangled": "GemRep::Poll(float, float, float, float)",
   "addr": "0x162f08",
-  "score": 2860.25,
+  "score": 2863.85,
   "kind": "",
   "insns": 619,
   "dispatch": 553,
@@ -320586,7 +320586,7 @@
   "calls": 26,
   "tail_calls": 0,
   "indirect": 4,
-  "cop1": 146,
+  "cop1": 149,
   "cop2": 10,
   "branches": 39,
   "loads": 176,
@@ -320613,7 +320613,7 @@
   "symbol": "FindBestStop__8CharWalkfi",
   "demangled": "CharWalk::FindBestStop(float, int)",
   "addr": "0x19ee90",
-  "score": 2899.65,
+  "score": 2912.25,
   "kind": "accessor",
   "insns": 615,
   "dispatch": 549,
@@ -320621,8 +320621,8 @@
   "calls": 23,
   "tail_calls": 0,
   "indirect": 3,
-  "cop1": 162,
-  "cop2": 18,
+  "cop1": 165,
+  "cop2": 19,
   "branches": 31,
   "loads": 149,
   "stores": 69,
@@ -320718,7 +320718,7 @@
   "symbol": "Handle__6PlayerP9DataArrayb",
   "demangled": "Player::Handle(DataArray *, bool)",
   "addr": "0x115398",
-  "score": 2965.6,
+  "score": 2966.8,
   "kind": "",
   "insns": 706,
   "dispatch": 557,
@@ -320726,7 +320726,7 @@
   "calls": 64,
   "tail_calls": 0,
   "indirect": 2,
-  "cop1": 14,
+  "cop1": 15,
   "cop2": 0,
   "branches": 84,
   "loads": 106,
@@ -321219,7 +321219,7 @@
   "symbol": "UpdateTransforms__9Spotlight",
   "demangled": "Spotlight::UpdateTransforms()",
   "addr": "0x2bb420",
-  "score": 3520.65,
+  "score": 3529.65,
   "kind": "",
   "insns": 611,
   "dispatch": 571,
@@ -321228,7 +321228,7 @@
   "tail_calls": 0,
   "indirect": 1,
   "cop1": 153,
-  "cop2": 85,
+  "cop2": 86,
   "branches": 21,
   "loads": 201,
   "stores": 161,
@@ -321415,40 +321415,6 @@
   ]
  },
  {
-  "file": "Interp__12CamShotFrameP7CamShotRC12CamShotFrameffP6RndCam_0x2a8b28.cpp",
-  "symbol": "Interp__12CamShotFrameP7CamShotRC12CamShotFrameffP6RndCam",
-  "demangled": "CamShotFrame::Interp(CamShot *, CamShotFrame & const, float, float, RndCam *)",
-  "addr": "0x2a8b28",
-  "score": 3842.3,
-  "kind": "",
-  "insns": 568,
-  "dispatch": 534,
-  "labels": 534,
-  "calls": 19,
-  "tail_calls": 0,
-  "indirect": 3,
-  "cop1": 169,
-  "cop2": 134,
-  "branches": 17,
-  "loads": 137,
-  "stores": 79,
-  "mult_div": 0,
-  "distinct_mem": 107,
-  "callees": [
-   "func_1D8668",
-   "func_20B5B0",
-   "func_2A4CE8",
-   "func_2A8A58",
-   "func_2A9508",
-   "func_2A9590",
-   "func_32D570",
-   "func_32D818",
-   "func_32E630",
-   "func_32E6B0",
-   "func_43F768"
-  ]
- },
- {
   "file": "Draw__17CharDriverDisplayP10CharDriverf_0x1a4dc0.cpp",
   "symbol": "Draw__17CharDriverDisplayP10CharDriverf",
   "demangled": "CharDriverDisplay::Draw(CharDriver *, float)",
@@ -321481,6 +321447,40 @@
    "func_2EBDA8",
    "func_2FAD00",
    "func_2FC070"
+  ]
+ },
+ {
+  "file": "Interp__12CamShotFrameP7CamShotRC12CamShotFrameffP6RndCam_0x2a8b28.cpp",
+  "symbol": "Interp__12CamShotFrameP7CamShotRC12CamShotFrameffP6RndCam",
+  "demangled": "CamShotFrame::Interp(CamShot *, CamShotFrame & const, float, float, RndCam *)",
+  "addr": "0x2a8b28",
+  "score": 3878.3,
+  "kind": "",
+  "insns": 568,
+  "dispatch": 534,
+  "labels": 534,
+  "calls": 19,
+  "tail_calls": 0,
+  "indirect": 3,
+  "cop1": 169,
+  "cop2": 138,
+  "branches": 17,
+  "loads": 137,
+  "stores": 79,
+  "mult_div": 0,
+  "distinct_mem": 107,
+  "callees": [
+   "func_1D8668",
+   "func_20B5B0",
+   "func_2A4CE8",
+   "func_2A8A58",
+   "func_2A9508",
+   "func_2A9590",
+   "func_32D570",
+   "func_32D818",
+   "func_32E630",
+   "func_32E6B0",
+   "func_43F768"
   ]
  },
  {
@@ -321868,7 +321868,7 @@
   "symbol": "DrawShowing__10WorldCrowdQ211RndDrawable8DrawType",
   "demangled": "WorldCrowd::DrawShowing(RndDrawable::DrawType)",
   "addr": "0x2ae0e0",
-  "score": 5480.7,
+  "score": 5489.7,
   "kind": "",
   "insns": 1152,
   "dispatch": 1012,
@@ -321877,7 +321877,7 @@
   "tail_calls": 0,
   "indirect": 5,
   "cop1": 186,
-  "cop2": 49,
+  "cop2": 50,
   "branches": 64,
   "loads": 308,
   "stores": 187,
@@ -321903,7 +321903,7 @@
   "symbol": "SyncProperty__9SpotlightP9DataArrayR8DataNode6PropOp",
   "demangled": "Spotlight::SyncProperty(DataArray *, DataNode &, PropOp)",
   "addr": "0x2bef18",
-  "score": 5699.5,
+  "score": 5703.1,
   "kind": "",
   "insns": 1404,
   "dispatch": 1105,
@@ -321911,7 +321911,7 @@
   "calls": 115,
   "tail_calls": 0,
   "indirect": 1,
-  "cop1": 44,
+  "cop1": 47,
   "cop2": 0,
   "branches": 185,
   "loads": 176,
@@ -322078,7 +322078,7 @@
   "symbol": "CleanupMesh__FP7RndMeshb",
   "demangled": "CleanupMesh(RndMesh *, bool)",
   "addr": "0x216798",
-  "score": 11978.5,
+  "score": 11982.1,
   "kind": "",
   "insns": 2880,
   "dispatch": 2484,
@@ -322086,7 +322086,7 @@
   "calls": 159,
   "tail_calls": 0,
   "indirect": 5,
-  "cop1": 235,
+  "cop1": 238,
   "cop2": 13,
   "branches": 241,
   "loads": 723,
