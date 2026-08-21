@@ -1044,6 +1044,28 @@ void GS::writeRegisterPacked(uint8_t regDesc, uint64_t lo, uint64_t hi)
         uint32_t z = static_cast<uint32_t>((hi >> 4) & 0xFFFFFF);
         uint8_t f = static_cast<uint8_t>((hi >> 36) & 0xFF);
         bool adk = ((hi >> 47) & 1) != 0;
+#if GHPC_DIAG
+        {
+            // 91% of kicks come back ADC-suppressed, which is far more than
+            // frustum clipping should account for. Dump the raw high word so
+            // the ADC bit can be checked against the F field and the unused
+            // bits around it, rather than trusted from the spec alone.
+            static unsigned long long adcSet = 0ull, adcClear = 0ull;
+            static int shown = 0;
+            if (adk) ++adcSet; else ++adcClear;
+            if (shown < 8 && adk)
+            {
+                ++shown;
+                std::fprintf(stderr,
+                    "[gs/adc] hi=0x%016llx  bits96_127=0x%08x  F=%u  ADCbit111=%u  z=%u\n",
+                    (unsigned long long)hi, (unsigned)(hi >> 32),
+                    (unsigned)((hi >> 36) & 0xFFu), (unsigned)((hi >> 47) & 1u),
+                    (unsigned)((hi >> 4) & 0xFFFFFFu));
+            }
+            if (((adcSet + adcClear) % 500000ull) == 0ull)
+                std::fprintf(stderr, "[gs/adc] set=%llu clear=%llu\n", adcSet, adcClear);
+        }
+#endif
         PS2_IF_AGRESSIVE_LOGS({
             const uint32_t debugIndex = s_debugGsPackedVertexCount.fetch_add(1, std::memory_order_relaxed);
             if (debugIndex < 64u)
@@ -1728,8 +1750,128 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
     recordRegisterDebugEventUnlocked(regAddr, value);
 }
 
+#if GHPC_DIAG
+// Ten million GIFtags reach the frontend but only ~260 primitives get drawn.
+// vertexKick has three silent exits; count which one swallows them.
+// 0 = unrecognised PRIM type, 1 = still accumulating vertices,
+// 2 = complete primitive but ADC suppressed the draw, 3 = submitted.
+void ghpcNoteKick(int reason, uint32_t primType)
+{
+    static unsigned long long n[4] = {0, 0, 0, 0};
+    static unsigned long long byPrim[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    static unsigned long long total = 0ull;
+    ++n[reason & 3];
+    ++byPrim[primType & 7u];
+    if ((++total % 500000ull) == 0ull)
+    {
+        std::fprintf(stderr,
+            "[gs/kick] total=%llu badPrim=%llu accumulating=%llu adcSuppressed=%llu submitted=%llu | byPrim:",
+            total, n[0], n[1], n[2], n[3]);
+        for (uint32_t i = 0u; i < 8u; ++i)
+            if (byPrim[i]) std::fprintf(stderr, " t%u=%llu", i, byPrim[i]);
+        std::fprintf(stderr, "\n");
+    }
+}
+
+// Where does ADC actually land? If it only ever lands on the vertices that do
+// not close a primitive, the 97% figure is an artifact of counting every kick
+// and nothing is being suppressed at all. Bucket by prim type and by the slot
+// the vertex occupies within its primitive.
+void ghpcNoteAdcSlot(uint32_t primType, int slot, int needed, bool adc)
+{
+    static unsigned long long set[8][4] = {};
+    static unsigned long long clr[8][4] = {};
+    static unsigned long long total = 0ull;
+    const uint32_t p = primType & 7u;
+    const int s = (slot < 0) ? 0 : (slot > 3 ? 3 : slot);
+    if (adc) ++set[p][s]; else ++clr[p][s];
+    if ((++total % 500000ull) == 0ull)
+    {
+        std::fprintf(stderr, "[gs/adcslot] total=%llu", total);
+        for (uint32_t i = 0u; i < 8u; ++i)
+            for (int j = 0; j < 4; ++j)
+                if (set[i][j] || clr[i][j])
+                    std::fprintf(stderr, " t%u.s%d=%llu/%llu", i, j,
+                                 set[i][j], set[i][j] + clr[i][j]);
+        std::fprintf(stderr, "  (adcSet/total)\n");
+        (void)needed;
+    }
+}
+#endif
+
+#if GHPC_DIAG
+// Every batch that actually reaches the backend. Textured draws are the ones
+// that could be the logo, so bucket those by texture base and dump the first
+// few in full: if the logo quad is submitted with sane state, the fault is
+// downstream in the rasteriser rather than in the VU/GIF path.
+void ghpcNoteSubmit(const GSPrimitiveBatch &b)
+{
+    static unsigned long long total = 0ull, textured = 0ull;
+    static unsigned int tbpKey[32] = {};
+    static unsigned long long tbpHits[32] = {};
+    static int tbpUsed = 0;
+    static int shown = 0;
+    ++total;
+    if (!b.state.prim.tme)
+    {
+        if ((total % 200000ull) == 0ull)
+        {
+            std::fprintf(stderr, "[gs/submit] total=%llu textured=%llu | byTBP:", total, textured);
+            for (int k = 0; k < tbpUsed; ++k)
+                std::fprintf(stderr, " 0x%04x=%llu", tbpKey[k], tbpHits[k]);
+            std::fprintf(stderr, "\n");
+        }
+        return;
+    }
+    ++textured;
+    const unsigned int key = b.state.context.tex0.tbp0;
+    int slot = -1;
+    for (int k = 0; k < tbpUsed; ++k)
+        if (tbpKey[k] == key) { slot = k; break; }
+    if (slot < 0 && tbpUsed < 32) { slot = tbpUsed++; tbpKey[slot] = key; }
+    if (slot >= 0) ++tbpHits[slot];
+
+    if (shown < 24)
+    {
+        ++shown;
+        float x0 = b.vertices[0].x, y0 = b.vertices[0].y;
+        float x1 = x0, y1 = y0;
+        for (int v = 1; v < (int)b.vertexCount; ++v)
+        {
+            x0 = (b.vertices[v].x < x0) ? b.vertices[v].x : x0;
+            y0 = (b.vertices[v].y < y0) ? b.vertices[v].y : y0;
+            x1 = (b.vertices[v].x > x1) ? b.vertices[v].x : x1;
+            y1 = (b.vertices[v].y > y1) ? b.vertices[v].y : y1;
+        }
+        std::fprintf(stderr,
+            "[gs/submit] prim=%u n=%u bbox=(%.1f,%.1f)-(%.1f,%.1f) tbp0=0x%04x tbw=%u psm=0x%02x "
+            "tw=%u th=%u tcc=%u tfx=%u cbp=0x%04x cpsm=0x%02x abe=%u alpha=0x%llx test=0x%llx "
+            "fbp=0x%04x fbw=%u fpsm=0x%02x fbmsk=0x%08x uv=(%u,%u) rgba=(%u,%u,%u,%u)\n",
+            (unsigned)b.state.prim.type, (unsigned)b.vertexCount,
+            (double)x0, (double)y0, (double)x1, (double)y1,
+            b.state.context.tex0.tbp0, (unsigned)b.state.context.tex0.tbw,
+            (unsigned)b.state.context.tex0.psm, (unsigned)b.state.context.tex0.tw,
+            (unsigned)b.state.context.tex0.th, (unsigned)b.state.context.tex0.tcc,
+            (unsigned)b.state.context.tex0.tfx, b.state.context.tex0.cbp,
+            (unsigned)b.state.context.tex0.cpsm, b.state.prim.abe ? 1u : 0u,
+            (unsigned long long)b.state.context.alpha, (unsigned long long)b.state.context.test,
+            b.state.context.frame.fbp, (unsigned)b.state.context.frame.fbw,
+            (unsigned)b.state.context.frame.psm, b.state.context.frame.fbmsk,
+            (unsigned)b.vertices[0].u, (unsigned)b.vertices[0].v,
+            (unsigned)b.vertices[0].r, (unsigned)b.vertices[0].g,
+            (unsigned)b.vertices[0].b, (unsigned)b.vertices[0].a);
+    }
+}
+#endif
+
 void GS::vertexKick(bool drawing)
 {
+#if GHPC_DIAG
+    {
+        extern void ghpcNoteAdcSlot(uint32_t primType, int slot, int needed, bool adc);
+        ghpcNoteAdcSlot(m_prim.type, m_vtxCount, 0, !drawing);
+    }
+#endif
     ++m_vtxCount;
     ++m_vtxIndex;
 
@@ -1770,15 +1912,35 @@ void GS::vertexKick(bool drawing)
         needed = 2;
         break;
     default:
+#if GHPC_DIAG
+        { extern void ghpcNoteKick(int reason, uint32_t primType); ghpcNoteKick(0, m_prim.type); }
+#endif
         return;
     }
 
     if (m_vtxCount < needed)
+    {
+#if GHPC_DIAG
+        { extern void ghpcNoteKick(int reason, uint32_t primType); ghpcNoteKick(1, m_prim.type); }
+#endif
         return;
+    }
 
+#if GHPC_DIAG
+    {
+        extern void ghpcNoteKick(int reason, uint32_t primType);
+        ghpcNoteKick((drawing && m_backend) ? 3 : 2, m_prim.type);
+    }
+#endif
     if (drawing && m_backend)
     {
         GSPrimitiveBatch batch = buildDrawBatch(needed);
+#if GHPC_DIAG
+        {
+            extern void ghpcNoteSubmit(const GSPrimitiveBatch &b);
+            ghpcNoteSubmit(batch);
+        }
+#endif
         updatePreferredDisplaySourceForDraw(batch);
         m_backend->Submit(batch);
         recordDrawDebugEventUnlocked(needed);

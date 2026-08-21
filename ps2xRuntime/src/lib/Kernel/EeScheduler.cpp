@@ -8,6 +8,7 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
@@ -515,24 +516,95 @@ void EeScheduler::run()
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
 #if GHPC_DIAG
-            const uint32_t kWatchAddr = 0x1f7ff10u;
+            // Watch the EE-side projection packet. The VIF/VU layers were
+            // cleared: the corrupt lane x words are already wrong in EE RAM
+            // before DMA reads them, so the question is which recompiled
+            // function stores them. Granularity is one dispatched guest
+            // function, which is enough to name the writer. Address and size
+            // come from the environment so this can be repointed without a
+            // rebuild.
+            static const uint32_t kWatchAddr = []() -> uint32_t {
+                const char *e = std::getenv("GHPC_EE_WATCH");
+                return e ? (uint32_t)std::strtoul(e, nullptr, 0) : 0x00b013a0u;
+            }();
+            static const uint32_t kWatchLen = []() -> uint32_t {
+                const char *e = std::getenv("GHPC_EE_WATCH_LEN");
+                const uint32_t v = e ? (uint32_t)std::strtoul(e, nullptr, 0) : 48u;
+                return (v == 0u || v > 64u) ? 48u : v;
+            }();
+            // The watch address came from one session's chain-to-EE mapping and
+            // may not be stable. Periodically sweep RAM for the two distinctive
+            // corrupt words so the address can be confirmed at runtime rather
+            // than assumed. 16-byte aligned only: these are qword lane x.
+            {
+                static unsigned long long dispatches = 0ull;
+                static int scans = 0;
+                if ((++dispatches % 100000ull) == 0ull && scans < 8)
+                {
+                    ++scans;
+                    const uint32_t kPat[2] = {0x4896426bu, 0x43c815deu};
+                    for (int pi = 0; pi < 2; ++pi)
+                    {
+                        int hits = 0;
+                        std::fprintf(stderr, "[ee/scan] pass=%d pattern=0x%08x at:", scans, kPat[pi]);
+                        for (uint32_t off = 0u; off + 4u <= 0x02000000u; off += 16u)
+                        {
+                            uint32_t v;
+                            std::memcpy(&v, m_rdram + off, 4);
+                            if (v == kPat[pi])
+                            {
+                                if (hits < 16) std::fprintf(stderr, " 0x%08x", off);
+                                ++hits;
+                            }
+                        }
+                        std::fprintf(stderr, "  (total=%d)\n", hits);
+                    }
+                }
+            }
+            const uint32_t watchOff = kWatchAddr & 0x01FFFFFFu;
             const uint32_t entryPc = context.pc;
-            uint64_t beforeVal = 0;
-            std::memcpy(&beforeVal, m_rdram + (kWatchAddr & 0x01FFFFFFu), 8);
+            uint8_t beforeBuf[64];
+            std::memcpy(beforeBuf, m_rdram + watchOff, kWatchLen);
             function(m_rdram, &context, &m_runtime);
             {
-                uint64_t afterVal = 0;
-                std::memcpy(&afterVal, m_rdram + (kWatchAddr & 0x01FFFFFFu), 8);
-                if (afterVal != beforeVal)
+                if (std::memcmp(beforeBuf, m_rdram + watchOff, kWatchLen) != 0)
                 {
-                    static int watchLogs = 0;
-                    if (watchLogs++ < 40)
-                        std::cerr << "[ee/watch] 0x" << std::hex << kWatchAddr
-                                  << " changed 0x" << beforeVal << " -> 0x" << afterVal
-                                  << " by guestFn entry=0x" << entryPc
-                                  << " (exit pc=0x" << context.pc << ")"
-                                  << std::dec << " thread=" << running->id
-                                  << " inv=" << running->invocations.size() << std::endl;
+                    // Census keyed on the writing function, not a log cap: the
+                    // packet is rebuilt every frame, so a cap fills with the
+                    // first frame and never shows the frame that goes bad.
+                    struct WKey { uint32_t pc; unsigned long long n; unsigned long long bad; };
+                    static WKey seen[32];
+                    static int used = 0;
+                    static unsigned long long total = 0ull;
+                    // "bad" = lane x of any of the three qwords is not near zero.
+                    bool bad = false;
+                    for (uint32_t q = 0u; q + 16u <= kWatchLen; q += 16u)
+                    {
+                        float f;
+                        std::memcpy(&f, m_rdram + watchOff + q, 4);
+                        if (f > 1.0f || f < -1.0f) bad = true;
+                    }
+                    int slot = -1;
+                    for (int k = 0; k < used; ++k)
+                        if (seen[k].pc == entryPc) { slot = k; break; }
+                    if (slot < 0 && used < 32) { slot = used++; seen[slot] = WKey{entryPc, 0ull, 0ull}; }
+                    if (slot >= 0) { ++seen[slot].n; if (bad) ++seen[slot].bad; }
+                    const unsigned long long seq = ++total;
+                    if (seq < 5ull || (seq % 200ull) == 0ull)
+                    {
+                        std::fprintf(stderr, "[ee/watch] addr=0x%08x len=%u writes=%llu writers=%d\n",
+                                     kWatchAddr, kWatchLen, total, used);
+                        for (int k = 0; k < used; ++k)
+                            std::fprintf(stderr, "  entry=0x%08x n=%llu badAfter=%llu\n",
+                                         seen[k].pc, seen[k].n, seen[k].bad);
+                        for (uint32_t q = 0u; q + 16u <= kWatchLen; q += 16u)
+                        {
+                            float f[4];
+                            std::memcpy(f, m_rdram + watchOff + q, 16);
+                            std::fprintf(stderr, "  +0x%02x = (%g, %g, %g, %g)\n",
+                                         q, (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
+                        }
+                    }
                 }
             }
 #else

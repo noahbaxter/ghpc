@@ -306,10 +306,48 @@ void ghpcNoteMpg(uint32_t dest, uint32_t bytes)
 }
 unsigned long long g_ghpcUnpackBytesSinceMscal = 0ull;
 unsigned long long g_ghpcMscalRejected = 0ull;
+#if GHPC_DIAG
+// Map flattened-chain offsets back to the EE addresses they were copied from.
+static unsigned g_chainOff[256], g_chainEe[256], g_chainLen[256];
+static int g_chainN = 0;
+void ghpcNoteChainChunk(unsigned chainOff, unsigned eeAddr, unsigned bytes, bool reset)
+{
+    if (reset) { g_chainN = 0; return; }
+    if (chainOff == 0u)
+        g_chainN = 0;
+    if (g_chainN < 256)
+    {
+        g_chainOff[g_chainN] = chainOff;
+        g_chainEe[g_chainN] = eeAddr;
+        g_chainLen[g_chainN] = bytes;
+        ++g_chainN;
+    }
+}
+unsigned ghpcChainOffsetToEe(unsigned off)
+{
+    for (int k = 0; k < g_chainN; ++k)
+        if (off >= g_chainOff[k] && off < g_chainOff[k] + g_chainLen[k])
+            return g_chainEe[k] + (off - g_chainOff[k]);
+    return 0xFFFFFFFFu;
+}
+#endif
+
 static std::map<uint32_t, unsigned long long> g_unpackDest;
+unsigned long long g_unpackWrapped = 0ull;
+unsigned long long g_unpackMaxEndQw = 0ull;
 void ghpcNoteUnpackDest(uint32_t vuAddrQw, uint32_t bytes)
 {
     ++g_unpackDest[vuAddrQw / 64u];   // bucket by 64-qword regions
+    // VU1 data memory is 1024 quadwords and the unpack write loop masks each
+    // destination with 0x3FF, so a transfer starting near the top silently
+    // wraps to address 0 and overwrites whatever constants live there. Count
+    // transfers whose end passes 1024 so that stops being a guess.
+    {
+        const unsigned long long endQw =
+            (unsigned long long)vuAddrQw + (unsigned long long)((bytes + 15u) / 16u);
+        if (endQw > g_unpackMaxEndQw) g_unpackMaxEndQw = endQw;
+        if (endQw > 1024ull) ++g_unpackWrapped;
+    }
     static unsigned long long n = 0;
     if ((++n % 5000ull) == 0ull)
     {
@@ -317,8 +355,8 @@ void ghpcNoteUnpackDest(uint32_t vuAddrQw, uint32_t bytes)
         for (const auto &kv : g_unpackDest) { tot += kv.second; if (kv.first == 0u) low += kv.second; }
         std::cerr << "[vu1] UNPACK dest regions=" << g_unpackDest.size()
                   << " total=" << tot << " intoQw0-63=" << low << " |";
-        int k = 0;
-        for (const auto &kv : g_unpackDest) if (k++ < 10) std::cerr << " qw" << (kv.first * 64u) << "=" << kv.second;
+        for (const auto &kv : g_unpackDest) std::cerr << " qw" << (kv.first * 64u) << "=" << kv.second;
+        std::cerr << " | wrapped=" << g_unpackWrapped << " maxEndQw=" << g_unpackMaxEndQw;
         std::cerr << std::endl;
     }
 }
@@ -747,6 +785,55 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_BASE)
         {
+#if GHPC_DIAG
+            // Is BASE=932 a real VIFcode the game emitted, or a misparsed
+            // stream byte read as one? A genuine BASE is cmd 0x03 with NUM=0.
+            // Log the whole word plus the two codes either side of it so a
+            // desync is obvious from context rather than inferred.
+            {
+                static int baseLogs = 0;
+                const uint32_t curImm = imm & 0x3FFu;
+                // A real BASE has NUM==0 and no immediate bits above bit 9.
+                // If either is set we are probably reading a data payload as a
+                // VIFcode, so dump the surrounding stream: the word before this
+                // one tells us which command mis-advanced pos.
+                const bool malformed = (num != 0u) || ((imm & ~0x3FFu) != 0u);
+                if (malformed && baseLogs < 6)
+                {
+                    ++baseLogs;
+                    const uint32_t codePos = (pos >= 4u) ? (pos - 4u) : 0u;
+                    std::fprintf(stderr,
+                        "[vif1/base] MALFORMED imm=0x%04x num=%u codePos=%u size=%u context:\n",
+                        (unsigned)(imm & 0xFFFFu), (unsigned)num,
+                        (unsigned)codePos, (unsigned)sizeBytes);
+                    const uint32_t from = (codePos >= 32u) ? (codePos - 32u) : 0u;
+                    const uint32_t to = (codePos + 20u < sizeBytes) ? (codePos + 20u) : sizeBytes;
+                    for (uint32_t a = from; a + 4u <= to; a += 4u)
+                    {
+                        uint32_t w = 0u;
+                        std::memcpy(&w, data + a, 4);
+                        std::fprintf(stderr, "    +%04u 0x%08x%s\n", (unsigned)a,
+                                     (unsigned)w, (a == codePos) ? "   <== read as BASE" : "");
+                    }
+                }
+            }
+#endif
+            // A real BASE VIFcode carries NUM==0 and uses only immediate bits
+            // 9-0. A VIF1 chain-flatten desync walks the parser into payload
+            // data, where a word whose top byte happens to be 0x03 reads as
+            // BASE and poisons the register (observed: 0x030b73a4 -> BASE=932,
+            // NUM=11, immediate bits 12-14 set). BASE has exactly one writer
+            // and is sticky, so one bad word corrupts every later MSCAL: TOPS
+            // becomes 932/238, the UNPACK at TOPS+1 spans 285 quadwords, and
+            // ~194 of them wrap onto VU1 addresses 0-194 where the transform
+            // constants live. Ignore words that cannot be a real BASE.
+            // NOTE: this is a guard, not the cure. The desync upstream is the
+            // actual defect and still needs fixing.
+            if (num != 0u || (imm & ~0x3FFu) != 0u)
+            {
+                continue;
+            }
+
             // BASE only updates the base register. TOPS changes on OFFSET/MSCAL.
             vif1_regs.base = imm & 0x3FFu;
             continue;
@@ -835,7 +922,12 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 ghpcNoteMscalFeed(startPC);
                 // Double-buffer setup decides which VU1 memory the program reads.
                 static int n = 0;
-                if (n < 10)
+                static uint32_t lastBase = 0xFFFFFFFFu, lastOfst = 0xFFFFFFFFu;
+                const uint32_t curBase = vif1_regs.base & 0x3FFu;
+                const uint32_t curOfst = vif1_regs.ofst & 0x3FFu;
+                const bool pairChanged = (curBase != lastBase) || (curOfst != lastOfst);
+                if (pairChanged) { lastBase = curBase; lastOfst = curOfst; }
+                if (n < 10 || pairChanged)
                 {
                     ++n;
                     std::cerr << "[vu1] MSCAL pc=0x" << std::hex << startPC << std::dec
@@ -1046,6 +1138,29 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 // Where do UNPACKs actually land in VU1 data memory?
                 extern void ghpcNoteUnpackDest(uint32_t vuAddrQw, uint32_t bytes);
                 ghpcNoteUnpackDest(vuAddr, totalBytes);
+                // A transfer whose end passes quadword 1024 wraps to address 0
+                // and overwrites low VU1 memory. Print the inputs for the first
+                // few so it is clear whether the destination or the length is
+                // the wrong one: addrField is the raw ADDR out of the VIFcode,
+                // tops is what got added to it when the FLG bit is set.
+                if ((uint64_t)vuAddr + (uint64_t)writeVectorCount > 1024ull)
+                {
+                    static int wrapLogs = 0;
+                    if (wrapLogs < 12)
+                    {
+                        ++wrapLogs;
+                        std::fprintf(stderr,
+                            "[vu1/wrap] dest=%u writeVecs=%u end=%u | addrField=%u flg=%u tops=%u "
+                            "base=%u ofst=%u | num=%u cl=%u wl=%u bpv=%u opcode=0x%02x\n",
+                            (unsigned)vuAddr, (unsigned)writeVectorCount,
+                            (unsigned)(vuAddr + writeVectorCount),
+                            (unsigned)(imm & 0x3FFu), (unsigned)((imm >> 15) & 1u),
+                            (unsigned)(vif1_regs.tops & 0x3FFu),
+                            (unsigned)(vif1_regs.base & 0x3FFu), (unsigned)(vif1_regs.ofst & 0x3FFu),
+                            (unsigned)num, (unsigned)cl, (unsigned)wl,
+                            (unsigned)bytesPerVector, (unsigned)opcode);
+                    }
+                }
             }
 #endif
             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)

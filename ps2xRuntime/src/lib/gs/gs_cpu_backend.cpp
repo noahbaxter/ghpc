@@ -825,6 +825,22 @@ void GSCpuBackend::ResetUnlocked()
 void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
+#if GHPC_DIAG
+    {
+        // The frontend reports ~198k Submit calls but DrawPrimitive only runs
+        // ~260 times, and this function has just two ways to drop a batch.
+        // Count which, and whether this is even the backend receiving them.
+        static unsigned long long calls = 0ull, noVram = 0ull, noVerts = 0ull, drawn = 0ull;
+        ++calls;
+        if (!m_vram) ++noVram;
+        else if (batch.vertexCount == 0u) ++noVerts;
+        else ++drawn;
+        if ((calls % 20000ull) == 0ull)
+            std::fprintf(stderr,
+                "[gs/submit] calls=%llu noVram=%llu noVerts=%llu drawn=%llu this=%p\n",
+                calls, noVram, noVerts, drawn, (const void *)this);
+    }
+#endif
     if (!m_vram || batch.vertexCount == 0u)
         return;
     DrawPrimitive(batch);
@@ -907,26 +923,61 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
             ++g_primType[state.prim.type & 7u];
             // Draws bound to the later logo textures never sample. Are their
             // vertices degenerate?
-            if (ctx.tex0.tbp0 == 6976u || ctx.tex0.tbp0 == 6956u || ctx.tex0.tbp0 == 6432u)
+            // Run-wide census of every textured draw, keyed by texture base.
+            // Screen-space bbox is vertex.xy minus XYOFFSET, so a batch whose
+            // x range sits past the framebuffer width is drawn off the right
+            // edge. Capped logging hid this before; keep a table instead.
             {
-                static int shown = 0;
-                if (shown < 12)
+                struct GeomBucket { unsigned tbp; unsigned psm; unsigned prim;
+                                    float x0, x1, y0, y1; unsigned long long n; };
+                static GeomBucket buckets[48];
+                static int used = 0;
+                static unsigned long long seen = 0ull;
+                const unsigned key = ctx.tex0.tbp0;
+                int slot = -1;
+                for (int k = 0; k < used; ++k)
+                    if (buckets[k].tbp == key) { slot = k; break; }
+                if (slot < 0 && used < 48)
                 {
-                    ++shown;
-                    std::cerr << "[gs/geom] tbp0=" << ctx.tex0.tbp0
-                              << " prim=" << (unsigned)state.prim.type
-                              << " fst=" << (unsigned)state.prim.fst
-                              << " fbp=" << ctx.frame.fbp
-                              << " scissor=(" << ctx.scissor.x0 << "," << ctx.scissor.y0
-                              << ")-(" << ctx.scissor.x1 << "," << ctx.scissor.y1 << ")"
-                              << " ofx=" << (ctx.xyoffset.ofx >> 4)
-                              << " ofy=" << (ctx.xyoffset.ofy >> 4);
-                    for (int vi = 0; vi < 3; ++vi)
-                        std::cerr << " v" << vi << "=(" << batch.vertices[vi].x
-                                  << "," << batch.vertices[vi].y << ")"
-                                  << "uv=(" << (batch.vertices[vi].u >> 4)
-                                  << "," << (batch.vertices[vi].v >> 4) << ")";
-                    std::cerr << std::endl;
+                    slot = used++;
+                    buckets[slot] = GeomBucket{key, (unsigned)ctx.tex0.psm,
+                                               (unsigned)state.prim.type,
+                                               1e30f, -1e30f, 1e30f, -1e30f, 0ull};
+                }
+                if (slot >= 0)
+                {
+                    GeomBucket &b = buckets[slot];
+                    const float ox = (float)(ctx.xyoffset.ofx >> 4);
+                    const float oy = (float)(ctx.xyoffset.ofy >> 4);
+                    const unsigned nv = batch.vertexCount > 3u ? 3u : batch.vertexCount;
+                    for (unsigned vi = 0u; vi < nv; ++vi)
+                    {
+                        // Raw x/y of exactly 0 is the unwritten-vertex value and
+                        // pinned every bucket's minimum to -ofx. Skip it.
+                        if (batch.vertices[vi].x == 0.0f && batch.vertices[vi].y == 0.0f)
+                            continue;
+                        const float x = batch.vertices[vi].x - ox;
+                        const float y = batch.vertices[vi].y - oy;
+                        if (x < b.x0) b.x0 = x;
+                        if (x > b.x1) b.x1 = x;
+                        if (y < b.y0) b.y0 = y;
+                        if (y > b.y1) b.y1 = y;
+                    }
+                    ++b.n;
+                }
+                if ((++seen % 200000ull) == 0ull)
+                {
+                    // Reset every window. A run-wide bbox mixes the splash with
+                    // the save screen and reads as garbage; what matters is
+                    // where the most recent draws actually land.
+                    std::fprintf(stderr, "[gs/geomcensus] draws=%llu buckets=%d (window)\n", seen, used);
+                    for (int k = 0; k < used; ++k)
+                        std::fprintf(stderr,
+                            "  tbp0=%u psm=0x%02x prim=%u n=%llu x=[%.1f,%.1f] y=[%.1f,%.1f]\n",
+                            buckets[k].tbp, buckets[k].psm, buckets[k].prim, buckets[k].n,
+                            (double)buckets[k].x0, (double)buckets[k].x1,
+                            (double)buckets[k].y0, (double)buckets[k].y1);
+                    used = 0;
                 }
             }
             ++g_primPsm[((state.prim.type & 7u) << 8) | (ctx.tex0.psm & 0xFFu)];
@@ -1125,6 +1176,28 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     const u32 zpsm = ctx.zbuf.psm;
 
     const PixelWriteMask writeMask = classifyAlphaTest(ctx.test, a, static_cast<uint8_t>(fpsm));
+#if GHPC_DIAG
+    // The Activision logo draw (PSMT8 at tbp0=0x1520) arrives with correct
+    // geometry and sane state, so count what its fragments actually do here.
+    if (ctx.tex0.tbp0 == 0x1520u)
+    {
+        static unsigned long long frags = 0ull, fbWrites = 0ull, alphaFail = 0ull;
+        static unsigned long long aHist[8] = {};
+        ++frags;
+        if (writeMask.writesFramebuffer()) ++fbWrites; else ++alphaFail;
+        ++aHist[a >> 5];
+        if ((frags % 20000ull) == 0ull)
+        {
+            std::fprintf(stderr,
+                "[gs/logo] frags=%llu fbWrites=%llu alphaFail=%llu aref=%u atst=%u"
+                " aHist(0..255 by32)=", frags, fbWrites, alphaFail,
+                (unsigned)((ctx.test >> 4) & 0xFFu), (unsigned)((ctx.test >> 1) & 0x7u));
+            for (int k = 0; k < 8; ++k) std::fprintf(stderr, " %llu", aHist[k]);
+            std::fprintf(stderr, " | rgba=(%u,%u,%u,%u)\n",
+                         (unsigned)r, (unsigned)g, (unsigned)b, (unsigned)a);
+        }
+    }
+#endif
     if (!writeMask.writesAnything())
     {
 #if GHPC_DIAG
@@ -1271,6 +1344,25 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
                                        : ((pixel & 0x00FFFFFFu) == 0u))
             ++GhpcTexDiag::g_wroteZeroPixel;
 #endif
+#if GHPC_DIAG
+        // The logo rasterises correctly, so watch one pixel inside its rect and
+        // record every write to it in order: whatever paints over it last is
+        // what the screen actually shows.
+        if (x == 256u && y == 224u)
+        {
+            static int watchLogs = 0;
+            if (watchLogs < 80)
+            {
+                ++watchLogs;
+                std::fprintf(stderr,
+                    "[gs/pixel] fbp=0x%04x fpsm=0x%02x tbp0=0x%04x tme=%u prim=%u"
+                    " pixel=0x%08x rgba=(%u,%u,%u,%u)\n",
+                    (unsigned)fbp, (unsigned)fpsm, (unsigned)ctx.tex0.tbp0,
+                    state.prim.tme ? 1u : 0u, (unsigned)state.prim.type,
+                    (unsigned)pixel, (unsigned)r, (unsigned)g, (unsigned)b, (unsigned)a);
+            }
+        }
+#endif
         WriteVramUnlocked(fpsm, fbp, fbw, x, y, pixel);
     }
 
@@ -1384,15 +1476,19 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
                     ++g_rawIdx[((tex.tbp0 & 0xFFFFu) << 16) | (out & 0xFFFFu)];
                 if (g_outColor.size() < 4096u)
                     ++g_outColor[col];
-                if (!GhpcTexDiag::g_texDumped.count(tex.tbp0) && GhpcTexDiag::g_texDumped.size() < 8)
+                const uint32_t dumpKey = ((uint32_t)tex.tbp0 << 12) ^
+                                         ((uint32_t)tex.psm << 24) ^
+                                         ((uint32_t)state.textureWidth << 6) ^
+                                         (uint32_t)state.textureHeight;
+                if (!GhpcTexDiag::g_texDumped.count(dumpKey) && GhpcTexDiag::g_texDumped.size() < 24)
                 {
-                    GhpcTexDiag::g_texDumped.insert(tex.tbp0);
+                    GhpcTexDiag::g_texDumped.insert(dumpKey);
                     const int W = state.textureWidth, H = state.textureHeight;
                     if (W > 0 && H > 0 && W <= 512 && H <= 512)
                     {
                         char fn[128];
-                        std::snprintf(fn, sizeof(fn), "/tmp/ghpc_tex_%u_psm%02x.ppm",
-                                      (unsigned)tex.tbp0, (unsigned)tex.psm);
+                        std::snprintf(fn, sizeof(fn), "/tmp/ghpc_tex_%u_psm%02x_%dx%d.ppm",
+                                      (unsigned)tex.tbp0, (unsigned)tex.psm, W, H);
                         FILE *f = std::fopen(fn, "wb");
                         if (f)
                         {
@@ -1905,6 +2001,38 @@ void GSCpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes)
                           << " psm=0x" << std::hex << (uint32_t)dpsm << std::dec
                           << " " << w << "x" << h
                           << " distinctTexels=" << seen.size() << std::endl;
+                // Prove the asset independently of the CLUT and of whether
+                // anything ever samples it: write the raw index values as
+                // grayscale. If the artwork is intact in VRAM its shape is
+                // visible here even when no draw ever references the texture.
+                if (dpsm == GS_PSM_T8 || dpsm == GS_PSM_T4)
+                {
+                    static int idxDumps = 0;
+                    if (idxDumps < 8 && w > 0u && h > 0u && w <= 1024u && h <= 1024u)
+                    {
+                        char fn[192];
+                        std::snprintf(fn, sizeof(fn), "/tmp/ghpc_idx_%d_dbp%u_psm%02x_%ux%u.ppm",
+                                      idxDumps, (unsigned)dbp, (unsigned)dpsm,
+                                      (unsigned)w, (unsigned)h);
+                        if (FILE *f = std::fopen(fn, "wb"))
+                        {
+                            const uint32_t maxIdx = (dpsm == GS_PSM_T4) ? 15u : 255u;
+                            std::fprintf(f, "P6\n%u %u\n255\n", w, h);
+                            for (uint32_t yy = 0; yy < h; ++yy)
+                                for (uint32_t xx = 0; xx < w; ++xx)
+                                {
+                                    const uint32_t v = ReadVramUnlocked(dpsm, dbp, dbw, xx, yy) & maxIdx;
+                                    const unsigned char g =
+                                        (unsigned char)((v * 255u) / (maxIdx ? maxIdx : 1u));
+                                    unsigned char px[3] = {g, g, g};
+                                    std::fwrite(px, 1, 3, f);
+                                }
+                            std::fclose(f);
+                            std::cerr << "[gs/idxdump] wrote " << fn << std::endl;
+                            ++idxDumps;
+                        }
+                    }
+                }
             }
 #endif
             m_transferState.direction = 3u;
@@ -2351,6 +2479,43 @@ PresentationFrame GSCpuBackend::Present(const GSPresentationRequest &request)
                       << " nonZero=" << nonZero
                       << " fbp56range=[" << fb56 << "," << (fb56 + fbLen) << ")"
                       << " nonZeroThere=" << nz56 << std::endl;
+            // Decode both framebuffers straight out of VRAM, independent of the
+            // presentation path. If a logo is sitting in one of these while the
+            // window shows black, the bug is presentation; if both are black,
+            // nothing ever drew it.
+            {
+                static int snapDump = 0;
+                if (snapDump < 12)
+                {
+                    const uint32_t fbps[2] = {0u, 56u};
+                    for (uint32_t k = 0u; k < 2u; ++k)
+                    {
+                        char fn[160];
+                        std::snprintf(fn, sizeof(fn), "/tmp/ghpc_vram_fbp%u_%02d.ppm",
+                                      (unsigned)fbps[k], snapDump);
+                        FILE *f = std::fopen(fn, "wb");
+                        if (!f) continue;
+                        std::fprintf(f, "P6\n512 448\n255\n");
+                        size_t nz = 0u;
+                        for (uint32_t y = 0u; y < 448u; ++y)
+                            for (uint32_t x = 0u; x < 512u; ++x)
+                            {
+                                const uint32_t c = GSMem::ReadCT16(snapshot.data(),
+                                                                   fbps[k] * 32u, 8u, x, y);
+                                // CT16 is A1B5G5R5.
+                                unsigned char px[3] = {
+                                    (unsigned char)(((c >> 0) & 0x1Fu) << 3),
+                                    (unsigned char)(((c >> 5) & 0x1Fu) << 3),
+                                    (unsigned char)(((c >> 10) & 0x1Fu) << 3)};
+                                if (px[0] || px[1] || px[2]) ++nz;
+                                std::fwrite(px, 1, 3, f);
+                            }
+                        std::fclose(f);
+                        std::cerr << "[gs/snap] wrote " << fn << " nonBlackPixels=" << nz << std::endl;
+                    }
+                    ++snapDump;
+                }
+            }
         }
     }
 #endif

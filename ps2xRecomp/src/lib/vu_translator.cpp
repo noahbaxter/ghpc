@@ -64,7 +64,7 @@ namespace ps2recomp
             }
         }
         case COP2_QMTC2:
-            return fmt::format("ctx->vu0_vf[{}] = _mm_castsi128_ps(GPR_VEC(ctx, {}));", rd, rt);
+            return fmt::format("ctx->vu0_vf[{}] = _mm_castsi128_ps(GPR_VEC(ctx, {}));", codegen::vfDst(rd), rt);
         case COP2_CTC2:
         {
             if (rd < 16)
@@ -233,7 +233,7 @@ namespace ps2recomp
                                        inst.rd,
                                        (dest_mask & 0x1) ? -1 : 0, (dest_mask & 0x2) ? -1 : 0,
                                        (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0,
-                                       inst.rt, inst.rt);
+                                       codegen::vfDst(inst.rt), codegen::vfDst(inst.rt));
                 }
                 case VU0_S2_VMOVE:
                 {
@@ -245,7 +245,7 @@ namespace ps2recomp
                         (dest_mask & 0x2) ? -1 : 0,
                         (dest_mask & 0x4) ? -1 : 0,
                         (dest_mask & 0x8) ? -1 : 0,
-                        inst.rt, inst.rt, inst.rd);
+                        codegen::vfDst(inst.rt), codegen::vfDst(inst.rt), inst.rd);
                 }
                 case VU0_S2_VMR32:
                 {
@@ -259,7 +259,7 @@ namespace ps2recomp
                         (dest_mask & 0x2) ? -1 : 0,
                         (dest_mask & 0x4) ? -1 : 0,
                         (dest_mask & 0x8) ? -1 : 0,
-                        inst.rt, inst.rt);
+                        codegen::vfDst(inst.rt), codegen::vfDst(inst.rt));
                 }
                 case VU0_S2_VCLIPw:
                 {

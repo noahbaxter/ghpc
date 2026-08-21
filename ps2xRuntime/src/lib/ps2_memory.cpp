@@ -1338,6 +1338,52 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 }
             }
 
+            // Channel 9, toSPR. PsMesh::DrawFaces (0x43ef70) walks its face
+            // data in RAM a chunk at a time and moves each chunk into the
+            // scratchpad packet buffer with DmaPacket::Send(local, 9, 0,
+            // cursor) before PsRnd::FlushPacket kicks channel 8 to push that
+            // buffer into the VIF1 MFIFO ring. Every quadword the mesh path
+            // draws arrives this way; nothing writes it with CPU stores. With
+            // this channel unimplemented the buffer kept whatever the previous
+            // frame left there, so the ring got stale floats where the tag
+            // chain should continue and the VIF1 walker wedged on them.
+            // PreSend (0x43e600) sets MADR = source in RAM, SADR = scratchpad
+            // destination, QWC = quadwords, CHCR = 0x101 (normal mode).
+            if (channelBase == 0x1000D400u)
+            {
+                uint32_t source = madr;
+                uint32_t destination = m_ioRegisters[channelBase + 0x80] & (PS2_SCRATCHPAD_SIZE - 1u);
+                if (m_scratchpad && m_rdram)
+                {
+                    for (uint32_t quad = 0u; quad < qwc; ++quad)
+                    {
+                        const uint32_t physical = source & PS2_RAM_MASK;
+                        if (physical + 16u <= PS2_RAM_SIZE)
+                        {
+                            std::memcpy(m_scratchpad + destination, m_rdram + physical, 16u);
+                        }
+                        source += 16u;
+                        destination = (destination + 16u) & (PS2_SCRATCHPAD_SIZE - 1u);
+                    }
+                }
+#if GHPC_DIAG
+                {
+                    static unsigned long long toSpr = 0ull;
+                    if (toSpr < 24ull)
+                        std::fprintf(stderr, "[tospr] #%llu qwc=%u ramSrc=0x%x sprDst=0x%x chcr=0x%x\n",
+                                     toSpr, (unsigned)qwc, (unsigned)madr,
+                                     (unsigned)(m_ioRegisters[channelBase + 0x80] & (PS2_SCRATCHPAD_SIZE - 1u)),
+                                     (unsigned)value);
+                    ++toSpr;
+                }
+#endif
+                m_ioRegisters[channelBase + 0x10] = source;
+                m_ioRegisters[channelBase + 0x80] = destination;
+                m_ioRegisters[channelBase + 0x20] = 0u;
+                m_ioRegisters[channelBase + 0x00] = value & ~0x100u;
+                return true;
+            }
+
             // Channel 8, fromSPR. PsRnd builds each packet in scratchpad and
             // sends it with DmaPacket::Send(spr, 8), which fills the MFIFO ring
             // that VIF1 drains. Without this the ring stays empty, so
@@ -1351,6 +1397,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                 uint32_t destination = madr;
                 uint32_t source = m_ioRegisters[channelBase + 0x80] & (PS2_SCRATCHPAD_SIZE - 1u);
+                const uint32_t sprSrcStart = source;
                 if (m_scratchpad && m_rdram)
                 {
                     for (uint32_t quad = 0u; quad < qwc; ++quad)
@@ -1383,6 +1430,36 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 #if GHPC_DIAG
                 if (mfifoToVif1)
                 {
+                    extern unsigned long long g_ghpcSprFills;
+                    // g_ghpcSprFills was already incremented above, so this is
+                    // the 1-based count; the 0-based fill index (matching
+                    // ghpcReportFillFor's "fill #N") is g_ghpcSprFills - 1.
+                    const unsigned long long fillIndex0 = g_ghpcSprFills - 1ull;
+                    if (fillIndex0 < 20ull || (fillIndex0 >= 1780ull && fillIndex0 <= 1800ull))
+                    {
+                        std::fprintf(stderr,
+                                     "[fill] #%llu qwc=%u sprSrc=0x%x ringDest=0x%x ringEnd=0x%x chcr=0x%x "
+                                     "mode=%u dir=%u tte=%u tie=%u\n",
+                                     fillIndex0, (unsigned)qwc, (unsigned)sprSrcStart, (unsigned)madr,
+                                     (unsigned)destination, (unsigned)value,
+                                     (unsigned)((value >> 2) & 0x3u), (unsigned)(value & 0x1u),
+                                     (unsigned)((value >> 6) & 0x1u), (unsigned)((value >> 7) & 0x1u));
+                    }
+                    // GHPC_DIAG: hexdump the scratchpad region that should hold
+                    // the tag chain around the missing tag slot (0x2e0), taken
+                    // at copy time so it reflects whatever the guest has put
+                    // into scratchpad by the moment of the kick.
+                    if ((fillIndex0 == 1788ull || fillIndex0 == 1789ull) && m_scratchpad)
+                    {
+                        std::fprintf(stderr, "[sprdump] fill#%llu scratchpad 0x2a0-0x390:\n", fillIndex0);
+                        for (uint32_t row = 0x2a0u; row < 0x390u; row += 16u)
+                        {
+                            std::fprintf(stderr, "  +0x%03x:", row);
+                            for (uint32_t i = 0; i < 16u; ++i)
+                                std::fprintf(stderr, " %02x", m_scratchpad[row + i]);
+                            std::fprintf(stderr, "\n");
+                        }
+                    }
                     extern void ghpcNoteRingFill(uint32_t start, uint32_t qwc, uint32_t end);
                     ghpcNoteRingFill(madr, qwc, destination);
                     // Does each fill begin exactly where the chain expects its
@@ -1476,6 +1553,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                     auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
                     {
+#if GHPC_DIAG
+                        // Remember where each flattened chunk came from, so a
+                        // corrupt word in the chain can be traced back to the EE
+                        // address that produced it.
+                        if (channelBase == 0x10009000u)
+                        {
+                            extern void ghpcNoteChainChunk(unsigned chainOff, unsigned eeAddr,
+                                                           unsigned bytes, bool reset);
+                            ghpcNoteChainChunk((unsigned)chainBuf.size(), srcAddr,
+                                               qwCount * 16u, false);
+                        }
+#endif
                         const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                         uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                         const bool scratch = isScratchpad(srcAddr);
@@ -1618,12 +1707,16 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         if (mfifoDrain)
                         {
                             struct T { uint32_t at, id, qwc, addr, next; };
-                            static T ring[4] = {};
+                            static T ring[32] = {};
                             static uint32_t ri = 0u;
                             static int dumped = 0;
-                            const bool insane = (tagQwc > 32768u) ||
-                                                ((id == 1u || id == 2u || id == 5u || id == 6u || id == 7u) &&
-                                                 (uint32_t)tagQwc * 16u > (mfifoMask + 16u));
+                            // Where this tag sits is the previous tag's next, so
+                            // back-fill it now that it is known.
+                            if (ri > 0u) ring[(ri - 1u) & 31u].next = currentTagAddr;
+                            // Trip on the first boundary that cannot be a tag at
+                            // all, not just the wildly out of range ones, so the
+                            // dump lands on the transition rather than far past it.
+                            const bool insane = (tagQwc > 16384u) || ((addr & 0xFu) != 0u);
                             if (insane && dumped < 4)
                             {
                                 ++dumped;
@@ -1633,14 +1726,15 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                     extern void ghpcReportFillFor(uint32_t addr);
                                     ghpcReportFillFor(currentTagAddr);
                                 }
-                                for (uint32_t k = 0u; k < 4u; ++k)
+                                for (uint32_t k = 0u; k < 32u; ++k)
                                 {
-                                    const T &t = ring[(ri + k) & 3u];
+                                    const T &t = ring[(ri + k) & 31u];
+                                    if (t.at == 0u) continue;
                                     std::fprintf(stderr, "    tag@0x%x id=%u qwc=%u addr=0x%x -> next=0x%x\n",
                                                  t.at, t.id, t.qwc, t.addr, t.next);
                                 }
                             }
-                            ring[ri & 3u] = T{currentTagAddr, id, tagQwc, addr, 0u};
+                            ring[ri & 31u] = T{currentTagAddr, id, tagQwc, addr, 0u};
                             ++ri;
                         }
                         // Walk log: find where TADR first stops landing on a real tag.
@@ -1648,15 +1742,28 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         {
                             static int walk = 0;
                             const bool sane = ((addr & 0xFu) == 0u) && (tagQwc <= 16384u);
-                            if (walk < 60 || !sane)
+                            // GHPC_DIAG: hypothesis (1) probe. distTagQw is the
+                            // enclosing MFIFO ring's remaining budget to the fill
+                            // pointer, in quadwords, as seen by the stall check
+                            // above (distTag = (mfifoFill - tagAddr) & mfifoMask).
+                            // If it hits zero at/before tag@0xb10b40 the stall
+                            // check should have caught it; if it stays healthy the
+                            // over-walk is not explained by this bound.
+                            const uint32_t distTagQwDiag =
+                                (mfifoMask != 0u) ? (((mfifoFill - currentTagAddr) & mfifoMask) / 16u)
+                                                   : 0xFFFFFFFFu;
+                            const bool inLeadIn =
+                                currentTagAddr >= 0xb10800u && currentTagAddr < 0xb11000u;
+                            if (walk < 60 || !sane || inLeadIn)
                             {
-                                if (walk < 200)
+                                if (walk < 400)
                                 {
                                     ++walk;
                                     std::fprintf(stderr,
-                                        "[vif1] walk tag@0x%x id=%u qwc=%u addr=0x%x %s\n",
+                                        "[vif1] walk tag@0x%x id=%u qwc=%u addr=0x%x distTagQw=%u %s\n",
                                         (unsigned)currentTagAddr, (unsigned)id,
                                         (unsigned)tagQwc, (unsigned)addr,
+                                        (unsigned)distTagQwDiag,
                                         sane ? "" : "<== NOT A TAG");
                                 }
                             }

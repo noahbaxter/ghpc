@@ -58,7 +58,10 @@ namespace ps2recomp
                                    "else ctx->f[{}] = ctx->f[{}] / ctx->f[{}];",
                                    ft, fd, fs, fd, fs, ft);
             case COP1_S_SQRT:
-                return fmt::format("ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]);", fd, fs);
+                // R5900 SQRT.S is fd = sqrt(ft), not sqrt(fs). The operand sits
+                // in ft and fs is zero in the encoding, so reading fs silently
+                // squares whatever happened to be in f0.
+                return fmt::format("ctx->f[{}] = FPU_SQRT_S(ctx->f[{}]);", fd, ft);
             case COP1_S_ABS:
                 return fmt::format("ctx->f[{}] = FPU_ABS_S(ctx->f[{}]);", fd, fs);
             case COP1_S_MOV:
@@ -76,7 +79,9 @@ namespace ps2recomp
             case COP1_S_CVT_W:
                 return fmt::format("{{ int32_t tmp = FPU_CVT_W_S(ctx->f[{}]); std::memcpy(&ctx->f[{}], &tmp, sizeof(tmp)); }}", fs, fd);
             case COP1_S_RSQRT:
-                return fmt::format("ctx->f[{}] = 1.0f / sqrtf(ctx->f[{}]);", fd, fs);
+                // R5900 RSQRT.S is fd = fs / sqrt(ft), a divide by a square
+                // root, not a reciprocal square root of fs.
+                return fmt::format("ctx->f[{}] = ctx->f[{}] / sqrtf(ctx->f[{}]);", fd, fs, ft);
             case COP1_S_ADDA:
                 return fmt::format("FPU_SET_ACC(ctx, FPU_ADD_S(ctx->f[{}], ctx->f[{}]));", fs, ft);
             case COP1_S_SUBA:
