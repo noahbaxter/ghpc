@@ -484,4 +484,61 @@ public:
     ListDisplay mDisplay; // 0x1c8
 };
 
+
+// ===========================================================================
+// system/utl, second pass
+// ===========================================================================
+
+// A circular byte buffer. BytesReadable and BytesWriteable are exact mirrors of
+// each other, which cross-checks the whole layout: both read 0x04 and 0x08 as
+// the two cursors, fall back on 0x00 as the capacity when they wrap, and settle
+// the read == write tie with the flag at 0x0c.
+class StreamingBuffer {
+public:
+    int BytesReadable() const;  // 0x326640
+    int BytesWriteable() const; // 0x326688
+
+    int mSize;     // 0x00 capacity
+    int mReadPos;  // 0x04
+    int mWritePos; // 0x08
+    int mFull;     // 0x0c breaks the read == write tie
+};
+
+// One file inside the ARK archive. Eof compares 0x1c against 0x0c, which is what
+// names both: 0x0c is the length and 0x1c is the cursor.
+class ArkFile {
+public:
+    enum SeekType { kSeekSet = 0, kSeekCur = 1, kSeekEnd = 2 };
+
+    int Seek(int offset, SeekType type); // 0x2f8070
+    bool Eof();                          // 0x2f80c8
+    bool Fail();                         // 0x2f80e0
+    void Flush();                        // 0x427a30
+
+    unsigned char mUnk00[0x0c];
+    int mSize;                 // 0x0c
+    unsigned char mUnk10[0x0c];
+    int mPos;                  // 0x1c
+    int mError;                // 0x20
+};
+
+// R249, a lagged Fibonacci XOR generator. The table is 249 entries starting at
+// +0x08, which is pinned by the two wrap comparisons against 0xf9.
+class Rand {
+public:
+    int Int();               // 0x32da88
+    int Int(int lo, int hi); // 0x32d980
+
+    int mI;             // 0x00
+    int mJ;             // 0x04
+    int mTable[249];    // 0x08
+};
+
+// Hash table growth. The prime table is a zero-terminated array of ints in the
+// data segment at 0x445240.
+int NextHashPrime(int atLeast); // 0x32f2e0
+
+// LEB128 decode. Returns the pointer just past the last byte consumed.
+const unsigned char *decode_uleb128(const unsigned char *p, unsigned int *out); // 0x104ba8
+
 #endif // GH2_INFERRED_TYPES_H
