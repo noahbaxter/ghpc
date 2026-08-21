@@ -20,7 +20,9 @@ public:
 } // namespace Hmx
 
 class DataArray;
-class DataNode;
+// Two words wide: RndDrawable::OnZeroSphere returns an empty one by clearing
+// exactly 0x00 and 0x04 of the caller-provided return slot.
+class DataNode { public: int mType; int mValue; };
 class File;
 class Symbol { public: void *mStr; };
 class String;

@@ -541,4 +541,79 @@ int NextHashPrime(int atLeast); // 0x32f2e0
 // LEB128 decode. Returns the pointer just past the last byte consumed.
 const unsigned char *decode_uleb128(const unsigned char *p, unsigned int *out); // 0x104ba8
 
+
+// ===========================================================================
+// math
+// ===========================================================================
+//
+// PS2 Milo pads its vectors to a 16 byte quadword so VU0 can move them with
+// lqc2 / sqc2. Every function below either loads a whole quadword or reads
+// x at +0x00, y at +0x04 and z at +0x08, so the padded layout is not in doubt.
+
+struct Vector2 {
+    float x; // 0x00
+    float y; // 0x04
+};
+
+struct Vector3 {
+    float x; // 0x00
+    float y; // 0x04
+    float z; // 0x08
+    float w; // 0x0c, quadword padding, carried but not used arithmetically
+};
+
+namespace Hmx {
+
+struct Quat {
+    float x, y, z, w; // 0x00, 0x04, 0x08, 0x0c
+};
+
+// Three rows of a rotation matrix, each padded to a quadword.
+struct Matrix3 {
+    Vector3 x; // 0x00
+    Vector3 y; // 0x10
+    Vector3 z; // 0x20
+};
+
+} // namespace Hmx
+
+// An affine transform. Multiply loops three times over the rotation rows then
+// handles the translation row separately, which is what pins the translation to
+// 0x30 and the whole thing to four quadwords.
+struct Transform {
+    Hmx::Matrix3 m; // 0x00
+    Vector3 v;      // 0x30 translation
+};
+
+// A bounding sphere, written as a single quadword by the VU0 zero idiom.
+struct Sphere {
+    Vector3 center; // 0x00
+    float radius;   // 0x10
+};
+
+void Add(const Vector3 &a, const Vector2 &b, Vector3 &out);      // 0x1e41e0
+void Subtract(const Vector3 &a, const Vector2 &b, Vector3 &out); // 0x1e4210
+void Normalize(const Hmx::Quat &q, Hmx::Quat &out);              // 0x32dbf0
+void Multiply(const Vector3 &v, const Hmx::Quat &q, Vector3 &out); // 0x32ece8
+void Multiply(const Transform &m, const Transform &n, Transform &out);  // 0x32eec8
+void Multiply2(const Transform &m, const Transform &n, Transform &out); // 0x32f188
+void MakeRotMatrix(const Hmx::Quat &q, Hmx::Matrix3 &out);       // 0x32e858
+
+
+// ===========================================================================
+// rndobj
+// ===========================================================================
+
+// Only the cached bounding sphere is pinned, by the three functions that clear
+// it. The centre is a padded Vector3 at +0x10 and the radius the word right
+// after it at +0x20.
+class RndDrawable {
+public:
+    void UpdateSphere();                     // 0x3b5860
+    DataNode OnZeroSphere(const DataArray *); // 0x1dccd8
+
+    unsigned char mUnk00[0x10];
+    Sphere mSphere; // 0x10, centre at 0x10 and radius at 0x20
+};
+
 #endif // GH2_INFERRED_TYPES_H
