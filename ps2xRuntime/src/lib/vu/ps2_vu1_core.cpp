@@ -901,13 +901,17 @@ void VU1Interpreter::progressXgkick()
                 tagBytes += static_cast<uint64_t>(nloop) * nreg * 16u;
             else if (format == 1u)
                 tagBytes += ((static_cast<uint64_t>(nloop) * nreg + 1u) & ~1ull) * 8u;
-            else if (format == 2u)
-                tagBytes += static_cast<uint64_t>(nloop) * 16u;
             else
             {
-                reportReservedInstruction(false, 0xFFFFFFF8u);
-                m_xgkick.active = false;
-                return;
+                // FLG 2 is IMAGE and FLG 3 is DISABLE. DISABLE is a legal mode
+                // with the same qwordcount as IMAGE; the data is simply not
+                // handed to the GS (gs_frontend has no branch for it, so it
+                // falls through and is discarded, which is the correct
+                // behaviour). Treating it as a fault used to abort the XGKICK
+                // and set m_stopRequested, which killed the whole VU1
+                // microprogram partway through and dropped every register
+                // write and primitive that would have followed it.
+                tagBytes += static_cast<uint64_t>(nloop) * 16u;
             }
 
             if (tagBytes > XgkickPipeline::kBufferSize - qwordOffset)
