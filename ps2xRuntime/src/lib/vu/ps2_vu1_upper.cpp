@@ -18,6 +18,52 @@ namespace
     }
 }
 
+#if GHPC_DIAG
+// Dump the inputs of instructions at the PCs that were shown to write the
+// corrupt x lane, the first few times each one runs.
+void ghpcNoteBadLane(uint32_t pc, uint32_t instr, uint8_t op, uint8_t dest,
+                     uint8_t fs, uint8_t ft, uint8_t fd,
+                     const float *vs, const float *vt, const float *acc,
+                     float q, float i, const float (*vfAll)[4])
+{
+    // Matrix composition block: projection (vf01/vf07/vf08) times the camera
+    // rows in vf03..vf06. It is correct on the first pass, so only log when an
+    // operand already carries the out-of-range lane x that ends up as 200.085.
+    // Only the MADDz that writes each composed row matters, and only when its
+    // lane x lands out of range. That is the exact moment the matrix goes bad.
+    if (pc != 0x0d68u && pc != 0x0d80u && pc != 0x0d98u && pc != 0x0db8u)
+        return;
+    const float resultX = acc[0] + vs[0] * vt[2];
+    const float mag = resultX < 0 ? -resultX : resultX;
+    if (mag < 10.0f)
+        return;
+    static int logs = 0;
+    if (logs >= 40)
+        return;
+    ++logs;
+    extern unsigned int g_ghpcVfWriter[32][4];
+    extern unsigned int g_ghpcVfSrcAddr[32];
+    std::fprintf(stderr,
+        "[vu1/mcomp] pc=0x%04x op=0x%02x dest=0x%x fs=%u ft=%u fd=%u resultX=%g\n"
+        "    vs=(%g,%g,%g,%g) vt=(%g,%g,%g,%g)\n"
+        "    acc=(%g,%g,%g,%g)\n"
+        "    vf01=(%g,%g,%g,%g) vf07=(%g,%g,%g,%g) vf08=(%g,%g,%g,%g)\n"
+        "    laneX writers: vf01@0x%04x vf07@0x%04x vf08@0x%04x | srcAddr vf07=0x%04x(v=%u) vf08=0x%04x(v=%u)\n",
+        pc, (unsigned)op, (unsigned)dest, (unsigned)fs, (unsigned)ft, (unsigned)fd,
+        (double)resultX,
+        (double)vs[0], (double)vs[1], (double)vs[2], (double)vs[3],
+        (double)vt[0], (double)vt[1], (double)vt[2], (double)vt[3],
+        (double)acc[0], (double)acc[1], (double)acc[2], (double)acc[3],
+        (double)vfAll[1][0], (double)vfAll[1][1], (double)vfAll[1][2], (double)vfAll[1][3],
+        (double)vfAll[7][0], (double)vfAll[7][1], (double)vfAll[7][2], (double)vfAll[7][3],
+        (double)vfAll[8][0], (double)vfAll[8][1], (double)vfAll[8][2], (double)vfAll[8][3],
+        g_ghpcVfWriter[1][0], g_ghpcVfWriter[7][0], g_ghpcVfWriter[8][0],
+        g_ghpcVfSrcAddr[7] & 0x7FFFFFFFu, (g_ghpcVfSrcAddr[7] >> 31) & 1u,
+        g_ghpcVfSrcAddr[8] & 0x7FFFFFFFu, (g_ghpcVfSrcAddr[8] >> 31) & 1u);
+    (void)instr; (void)q; (void)i;
+}
+#endif
+
 // ============================================================================
 // Upper instructions (FMAC pipeline)
 // ============================================================================
@@ -46,6 +92,20 @@ void VU1Interpreter::execUpper(uint32_t instr)
     const float q = normalizeOperand(m_state.q);
     const float i = normalizeOperand(m_state.i);
     float result[4];
+
+#if GHPC_DIAG
+    // Lane x of the transformed position comes out ~1120x too large while y/z/w
+    // are sane. Catch the instruction at the moment it produces the bad value
+    // and dump its inputs, so we can tell a corrupt matrix column from bad math.
+    {
+        extern void ghpcNoteBadLane(uint32_t pc, uint32_t instr, uint8_t op, uint8_t dest,
+                                    uint8_t fs, uint8_t ft, uint8_t fd,
+                                    const float *vs, const float *vt, const float *acc,
+                                    float q, float i, const float (*vfAll)[4]);
+        ghpcNoteBadLane(m_state.pc, instr, op, dest, fs, ft, fd, vs, vt, acc, q, i,
+                        m_state.vf);
+    }
+#endif
 
     // Upper opcode decoding (bits 5:0 of upper word)
     switch (op)
@@ -411,6 +471,75 @@ void VU1Interpreter::execUpper(uint32_t instr)
                 flags |= 0x10u;
             if (exceedsClipPlane(m_state.vf[fs][2], 0x80000000u))
                 flags |= 0x20u;
+#if GHPC_DIAG
+            {
+                // 97% of vertices come back ADC-suppressed. If w is zero or
+                // denormal the limit falls back to the largest denormal, so
+                // every normal-magnitude coordinate clips. Measure w rather
+                // than assume it.
+                static unsigned long long total = 0ull, wZero = 0ull, allSix = 0ull, anySet = 0ull;
+                static int shown = 0;
+                const float wv = m_state.vf[ft][3];
+                const bool zeroW = (wBits & 0x7F800000u) == 0u;
+                ++total;
+                if (zeroW) ++wZero;
+                if (flags == 0x3Fu) ++allSix;
+                if (flags != 0u) ++anySet;
+                // Sample across the whole run, not just the opening frames:
+                // the first vertices are the clean splash quad and say nothing
+                // about the 99.8% of calls that trip +x.
+                if (shown < 8 || (total % 5000000ull) == 0ull)
+                {
+                    ++shown;
+                    extern unsigned int g_ghpcVfWriter[32][4];
+                    std::fprintf(stderr,
+                        "[vu1/clip] pc=0x%04x n=%llu fs=%u writers x=0x%04x y=0x%04x "
+                        "z=0x%04x w=0x%04x ftw=0x%04x\n",
+                        (unsigned)m_state.pc, total, (unsigned)fs,
+                        g_ghpcVfWriter[fs][0], g_ghpcVfWriter[fs][1],
+                        g_ghpcVfWriter[fs][2], g_ghpcVfWriter[fs][3],
+                        g_ghpcVfWriter[ft][3]);
+                    std::fprintf(stderr,
+                        "[vu1/clip] ft=%u w=%g wBits=0x%08x zeroW=%d limit=0x%08x flags=0x%02x "
+                        "xyz=(%g,%g,%g)\n",
+                        (unsigned)ft, (double)wv, (unsigned)wBits, zeroW ? 1 : 0,
+                        (unsigned)limit, (unsigned)flags,
+                        (double)m_state.vf[fs][0], (double)m_state.vf[fs][1],
+                        (double)m_state.vf[fs][2]);
+                }
+                // 99.9% trip a plane but never all six, so one comparison is
+                // suspect. Break it down per bit: 0x01/0x02 = +x/-x,
+                // 0x04/0x08 = +y/-y, 0x10/0x20 = +z/-z.
+                static unsigned long long perBit[6] = {0, 0, 0, 0, 0, 0};
+                for (int b = 0; b < 6; ++b)
+                    if (flags & (1u << b)) ++perBit[b];
+                // Which microprogram sites issue the +x-tripping clips?
+                static unsigned long long pcHitX[64] = {};
+                static unsigned int pcKey[64] = {};
+                static int pcUsed = 0;
+                if (flags & 0x01u)
+                {
+                    const unsigned int key = (unsigned int)m_state.pc;
+                    int slot = -1;
+                    for (int k = 0; k < pcUsed; ++k)
+                        if (pcKey[k] == key) { slot = k; break; }
+                    if (slot < 0 && pcUsed < 64) { slot = pcUsed++; pcKey[slot] = key; }
+                    if (slot >= 0) ++pcHitX[slot];
+                }
+                if ((total % 200000ull) == 0ull)
+                {
+                    std::fprintf(stderr,
+                        "[vu1/clip] total=%llu zeroW=%llu anyFlagSet=%llu allSixSet=%llu | "
+                        "+x=%llu -x=%llu +y=%llu -y=%llu +z=%llu -z=%llu\n",
+                        total, wZero, anySet, allSix,
+                        perBit[0], perBit[1], perBit[2], perBit[3], perBit[4], perBit[5]);
+                    std::fprintf(stderr, "[vu1/clip] +x by pc:");
+                    for (int k = 0; k < pcUsed; ++k)
+                        std::fprintf(stderr, " 0x%04x=%llu", pcKey[k], pcHitX[k]);
+                    std::fprintf(stderr, "\n");
+                }
+            }
+#endif
             queueClip(flags);
             return;
         }

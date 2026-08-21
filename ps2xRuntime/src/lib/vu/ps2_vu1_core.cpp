@@ -180,8 +180,25 @@ void VU1Interpreter::recordViWriteForBranch(uint8_t reg, int32_t oldValue)
     m_viBranchBackupValid = true;
 }
 
+#if GHPC_DIAG
+// Shadow map of "which PC last wrote this vf lane", so a corrupt lane can be
+// traced back to the instruction that produced it instead of guessed at.
+unsigned int g_ghpcVfWriter[32][4];
+// And, for register loads, which VU data-memory address the value came from.
+unsigned int g_ghpcVfSrcAddr[32];
+#endif
+
 void VU1Interpreter::applyDest(float *dst, const float *result, uint8_t dest)
 {
+#if GHPC_DIAG
+    {
+        const ptrdiff_t reg = (float (*)[4])dst - m_state.vf;
+        if (reg >= 0 && reg < 32)
+            for (int c = 0; c < 4; ++c)
+                if (dest & (0x8u >> c))
+                    g_ghpcVfWriter[reg][c] = m_state.pc;
+    }
+#endif
     if (dest & 0x8u)
         dst[0] = result[0];
     if (dest & 0x4u)
@@ -1023,6 +1040,153 @@ void VU1Interpreter::finishXgkick()
             const bool packed = ((tagLo >> 58) & 3u) == 0u;
             uint64_t tagHi = 0;
             std::memcpy(&tagHi, m_xgkick.packet.data() + 8, 8);
+
+            // Everything drawn after splash 1 rasterises black with zero
+            // reject counts, so read the colours the packets actually carry
+            // instead of inferring from the framebuffer. Also log A+D (reg
+            // 0xE) destination registers: TEX0 is programmed that way, and it
+            // stops being programmed after splash 1.
+            {
+                static std::map<uint32_t, unsigned long long> colHist;
+                static std::map<uint32_t, unsigned long long> adHist;
+                static unsigned long long pkts = 0ull, withRgbaq = 0ull, withAd = 0ull;
+                ++pkts;
+                if (packed)
+                {
+                    bool sawRgbaq = false, sawAd = false;
+                    for (uint32_t loop = 0u; loop < nloop; ++loop)
+                    {
+                        for (uint32_t r = 0u; r < nreg; ++r)
+                        {
+                            const uint32_t reg = (uint32_t)((tagHi >> (r * 4u)) & 0xFu);
+                            const uint32_t off = 16u + (loop * nreg + r) * 16u;
+                            if (off + 16u > m_xgkick.totalBytes) break;
+                            const uint8_t *q = m_xgkick.packet.data() + off;
+                            if (reg == 1u)
+                            {
+                                sawRgbaq = true;
+                                const uint32_t rgba = (uint32_t)q[0] | ((uint32_t)q[4] << 8) |
+                                                      ((uint32_t)q[8] << 16) | ((uint32_t)q[12] << 24);
+                                if (colHist.size() < 512u) ++colHist[rgba];
+                            }
+                            else if (reg == 0xEu)
+                            {
+                                sawAd = true;
+                                uint64_t ad = 0; std::memcpy(&ad, q + 8, 8);
+                                if (adHist.size() < 256u) ++adHist[(uint32_t)(ad & 0xFFu)];
+                            }
+                        }
+                    }
+                    if (sawRgbaq) ++withRgbaq;
+                    if (sawAd) ++withAd;
+                }
+                // A fan collapsing to one point means either consecutive
+                // vertices share an XYZ (positions not advancing) or they
+                // differ but the perspective divide flattened them. Dump raw
+                // consecutive vertices from a few packets so the two cases can
+                // be told apart instead of guessed at.
+                if (packed && nloop >= 4u)
+                {
+                    static int vtxDumps = 0;
+                    if (vtxDumps < 4)
+                    {
+                        ++vtxDumps;
+                        std::fprintf(stderr, "[vu1/xyz] pkt nloop=%u nreg=%u regs=0x%016llx:\n",
+                                     (unsigned)nloop, (unsigned)nreg,
+                                     (unsigned long long)tagHi);
+                        uint32_t shown = 0u;
+                        for (uint32_t loop = 0u; loop < nloop && shown < 10u; ++loop)
+                        {
+                            for (uint32_t r = 0u; r < nreg; ++r)
+                            {
+                                const uint32_t reg = (uint32_t)((tagHi >> (r * 4u)) & 0xFu);
+                                if (reg != 4u && reg != 5u) continue;
+                                const uint32_t off = 16u + (loop * nreg + r) * 16u;
+                                if (off + 16u > m_xgkick.totalBytes) break;
+                                uint64_t lo = 0, hi = 0;
+                                std::memcpy(&lo, m_xgkick.packet.data() + off, 8);
+                                std::memcpy(&hi, m_xgkick.packet.data() + off + 8, 8);
+                                const uint32_t X = (uint32_t)(lo & 0xFFFFu);
+                                const uint32_t Y = (uint32_t)((lo >> 32) & 0xFFFFu);
+                                const uint32_t Z = (uint32_t)(hi & 0xFFFFFFFFu);
+                                std::fprintf(stderr,
+                                    "    v%u reg=%u X=%u(%.1f) Y=%u(%.1f) Z=%u\n",
+                                    shown, reg, X, X / 16.0, Y, Y / 16.0, Z);
+                                ++shown;
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Walk EVERY chained GIFtag in the packet, not just the
+                // first. TEX0 is programmed through A+D (reg 0xE) writes that
+                // live in their own tag, so a first-tag-only scan reports
+                // withAD=0 no matter what is really there.
+                {
+                    static std::map<uint32_t, unsigned long long> adAll;
+                    static unsigned long long tagsWalked = 0ull, adWrites = 0ull;
+                    uint32_t off = 0u;
+                    for (int guard = 0; guard < 64 && off + 16u <= m_xgkick.totalBytes; ++guard)
+                    {
+                        uint64_t tl = 0, th = 0;
+                        std::memcpy(&tl, m_xgkick.packet.data() + off, 8);
+                        std::memcpy(&th, m_xgkick.packet.data() + off + 8, 8);
+                        const uint32_t nl = (uint32_t)(tl & 0x7FFFu);
+                        const uint32_t fl = (uint32_t)((tl >> 58) & 3u);
+                        uint32_t nr = (uint32_t)((tl >> 60) & 0xFu); if (nr == 0u) nr = 16u;
+                        const bool eop = ((tl >> 15) & 1u) != 0u;
+                        ++tagsWalked;
+                        uint32_t dataBytes = 0u;
+                        if (fl == 0u) dataBytes = nl * nr * 16u;
+                        else if (fl == 1u) dataBytes = ((nl * nr * 8u) + 15u) & ~15u;
+                        else dataBytes = nl * 16u;
+                        if (fl == 0u)
+                        {
+                            for (uint32_t loop = 0u; loop < nl; ++loop)
+                                for (uint32_t r = 0u; r < nr; ++r)
+                                {
+                                    if ((uint32_t)((th >> (r * 4u)) & 0xFu) != 0xEu) continue;
+                                    const uint32_t o = off + 16u + (loop * nr + r) * 16u;
+                                    if (o + 16u > m_xgkick.totalBytes) break;
+                                    uint64_t ad = 0;
+                                    std::memcpy(&ad, m_xgkick.packet.data() + o + 8, 8);
+                                    ++adWrites;
+                                    if (adAll.size() < 128u) ++adAll[(uint32_t)(ad & 0xFFu)];
+                                }
+                        }
+                        off += 16u + dataBytes;
+                        if (eop) break;
+                    }
+                    if ((pkts % 20000ull) == 0ull)
+                    {
+                        std::fprintf(stderr, "[vu1/ad] tagsWalked=%llu adWrites=%llu destRegs:",
+                                     tagsWalked, adWrites);
+                        for (const auto &kv : adAll)
+                            std::fprintf(stderr, " 0x%02x x%llu", (unsigned)kv.first, kv.second);
+                        std::fprintf(stderr, "\n");
+                    }
+                }
+                if ((pkts % 20000ull) == 0ull)
+                {
+                    std::fprintf(stderr, "[vu1/col] pkts=%llu withRGBAQ=%llu withAD=%llu topColors(ABGR):",
+                                 pkts, withRgbaq, withAd);
+                    for (int pick = 0; pick < 8; ++pick)
+                    {
+                        uint32_t bestK = 0u; unsigned long long bestV = 0ull; bool any = false;
+                        static std::set<uint32_t> taken;
+                        if (pick == 0) taken.clear();
+                        for (const auto &kv : colHist)
+                            if (!taken.count(kv.first) && kv.second > bestV) { bestV = kv.second; bestK = kv.first; any = true; }
+                        if (!any) break;
+                        taken.insert(bestK);
+                        std::fprintf(stderr, " 0x%08x x%llu", (unsigned)bestK, bestV);
+                    }
+                    std::fprintf(stderr, "\n[vu1/col] AD dest regs:");
+                    for (const auto &kv : adHist)
+                        std::fprintf(stderr, " 0x%02x x%llu", (unsigned)kv.first, kv.second);
+                    std::fprintf(stderr, "\n");
+                }
+            }
             bool anyVisible = false;
             uint32_t X = 0u, Y = 0u;
             if (packed)
@@ -1050,11 +1214,23 @@ void VU1Interpreter::finishXgkick()
                 static std::map<uint32_t, std::pair<int,int>> byPc;
                 auto &e = byPc[m_ghpcStartPc];
                 if (offscreen) ++e.second; else ++e.first;
+                // Split the same tally by the VIF TOP the run used. VU1 double
+                // buffers: TOPS alternates base and base+ofst on every MSCAL,
+                // so a run keyed to one half reads a different block of unpacked
+                // vertex data than the other. A good/bad split that lands on one
+                // TOP means the unpack is not filling that half, which is a
+                // completely different bug from a wrong transform.
+                static std::map<uint32_t, std::pair<int,int>> byTop;
+                auto &t = byTop[m_state.top & 0x3FFu];
+                if (offscreen) ++t.second; else ++t.first;
                 if (((good + bad) % 2000) == 0)
                 {
                     std::fprintf(stderr, "[vu1] byStartPC good/bad:");
                     for (const auto &kv : byPc)
                         std::fprintf(stderr, " pc0x%x=%d/%d", kv.first, kv.second.first, kv.second.second);
+                    std::fprintf(stderr, "\n[vu1] byTOP good/bad:");
+                    for (const auto &kv : byTop)
+                        std::fprintf(stderr, " top%u=%d/%d", kv.first, kv.second.first, kv.second.second);
                     std::fprintf(stderr, "\n");
                 }
             }
@@ -1788,6 +1964,30 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
     m_state.pc = startPC & microAddressMask();
 #if GHPC_DIAG
     m_ghpcStartPc = startPC & microAddressMask();
+    // One-shot raw microcode dump. The matrix load and compose at 0x0d30..0x0d70
+    // were read off a partial trace; dumping the words lets the dest fields be
+    // decoded directly instead of inferred. GHPC_VU1_DUMP=<startByte>:<count>.
+    {
+        static bool dumped = false;
+        const char *spec = std::getenv("GHPC_VU1_DUMP");
+        if (spec && !dumped)
+        {
+            dumped = true;
+            char *end = nullptr;
+            uint32_t from = (uint32_t)std::strtoul(spec, &end, 0);
+            uint32_t count = (end && *end == ':') ? (uint32_t)std::strtoul(end + 1, nullptr, 0) : 32u;
+            from &= ~7u;
+            for (uint32_t i = 0u; i < count; ++i)
+            {
+                const uint32_t off = from + i * 8u;
+                if (off + 8u > codeSize) break;
+                uint32_t lo, hi;
+                std::memcpy(&lo, vuCode + off, 4);
+                std::memcpy(&hi, vuCode + off + 4, 4);
+                std::fprintf(stderr, "[vu1/dump] 0x%04x lo=0x%08x hi=0x%08x\n", off, lo, hi);
+            }
+        }
+    }
 #endif
     m_state.ebit = false;
     m_state.haltAfterDelaySlot = false;
@@ -1817,6 +2017,58 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
 }
 
+#if GHPC_DIAG
+// Polling watchpoint on the transform matrix at VU1 data 0x2a40..0x2a7f.
+// Comparing the bytes rather than instrumenting each writer catches every
+// path that can touch it, including ones not enumerated (EE stores, DMA).
+// `where` says whether the change happened inside VU execution (with the pc)
+// or between runs, which is enough to identify the writer.
+void ghpcMtxWatch(const uint8_t *data, uint32_t size, const char *where, unsigned pc)
+{
+    if (!data || size < 0x2c00u)
+        return;
+    static uint32_t last[16];
+    static bool primed = false;
+    static int logs = 0;
+    uint32_t cur[16];
+    std::memcpy(cur, data + 0x2bc0u, sizeof(cur));
+    if (!primed)
+    {
+        primed = true;
+        std::memcpy(last, cur, sizeof(last));
+        return;
+    }
+    if (std::memcmp(cur, last, sizeof(cur)) == 0)
+        return;
+    float f[16], pf[16];
+    std::memcpy(f, cur, sizeof(f));
+    std::memcpy(pf, last, sizeof(pf));
+    // Only the corrupt shape is interesting: in a sane matrix lane x of rows 1
+    // and 2 is ~0 and the row 3 translation is small. Trigger on that so the
+    // transition into corruption is captured rather than early boot traffic.
+    // Projection matrix at qwords 700..703. Lane x of rows 1 and 2 must be 0;
+    // it comes out as 400.17, so trigger the moment that appears.
+    const bool corrupt = (f[4] > 10.0f || f[4] < -10.0f) ||
+                         (f[8] > 10.0f || f[8] < -10.0f);
+    if (corrupt && logs < 24)
+    {
+        ++logs;
+        std::fprintf(stderr, "[projw] %-10s pc=0x%04x\n            NEW:", where, pc);
+        for (int r = 0; r < 4; ++r)
+            std::fprintf(stderr, " (%g,%g,%g,%g)",
+                         (double)f[r * 4 + 0], (double)f[r * 4 + 1],
+                         (double)f[r * 4 + 2], (double)f[r * 4 + 3]);
+        std::fprintf(stderr, "\n           OLD:");
+        for (int r = 0; r < 4; ++r)
+            std::fprintf(stderr, " (%g,%g,%g,%g)",
+                         (double)pf[r * 4 + 0], (double)pf[r * 4 + 1],
+                         (double)pf[r * 4 + 2], (double)pf[r * 4 + 3]);
+        std::fprintf(stderr, "\n");
+    }
+    std::memcpy(last, cur, sizeof(cur));
+}
+#endif
+
 void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                          uint8_t *vuData, uint32_t dataSize,
                          GS &gs, PS2Memory *memory, uint32_t maxCycles)
@@ -1825,6 +2077,13 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     m_activeVuDataSize = dataSize;
     m_activeGs = &gs;
     m_activeMemory = memory;
+#if GHPC_DIAG
+    if (m_unit == Unit::VU1)
+    {
+        extern void ghpcMtxWatch(const uint8_t *, uint32_t, const char *, unsigned);
+        ghpcMtxWatch(vuData, dataSize, "outside-vu", 0u);
+    }
+#endif
 
     const int previousRoundingMode = std::fegetround();
     const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
@@ -1833,6 +2092,13 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     while (m_cycle < budgetEnd && !m_stopRequested)
     {
         commitReadyPipelines();
+#if GHPC_DIAG
+        if (m_unit == Unit::VU1)
+        {
+            extern void ghpcMtxWatch(const uint8_t *, uint32_t, const char *, unsigned);
+            ghpcMtxWatch(vuData, dataSize, "in-vu", m_state.pc);
+        }
+#endif
         if (m_state.pc + 8u > codeSize)
             break;
 

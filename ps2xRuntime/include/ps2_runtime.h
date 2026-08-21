@@ -3,6 +3,8 @@
 
 #include <cstring>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include <string>
 #include <functional>
@@ -254,6 +256,73 @@ inline void ps2TraceGuestWrite(uint8_t *rdram,
     (void)op;
     (void)ctx;
     // TODO we dont need this anymore so on next release it will be deleted
+
+#if GHPC_DIAG
+    // GHPC_DIAG probe: name the guest instruction that stores the corrupt
+    // projection word. Value-filtered rather than address-filtered, because the
+    // destination is a DMA ring whose address moves every frame. Census keyed
+    // on pc so a hot store cannot flood the log.
+    {
+        const char *pat = std::getenv("GHPC_WATCH_VALUE");
+        if (pat)
+        {
+            static const uint32_t want = (uint32_t)std::strtoul(pat, nullptr, 0);
+            bool hit = false;
+            for (int w = 0; w < 2 && !hit; ++w)
+            {
+                const uint64_t v = w ? valueHi : valueLo;
+                if ((uint32_t)v == want || (uint32_t)(v >> 32) == want) hit = true;
+            }
+            if (hit && size >= 4u)
+            {
+                struct PKey { uint32_t pc; uint32_t addr; unsigned long long n; };
+                static PKey seen[24];
+                static int used = 0;
+                static unsigned long long total = 0ull;
+                const uint32_t pc = ctx ? (uint32_t)ctx->pc : 0u;
+                int slot = -1;
+                for (int k = 0; k < used; ++k)
+                    if (seen[k].pc == pc) { slot = k; break; }
+                if (slot < 0 && used < 24)
+                { slot = used++; seen[slot] = PKey{pc, guestAddr, 0ull};
+                  std::fprintf(stderr, "[valwatch] NEW pc=0x%08x %s addr=0x%08x lo=0x%016llx hi=0x%016llx\n",
+                               pc, op, guestAddr, (unsigned long long)valueLo,
+                               (unsigned long long)valueHi); }
+                if (slot >= 0) ++seen[slot].n;
+                if ((++total % 5000ull) == 0ull)
+                {
+                    std::fprintf(stderr, "[valwatch] stores=%llu sites=%d\n", total, used);
+                    for (int k = 0; k < used; ++k)
+                        std::fprintf(stderr, "  pc=0x%08x firstAddr=0x%08x n=%llu\n",
+                                     seen[k].pc, seen[k].addr, seen[k].n);
+                }
+            }
+        }
+    }
+
+    // GHPC_DIAG probe: catch the packet builder failing to place a tag at
+    // scratchpad 0x2e0 before fromSPR fill #1789. Gate on the existing fill
+    // counter (ps2_vif1_interpreter.cpp) so this only fires in a narrow
+    // window around the failing fill, and on the scratchpad offset range
+    // that should hold the missing DMAtag plus the cursor fields the
+    // builder advances (0x70000004/0x70000008).
+    {
+        extern unsigned long long g_ghpcSprFills;
+        const unsigned long long fillIndex0 = (g_ghpcSprFills == 0ull) ? 0ull : (g_ghpcSprFills - 1ull);
+        if (fillIndex0 >= 1780ull && fillIndex0 <= 1795ull)
+        {
+            const bool inTagWindow = (guestAddr >= 0x70000000u && guestAddr < 0x70000400u);
+            if (inTagWindow)
+            {
+                std::fprintf(stderr,
+                             "[sprbuild] fill#%llu pc=0x%08x %s addr=0x%08x (spr+0x%03x) lo=0x%016llx hi=0x%016llx\n",
+                             fillIndex0, ctx ? (unsigned)ctx->pc : 0u, op, guestAddr,
+                             (unsigned)(guestAddr - 0x70000000u),
+                             (unsigned long long)valueLo, (unsigned long long)valueHi);
+            }
+        }
+    }
+#endif
 }
 
 inline void ps2TraceGuestRangeWrite(uint8_t *rdram,

@@ -96,6 +96,24 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
             float tmp[4];
             std::memcpy(tmp, vuData + addr, 16);
             applyDest(m_state.vf[it], tmp, dest);
+#if GHPC_DIAG
+            { extern unsigned int g_ghpcVfSrcAddr[32]; g_ghpcVfSrcAddr[it] = addr | 0x80000000u; }
+            if (addr >= 0x2bc0u && addr < 0x2c00u)
+            {
+                static int logs = 0;
+                if (logs < 12)
+                {
+                    ++logs;
+                    std::fprintf(stderr,
+                        "[mtx/lq] pc=0x%04x vf%02u <- addr=0x%04x (qw=%u) viBase[%u]=%d imm=%d"
+                        " instr=0x%08x dest=0x%x (x=%u y=%u z=%u w=%u)\n",
+                        (unsigned)m_state.pc, (unsigned)it, (unsigned)addr,
+                        (unsigned)(addr / 16u), (unsigned)is, (int)m_state.vi[is], (int)imm,
+                        (unsigned)instr, (unsigned)dest,
+                        (dest >> 3) & 1u, (dest >> 2) & 1u, (dest >> 1) & 1u, dest & 1u);
+                }
+            }
+#endif
         }
         return;
     }
@@ -489,6 +507,9 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                     float tmp[4];
                     std::memcpy(tmp, vuData + addr, 16);
                     applyDest(m_state.vf[vfT], tmp, dest);
+#if GHPC_DIAG
+                    { extern unsigned int g_ghpcVfSrcAddr[32]; g_ghpcVfSrcAddr[vfT] = addr | 0x80000000u; }
+#endif
                 }
                 if (viS != 0)
                     m_state.vi[viS] = (int16_t)(m_state.vi[viS] + 1);
