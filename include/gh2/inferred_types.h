@@ -349,4 +349,139 @@ public:
     float mPanSpread;                // 0x58
 };
 
+
+// Star power state for one player. mEnabled at 0x28 gates every mutator and
+// every query, which is what makes the whole class read cleanly: the same
+// "lw 0x28 / branch" prologue opens eleven different bodies.
+class StarPowerPool {
+public:
+    void SetTargetValue(float); // 0x121720
+};
+
+// The tuning block StarPower reads its numbers out of while star power is
+// active. Three offsets are pinned, the rest is unexplored.
+class StarPowerParams {
+public:
+    float mDownbeatGain; // 0x00, added once per downbeat when not deployed
+    unsigned char mUnk04[0x10];
+    int mMultiplier;     // 0x14, score multiplier while deployed
+    float mCrowdBoost;   // 0x18, crowd meter boost while deployed
+};
+
+class StarPower {
+public:
+    int GetMultiplier() const;
+    float GetCrowdBoost() const;
+    bool IsReady() const;
+    void SetTrack(int);
+    void SetWhammyBar(bool);
+    void SetDeployRate(float);
+    void SetPhraseBoost(float);
+    void SetValue(float);
+    void AddValue(float);
+    void Jump(float);
+    void OnDownbeat();
+
+    unsigned char mUnk00[0x28];
+    int mEnabled;               // 0x28
+    int mUsing;                 // 0x2c, star power is currently deployed
+    unsigned char mUnk30[0x18];
+    int mTrack;                 // 0x48
+    int mWhammyBar;             // 0x4c
+    float mDeployRate;          // 0x50
+    float mPhraseBoost;         // 0x54
+    int mMissed;                // 0x58, set by EnterMissedState, cleared by Jump
+    int mLastSeenGem;           // 0x5c, reset to -1 by Jump
+    unsigned char mUnk60[0x08];
+    int mReady;                 // 0x68
+    StarPowerParams *mParams;   // 0x6c
+    StarPowerPool *mPool;       // 0x70, holds the current value at its offset 0
+};
+
+// Watches one player's track and drives the sinks. Only the leaf accessors are
+// decompiled; the gem bookkeeping past 0x287e70 is not.
+class GameGemInfoList {
+public:
+    void Reset(); // 0x28d208
+};
+
+class TrackWatcherImpl {
+public:
+    void Enable(bool);
+    void SetIsCurrentTrack(bool);
+    bool IsCheating() const;
+    void SetCheating(bool);
+    void SetSyncOffset(float);
+    void SetAllGemsUnplayed();
+    void ResetFill();
+    bool GemCanBePassed(int) const;
+
+    unsigned char mUnk00[0x08];
+    GameGemInfoList *mGems;     // 0x08
+    unsigned char mUnk0c[0x10];
+    int mIsCurrentTrack;        // 0x1c
+    unsigned char mUnk20[0x08];
+    float mSyncOffset;          // 0x28
+    unsigned char mUnk2c[0x1c];
+    int mEnabled;               // 0x48
+    unsigned char mUnk4c[0x04];
+    int mUnk50;                 // 0x50, source of the value stashed at 0x64
+    unsigned char mUnk54[0x04];
+    int mCheating;              // 0x58
+    unsigned char mUnk5c[0x08];
+    int mCheatStartGem;         // 0x64
+};
+
+// ===========================================================================
+// ui
+// ===========================================================================
+
+// UIList is a thin shell. Its scroll position lives in a ListState at +0x150
+// and its geometry in a ListDisplay at +0x1c8, and almost every accessor is a
+// one line forward to one of the two.
+class ListState {
+public:
+    int Selected() const;        // 0x243160
+    int SelectedDisplay() const; // 0x2431c0
+    bool IsScrolling() const;    // 0x243240
+    float Speed() const;         // 0x2432a8
+    void SetSpeed(float);        // 0x243618
+};
+
+class ListDisplay {
+public:
+    float Spacing() const;     // 0x241128
+    float ArrowOffset() const; // 0x241130
+    int FadeOffset() const;    // 0x241140
+    void SetArrowOffset(float); // 0x241150
+    void SetFadeOffset(int);    // 0x241160
+};
+
+class UIList {
+public:
+    virtual void Enter();
+    virtual void Exit();
+    int NumData() const;
+    bool IsCircular() const;
+    int NumDisplay() const;
+    int Selected() const;
+    int SelectedDisplay() const;
+    bool IsScrolling() const;
+    float Speed() const;
+    void SetSpeed(float);
+    float Spacing() const;
+    float ArrowOffset() const;
+    int FadeOffset() const;
+    void SetArrowOffset(float);
+    void SetFadeOffset(int);
+
+    unsigned char mUnk00[0x150];
+    ListState mState;     // 0x150
+    unsigned char mUnk15c[0x10];
+    int mCircular;        // 0x16c
+    int mNumDisplay;      // 0x170
+    unsigned char mUnk174[0x54];
+    ListDisplay mDisplay; // 0x1c8
+};
+
 #endif // GH2_INFERRED_TYPES_H

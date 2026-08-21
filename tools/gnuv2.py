@@ -131,7 +131,12 @@ def _read_args(rest):
 
 
 def demangle(sym):
-    """Return (class_name, method_name, [arg types]) or None."""
+    """Return (class_name, method_name, [arg types]) or None.
+
+    A trailing " const" is appended to the method name for const members, since
+    GNU v2 encodes that as a C before the class name and it matters when the
+    class has both overloads.
+    """
     if not sym or sym.startswith("_ZN") or "__" not in sym:
         return None
 
@@ -162,6 +167,7 @@ def demangle(sym):
         is_const = rest[:1] == "C" and (rest[1:2].isdigit() or rest[1:2] == "Q")
         if is_const:
             rest = rest[1:]
+            name = name + " const"
         if name and (rest[:1].isdigit() or rest[:1] == "Q" or rest[:1] == "F"):
             if rest[:1] == "F":  # free function
                 return (None, name, _read_args(rest[1:]))
@@ -183,8 +189,11 @@ def pretty(sym):
     if not d:
         return sym
     cls, name, args = d
+    suffix = ""
+    if name.endswith(" const"):
+        name, suffix = name[:-6], " const"
     full = ("%s::%s" % (cls, name)) if cls else name
-    return "%s(%s)" % (full, ", ".join(args))
+    return "%s(%s)%s" % (full, ", ".join(args), suffix)
 
 
 if __name__ == "__main__":
