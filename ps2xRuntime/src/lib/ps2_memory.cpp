@@ -1338,6 +1338,52 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 }
             }
 
+            // Channel 9, toSPR. PsMesh::DrawFaces (0x43ef70) walks its face
+            // data in RAM a chunk at a time and moves each chunk into the
+            // scratchpad packet buffer with DmaPacket::Send(local, 9, 0,
+            // cursor) before PsRnd::FlushPacket kicks channel 8 to push that
+            // buffer into the VIF1 MFIFO ring. Every quadword the mesh path
+            // draws arrives this way; nothing writes it with CPU stores. With
+            // this channel unimplemented the buffer kept whatever the previous
+            // frame left there, so the ring got stale floats where the tag
+            // chain should continue and the VIF1 walker wedged on them.
+            // PreSend (0x43e600) sets MADR = source in RAM, SADR = scratchpad
+            // destination, QWC = quadwords, CHCR = 0x101 (normal mode).
+            if (channelBase == 0x1000D400u)
+            {
+                uint32_t source = madr;
+                uint32_t destination = m_ioRegisters[channelBase + 0x80] & (PS2_SCRATCHPAD_SIZE - 1u);
+                if (m_scratchpad && m_rdram)
+                {
+                    for (uint32_t quad = 0u; quad < qwc; ++quad)
+                    {
+                        const uint32_t physical = source & PS2_RAM_MASK;
+                        if (physical + 16u <= PS2_RAM_SIZE)
+                        {
+                            std::memcpy(m_scratchpad + destination, m_rdram + physical, 16u);
+                        }
+                        source += 16u;
+                        destination = (destination + 16u) & (PS2_SCRATCHPAD_SIZE - 1u);
+                    }
+                }
+#if GHPC_DIAG
+                {
+                    static unsigned long long toSpr = 0ull;
+                    if (toSpr < 24ull)
+                        std::fprintf(stderr, "[tospr] #%llu qwc=%u ramSrc=0x%x sprDst=0x%x chcr=0x%x\n",
+                                     toSpr, (unsigned)qwc, (unsigned)madr,
+                                     (unsigned)(m_ioRegisters[channelBase + 0x80] & (PS2_SCRATCHPAD_SIZE - 1u)),
+                                     (unsigned)value);
+                    ++toSpr;
+                }
+#endif
+                m_ioRegisters[channelBase + 0x10] = source;
+                m_ioRegisters[channelBase + 0x80] = destination;
+                m_ioRegisters[channelBase + 0x20] = 0u;
+                m_ioRegisters[channelBase + 0x00] = value & ~0x100u;
+                return true;
+            }
+
             // Channel 8, fromSPR. PsRnd builds each packet in scratchpad and
             // sends it with DmaPacket::Send(spr, 8), which fills the MFIFO ring
             // that VIF1 drains. Without this the ring stays empty, so
