@@ -747,6 +747,55 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_BASE)
         {
+#if GHPC_DIAG
+            // Is BASE=932 a real VIFcode the game emitted, or a misparsed
+            // stream byte read as one? A genuine BASE is cmd 0x03 with NUM=0.
+            // Log the whole word plus the two codes either side of it so a
+            // desync is obvious from context rather than inferred.
+            {
+                static int baseLogs = 0;
+                const uint32_t curImm = imm & 0x3FFu;
+                // A real BASE has NUM==0 and no immediate bits above bit 9.
+                // If either is set we are probably reading a data payload as a
+                // VIFcode, so dump the surrounding stream: the word before this
+                // one tells us which command mis-advanced pos.
+                const bool malformed = (num != 0u) || ((imm & ~0x3FFu) != 0u);
+                if (malformed && baseLogs < 6)
+                {
+                    ++baseLogs;
+                    const uint32_t codePos = (pos >= 4u) ? (pos - 4u) : 0u;
+                    std::fprintf(stderr,
+                        "[vif1/base] MALFORMED imm=0x%04x num=%u codePos=%u size=%u context:\n",
+                        (unsigned)(imm & 0xFFFFu), (unsigned)num,
+                        (unsigned)codePos, (unsigned)sizeBytes);
+                    const uint32_t from = (codePos >= 32u) ? (codePos - 32u) : 0u;
+                    const uint32_t to = (codePos + 20u < sizeBytes) ? (codePos + 20u) : sizeBytes;
+                    for (uint32_t a = from; a + 4u <= to; a += 4u)
+                    {
+                        uint32_t w = 0u;
+                        std::memcpy(&w, data + a, 4);
+                        std::fprintf(stderr, "    +%04u 0x%08x%s\n", (unsigned)a,
+                                     (unsigned)w, (a == codePos) ? "   <== read as BASE" : "");
+                    }
+                }
+            }
+#endif
+            // A real BASE VIFcode carries NUM==0 and uses only immediate bits
+            // 9-0. A VIF1 chain-flatten desync walks the parser into payload
+            // data, where a word whose top byte happens to be 0x03 reads as
+            // BASE and poisons the register (observed: 0x030b73a4 -> BASE=932,
+            // NUM=11, immediate bits 12-14 set). BASE has exactly one writer
+            // and is sticky, so one bad word corrupts every later MSCAL: TOPS
+            // becomes 932/238, the UNPACK at TOPS+1 spans 285 quadwords, and
+            // ~194 of them wrap onto VU1 addresses 0-194 where the transform
+            // constants live. Ignore words that cannot be a real BASE.
+            // NOTE: this is a guard, not the cure. The desync upstream is the
+            // actual defect and still needs fixing.
+            if (num != 0u || (imm & ~0x3FFu) != 0u)
+            {
+                continue;
+            }
+
             // BASE only updates the base register. TOPS changes on OFFSET/MSCAL.
             vif1_regs.base = imm & 0x3FFu;
             continue;
