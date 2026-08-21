@@ -45,3 +45,53 @@ bool Performer::IsInCrowdWarning() const { // 0x110fd8
         return false;
     return !TheGameConfig->IsMultiplayerVs();
 }
+
+// --- scoring, resolved through the vtable dump -----------------------------
+//
+// These four all dispatch through the g++ 2.x vtable, so the disassembly only
+// gives a byte offset. tools/vtable.py reads _vt$9Performer out of the ELF and
+// turns those offsets into names, which is what makes them readable at all:
+//   +0x018 GetBaseMultiplier   +0x028 GetMultiplier   +0x040 IsUsingStarPower
+//   +0x0a8 GetCrowdBoost       +0x0b0 StarPowerMultiplier
+//   +0x090 GetTotalHits
+
+int Performer::GetBaseMultiplier() const { // 0x110e30
+    return GetScoring()->GetStreakMult(mCurrentStreak);
+}
+
+// Slot 0x0b0 runs first and its result is held in $s1 across the second call,
+// so the star power factor is the right operand of the multiply.
+int Performer::GetMultiplier() const { // 0x110e60
+    return GetBaseMultiplier() * StarPowerMultiplier();
+}
+
+// The next three consult player 0's Performer rather than this one, each time
+// through the slot for the very method being defined. That is a deliberate
+// "ask the band" indirection: the concrete class sitting in player 0's
+// PlayerConfig overrides the slot, so this base body never re-enters itself in
+// practice. Worth flagging, because read literally it looks like unbounded
+// recursion.
+int Performer::StarPowerMultiplier() const { // 0x111068
+    return TheGameConfig->GetPlayerConfig(0)->mPerformer->StarPowerMultiplier();
+}
+
+float Performer::GetCrowdBoost() const { // 0x111028
+    return TheGameConfig->GetPlayerConfig(0)->mPerformer->GetCrowdBoost();
+}
+
+bool Performer::IsUsingStarPower() const { // 0x110f90
+    return TheGameConfig->GetPlayerConfig(0)->mPerformer->IsUsingStarPower();
+}
+
+// Sums every player's gem count for the track that player is on, then reports
+// this performer's hits as a whole-number percentage of it. The loop tests
+// GetNumPlayers on every iteration, exactly as written here, because the branch
+// target is the call rather than the body.
+int Performer::GetPercentHit() const { // 0x110d68
+    int totalGems = 0;
+    for (int player = 0; player < TheGameConfig->GetNumPlayers(); ++player) {
+        int track = TheGameConfig->GetTrackNum(player);
+        totalGems += TheSongDB->GetTotalGems(track, player);
+    }
+    return (int)((float)GetTotalHits() / (float)totalGems * 100.0f);
+}

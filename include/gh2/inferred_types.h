@@ -251,18 +251,35 @@ public:
 
 // Only the entry points the decompiled bodies call are declared. Addresses are
 // the GH2 function addresses.
+class Performer;
+
+// PlayerConfig's only pinned member is the Performer it owns, which three
+// Performer methods reach through to consult player 0.
+class PlayerConfig {
+public:
+    unsigned char mUnk00[0xb4];
+    Performer *mPerformer; // 0xb4
+};
+
 class GameConfig {
 public:
     bool IsMultiplayerVs();          // 0x12aa98
     int GetNumPlayers();             // 0x12aaf0
     int GetTrackNum(int player);     // 0x12ac08
-    class PlayerConfig *GetPlayerConfig(int player); // 0x12b070
+    PlayerConfig *GetPlayerConfig(int player); // 0x12b070
 };
+
+// Scoring tables, loaded from data.
+class Scoring {
+public:
+    int GetStreakMult(int streak); // 0x11fcc8
+};
+Scoring *GetScoring(); // 0x11f6b0
 extern GameConfig *TheGameConfig; // global at 0x440c10
 
 class SongDB {
 public:
-    int GetTotalGems(int song, int track); // 0x121670
+    int GetTotalGems(int trackNum, int player); // 0x121670
 };
 extern SongDB *TheSongDB;         // global at 0x440c00
 
@@ -272,15 +289,26 @@ extern SongDB *TheSongDB;         // global at 0x440c00
 // members that no easy function touches, so they are left unnamed.
 class Performer {
 public:
-    int GetTotalHits() const;
-    int GetCurrentStreak() const;
-    float GetCrowdRating() const;
+    // Virtual, with the vtable byte offset from tools/vtable.py. _vt$9Performer
+    // lives at 0x449e10 and is 192 bytes, so the class has 23 slots. The eight
+    // not listed here have not been decompiled.
+    virtual bool GetSolo() const;           // +0x008
+    virtual int GetScore() const;           // +0x010
+    virtual int GetBaseMultiplier() const;  // +0x018
+    virtual int GetMultiplier() const;      // +0x028
+    virtual int GetCurrentStreak() const;   // +0x030
+    virtual float GetCrowdRating() const;   // +0x038
+    virtual bool IsUsingStarPower() const;  // +0x040
+    virtual bool IsInCrowdWarning() const;  // +0x088
+    virtual int GetTotalHits() const;       // +0x090
+    virtual bool CanGameOver() const;       // +0x0a0
+    virtual float GetCrowdBoost() const;    // +0x0a8
+    virtual int StarPowerMultiplier() const; // +0x0b0
+
+    // Not in the vtable.
     void SetCrowdRating(float);
-    int GetScore() const;
     float PollMs() const;
-    bool CanGameOver() const;
-    bool GetSolo() const;
-    bool IsInCrowdWarning() const;
+    int GetPercentHit() const;
 
     unsigned char mUnk00[0x04];  // 0x00 (vtable pointer lives in mVTable, see below)
     int mTotalHits;              // 0x04
@@ -614,6 +642,23 @@ public:
 
     unsigned char mUnk00[0x10];
     Sphere mSphere; // 0x10, centre at 0x10 and radius at 0x20
+};
+
+
+// One mixer submix. GetNumSlots forwards to a ChannelMapping held at +0x04
+// through vtable slot +0x20, which every ChannelMapping subclass fills with its
+// own GetNumSlots. That is what identifies the member's type.
+class ChannelMapping {
+public:
+    virtual int GetNumSlots() const = 0; // vtable slot +0x20
+};
+
+class Submix {
+public:
+    int GetNumSlots() const; // 0x2869c0
+
+    unsigned char mUnk00[0x04];
+    ChannelMapping *mMapping; // 0x04
 };
 
 #endif // GH2_INFERRED_TYPES_H
