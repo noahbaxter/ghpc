@@ -305,6 +305,7 @@ void ghpcNoteMpg(uint32_t dest, uint32_t bytes)
     if (bytes > b) b = bytes;
 }
 unsigned long long g_ghpcUnpackBytesSinceMscal = 0ull;
+unsigned long long g_ghpcBadBaseRejects = 0ull;
 unsigned long long g_ghpcMscalRejected = 0ull;
 #if GHPC_DIAG
 // Map flattened-chain offsets back to the EE addresses they were copied from.
@@ -831,6 +832,14 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             // actual defect and still needs fixing.
             if (num != 0u || (imm & ~0x3FFu) != 0u)
             {
+#if GHPC_DIAG
+                // The loading screen alternates a complete picture with one
+                // missing the poster. If a dropped chunk is what loses the
+                // poster geometry, these rejections should track the bad
+                // frames, so count them where the frame census can see it.
+                extern unsigned long long g_ghpcBadBaseRejects;
+                ++g_ghpcBadBaseRejects;
+#endif
                 continue;
             }
 

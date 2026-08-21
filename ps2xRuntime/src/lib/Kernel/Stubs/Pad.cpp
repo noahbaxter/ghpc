@@ -3,6 +3,49 @@
 
 namespace ps2_stubs
 {
+#if GHPC_DIAG
+namespace
+{
+    // Does host input actually reach the game? Every gate between a keypress
+    // and the guest is counted here: whether the game opens a port at all,
+    // whether each read finds it open, and what button word is delivered.
+    // Buttons are active low, so 0xFFFF means nothing pressed.
+    void ghpcNotePad(const char *fn, int port, int slot, int result, unsigned buttons)
+    {
+        struct PKey { const char *fn; int port, slot, result; unsigned long long n; };
+        static PKey keys[24];
+        static int used = 0;
+        static unsigned long long total = 0ull;
+        static unsigned lastButtons = 0xFFFFu;
+        static unsigned long long pressed = 0ull;
+        int slotIdx = -1;
+        for (int k = 0; k < used; ++k)
+            if (keys[k].fn == fn && keys[k].port == port && keys[k].slot == slot &&
+                keys[k].result == result)
+            { slotIdx = k; break; }
+        if (slotIdx < 0 && used < 24)
+        { slotIdx = used++; keys[slotIdx] = PKey{fn, port, slot, result, 0ull}; }
+        if (slotIdx >= 0) ++keys[slotIdx].n;
+
+        if (buttons != 0xFFFFu)
+            ++pressed;
+        if (buttons != lastButtons)
+        {
+            lastButtons = buttons;
+            std::fprintf(stderr, "[pad] buttons changed to 0x%04x (pressed reads so far %llu)\n",
+                         buttons, pressed);
+        }
+        if ((++total % 600ull) == 0ull)
+        {
+            std::fprintf(stderr, "[padcensus] calls=%llu shapes=%d pressedReads=%llu\n",
+                         total, used, pressed);
+            for (int k = 0; k < used; ++k)
+                std::fprintf(stderr, "  %s port=%d slot=%d result=%d n=%llu\n",
+                             keys[k].fn, keys[k].port, keys[k].slot, keys[k].result, keys[k].n);
+        }
+    }
+}
+#endif
     namespace
     {
         constexpr uint8_t kPadModeDigital = 0x41;
@@ -636,6 +679,9 @@ namespace ps2_stubs
         portState->pressureEnabled = false;
         portState->reqState = 0u;
         portState->transientState = 0u;
+#if GHPC_DIAG
+        ghpcNotePad("portOpen", (int)getRegU32(ctx, 4), (int)getRegU32(ctx, 5), 1, 0xFFFFu);
+#endif
         setReturnS32(ctx, 1);
     }
 
@@ -683,9 +729,16 @@ namespace ps2_stubs
         ps2TraceGuestRangeWrite(rdram, dataAddr, 32u, "scePadRead", ctx);
         if (!readPadPortData(port, slot, runtime, data, dataAddr))
         {
+#if GHPC_DIAG
+            ghpcNotePad("read", port, slot, 0, 0xFFFFu);
+#endif
             setReturnS32(ctx, 0);
             return;
         }
+#if GHPC_DIAG
+        ghpcNotePad("read", port, slot, 1,
+                    (unsigned)(data[2] | ((unsigned)data[3] << 8)));
+#endif
 
         PS2_IF_AGRESSIVE_LOGS({
             if (g_padReadLogCount < 48)

@@ -466,13 +466,54 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
         }
         // Dump the first few frames that actually contain image content, so there
         // is a real picture to look at rather than just a pixel count.
-        if (nonBlack > 1000u)
+        // The loading screen is the dense one (~211k non-black of 229376); the
+        // splashes are far sparser. GHPC_FRAME_MIN aims the burst at it without
+        // having to guess a frame index.
+        static const size_t frameMin = []() -> size_t {
+            const char *e = std::getenv("GHPC_FRAME_MIN");
+            return e ? (size_t)std::strtoull(e, nullptr, 0) : 1000u;
+        }();
+        if (nonBlack > frameMin)
         {
             static int dumps = 0;
             static auto lastDump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
             const auto nowDump = std::chrono::steady_clock::now();
-            const bool dueDump = std::chrono::duration<double>(nowDump - lastDump).count() >= 2.0;
-            if (dumps < 20 && dueDump)
+            // A 2 second gap between dumps cannot show flicker: consecutive
+            // presents are exactly what has to be compared. GHPC_FRAME_BURST=N
+            // dumps N presents back to back instead, and skips the first
+            // GHPC_FRAME_SKIP content frames so the burst lands on the screen
+            // being studied rather than on the splash.
+            static const int burst = []() {
+                const char *e = std::getenv("GHPC_FRAME_BURST");
+                return e ? std::atoi(e) : 0;
+            }();
+            static const int skip = []() {
+                const char *e = std::getenv("GHPC_FRAME_SKIP");
+                return e ? std::atoi(e) : 0;
+            }();
+            static int contentFrames = 0;
+            ++contentFrames;
+            const int limit = burst > 0 ? burst : 20;
+            // GHPC_FRAME_ONCHANGE dumps only when the picture differs from the
+            // last dumped one. A static screen then costs a single frame, and
+            // the moment it starts alternating every state gets captured.
+            static const bool onChange = std::getenv("GHPC_FRAME_ONCHANGE") != nullptr;
+            static unsigned long long lastDumpSig = 0ull;
+            unsigned long long sig = 1469598103934665603ull;
+            if (onChange)
+            {
+                for (size_t i = 0; i + 4 <= s_scratch.size(); i += 4)
+                {
+                    const uint32_t p0 = (uint32_t)s_scratch[i] | ((uint32_t)s_scratch[i+1] << 8) |
+                                        ((uint32_t)s_scratch[i+2] << 16);
+                    if (p0 != 0u) { sig = (sig ^ p0) * 1099511628211ull; sig ^= (unsigned long long)i; }
+                }
+            }
+            const bool dueDump = onChange ? (sig != lastDumpSig)
+                               : burst > 0 ? (contentFrames > skip)
+                                           : (std::chrono::duration<double>(nowDump - lastDump).count() >= 2.0);
+            if (onChange) lastDumpSig = sig;
+            if (dumps < limit && dueDump)
             {
                 lastDump = nowDump;
                 char path[256];
@@ -490,7 +531,11 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                             std::fwrite(rgb, 1, 3, f);
                         }
                     std::fclose(f);
-                    std::cerr << "[frame] wrote " << path << " nonBlack=" << nonBlack << std::endl;
+                    std::cerr << "[frame] wrote " << path << " nonBlack=" << nonBlack
+                              << " displayFbp=" << displayFbp
+                              << " sourceFbp=" << sourceFbp
+                              << " preferred=" << (usedPreferredDisplaySource ? 1u : 0u)
+                              << " contentFrame=" << contentFrames << std::endl;
                     ++dumps;
                 }
             }

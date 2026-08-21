@@ -725,6 +725,102 @@ void ghpcNoteImageFeed(int site, uint32_t bytes)
                   << " hwreg=" << n[3] << "/" << b[3] << std::endl;
 }
 void ghpcNotePresent(uint32_t fbp) { GhpcTexDiag::notePresent(fbp); }
+
+// Set by the black-content fallback in copySource when it swaps the display
+// frame for a different context frame. Reset at the top of every present.
+bool g_ghpcPresentBlackFallback = false;
+
+// The loading screen alternates between two pictures. Anything that alternates
+// has to be compared present-to-present, so this records the whole decision
+// that produced each frame plus a content signature, and reports both a
+// run-wide census and the last few presents in order.
+void ghpcNotePresentDecision(const char *path, unsigned dispFbp, unsigned selFbp,
+                             bool preferred, bool fieldMode, bool oddField,
+                             const std::vector<uint8_t> &px, unsigned w, unsigned h)
+{
+    // Content signature: non-black count plus a cheap order-sensitive hash, so
+    // two frames that differ anywhere get different values.
+    unsigned long long nonBlack = 0ull;
+    unsigned long long hash = 1469598103934665603ull;
+    for (size_t i = 0; i + 4 <= px.size(); i += 4)
+    {
+        const unsigned p0 = (unsigned)px[i] | ((unsigned)px[i + 1] << 8) | ((unsigned)px[i + 2] << 16);
+        if (p0 != 0u)
+        {
+            ++nonBlack;
+            hash = (hash ^ (unsigned long long)p0) * 1099511628211ull;
+            hash ^= (unsigned long long)i;
+        }
+    }
+
+    struct DKey
+    {
+        const char *path; unsigned disp, sel; bool pref, field, odd, fallback;
+        unsigned long long n;
+    };
+    static DKey keys[32];
+    static int used = 0;
+    static unsigned long long total = 0ull;
+    const bool fallback = g_ghpcPresentBlackFallback;
+    int slot = -1;
+    for (int k = 0; k < used; ++k)
+        if (keys[k].path == path && keys[k].disp == dispFbp && keys[k].sel == selFbp &&
+            keys[k].pref == preferred && keys[k].field == fieldMode &&
+            keys[k].odd == oddField && keys[k].fallback == fallback)
+        { slot = k; break; }
+    if (slot < 0 && used < 32)
+    { slot = used++; keys[slot] = DKey{path, dispFbp, selFbp, preferred, fieldMode, oddField, fallback, 0ull}; }
+    if (slot >= 0) ++keys[slot].n;
+
+    // Rolling trace of consecutive presents. Alternation is only visible in
+    // order, so a census alone cannot show it.
+    static const int traceN = []() {
+        const char *e = std::getenv("GHPC_PRESENT_TRACE");
+        return e ? std::atoi(e) : 0;
+    }();
+    // Only trace the screen being studied, and only when the picture actually
+    // changes. A fixed cap fills with the splash and never reaches the loading
+    // screen; printing every present buries the transitions that matter.
+    static const unsigned long long traceMin = []() -> unsigned long long {
+        const char *e = std::getenv("GHPC_PRESENT_MIN");
+        return e ? std::strtoull(e, nullptr, 0) : 1000ull;
+    }();
+    static int traced = 0;
+    static unsigned long long lastSig = 0ull;
+    static unsigned long long sameRun = 0ull;
+    const bool changed = (hash != lastSig);
+    if (!changed) ++sameRun;
+    if (traced < traceN && nonBlack > traceMin && changed)
+    {
+        ++traced;
+        if (sameRun)
+            std::fprintf(stderr, "[gs/present]   (previous frame repeated %llu times)\n", sameRun);
+        sameRun = 0ull;
+        lastSig = hash;
+        std::fprintf(stderr,
+            "[gs/present] #%llu %s disp=%u sel=%u pref=%u field=%u odd=%u fallback=%u "
+            "nonBlack=%llu sig=0x%016llx %ux%u\n",
+            total, path, dispFbp, selFbp, (unsigned)preferred, (unsigned)fieldMode,
+            (unsigned)oddField, (unsigned)fallback, nonBlack,
+            (unsigned long long)hash, w, h);
+    }
+    else if (changed)
+    {
+        lastSig = hash;
+        sameRun = 0ull;
+    }
+
+    if ((++total % 200ull) == 0ull)
+    {
+        std::fprintf(stderr, "[gs/presentcensus] presents=%llu shapes=%d\n", total, used);
+        for (int k = 0; k < used; ++k)
+            std::fprintf(stderr,
+                "  %s disp=%u sel=%u pref=%u field=%u odd=%u fallback=%u n=%llu\n",
+                keys[k].path, keys[k].disp, keys[k].sel, (unsigned)keys[k].pref,
+                (unsigned)keys[k].field, (unsigned)keys[k].odd,
+                (unsigned)keys[k].fallback, keys[k].n);
+    }
+}
 #endif
 
 GSCpuBackend::GSCpuBackend()
@@ -928,20 +1024,24 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
             // x range sits past the framebuffer width is drawn off the right
             // edge. Capped logging hid this before; keep a table instead.
             {
-                struct GeomBucket { unsigned tbp; unsigned psm; unsigned prim;
+                struct GeomBucket { unsigned tbp; unsigned psm; unsigned prim; unsigned fbp;
                                     float x0, x1, y0, y1; unsigned long long n; };
                 static GeomBucket buckets[48];
                 static int used = 0;
                 static unsigned long long seen = 0ull;
+                // Keyed on destination framebuffer too: the loading screen
+                // alternates two different pictures, one per buffer, so the
+                // question is which draws reach one buffer and not the other.
                 const unsigned key = ctx.tex0.tbp0;
+                const unsigned fbpKey = ctx.frame.fbp;
                 int slot = -1;
                 for (int k = 0; k < used; ++k)
-                    if (buckets[k].tbp == key) { slot = k; break; }
+                    if (buckets[k].tbp == key && buckets[k].fbp == fbpKey) { slot = k; break; }
                 if (slot < 0 && used < 48)
                 {
                     slot = used++;
                     buckets[slot] = GeomBucket{key, (unsigned)ctx.tex0.psm,
-                                               (unsigned)state.prim.type,
+                                               (unsigned)state.prim.type, fbpKey,
                                                1e30f, -1e30f, 1e30f, -1e30f, 0ull};
                 }
                 if (slot >= 0)
@@ -970,11 +1070,13 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
                     // Reset every window. A run-wide bbox mixes the splash with
                     // the save screen and reads as garbage; what matters is
                     // where the most recent draws actually land.
-                    std::fprintf(stderr, "[gs/geomcensus] draws=%llu buckets=%d (window)\n", seen, used);
+                    extern unsigned long long g_ghpcBadBaseRejects;
+                    std::fprintf(stderr, "[gs/geomcensus] draws=%llu buckets=%d badBaseRejects=%llu (window)\n",
+                                 seen, used, g_ghpcBadBaseRejects);
                     for (int k = 0; k < used; ++k)
                         std::fprintf(stderr,
-                            "  tbp0=%u psm=0x%02x prim=%u n=%llu x=[%.1f,%.1f] y=[%.1f,%.1f]\n",
-                            buckets[k].tbp, buckets[k].psm, buckets[k].prim, buckets[k].n,
+                            "  fbp=%u tbp0=%u psm=0x%02x prim=%u n=%llu x=[%.1f,%.1f] y=[%.1f,%.1f]\n",
+                            buckets[k].fbp, buckets[k].tbp, buckets[k].psm, buckets[k].prim, buckets[k].n,
                             (double)buckets[k].x0, (double)buckets[k].x1,
                             (double)buckets[k].y0, (double)buckets[k].y1);
                     used = 0;
@@ -1345,21 +1447,55 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
             ++GhpcTexDiag::g_wroteZeroPixel;
 #endif
 #if GHPC_DIAG
-        // The logo rasterises correctly, so watch one pixel inside its rect and
-        // record every write to it in order: whatever paints over it last is
-        // what the screen actually shows.
-        if (x == 256u && y == 224u)
+        // Watch one pixel and keep the last few writes to it PER destination
+        // buffer, rather than the first N overall. The loading screen shows a
+        // different picture from each buffer, and what matters is which draw
+        // painted the pixel last in each, so a fixed cap that fills during boot
+        // is useless. GHPC_PIXEL=x,y selects the point.
         {
-            static int watchLogs = 0;
-            if (watchLogs < 80)
+            static const bool pixelOn = std::getenv("GHPC_PIXEL") != nullptr;
+            if (pixelOn)
             {
-                ++watchLogs;
-                std::fprintf(stderr,
-                    "[gs/pixel] fbp=0x%04x fpsm=0x%02x tbp0=0x%04x tme=%u prim=%u"
-                    " pixel=0x%08x rgba=(%u,%u,%u,%u)\n",
-                    (unsigned)fbp, (unsigned)fpsm, (unsigned)ctx.tex0.tbp0,
-                    state.prim.tme ? 1u : 0u, (unsigned)state.prim.type,
-                    (unsigned)pixel, (unsigned)r, (unsigned)g, (unsigned)b, (unsigned)a);
+                static unsigned wx = 256u, wy = 224u;
+                static bool parsed = false;
+                if (!parsed)
+                {
+                    parsed = true;
+                    const char *e = std::getenv("GHPC_PIXEL");
+                    if (e) { char *end = nullptr; wx = (unsigned)std::strtoul(e, &end, 0);
+                             if (end && *end == ',') wy = (unsigned)std::strtoul(end + 1, nullptr, 0); }
+                }
+                if (x == wx && y == wy)
+                {
+                    struct W { unsigned fbp, tbp0, prim, tme, pixel, r, g, b, a; };
+                    static W ring[2][12] = {};
+                    static unsigned head[2] = {0u, 0u};
+                    static unsigned long long hits = 0ull;
+                    const int which = (fbp == 0u) ? 0 : 1;
+                    ring[which][head[which] % 12u] =
+                        W{(unsigned)fbp, (unsigned)ctx.tex0.tbp0, (unsigned)state.prim.type,
+                          state.prim.tme ? 1u : 0u, (unsigned)pixel,
+                          (unsigned)r, (unsigned)g, (unsigned)b, (unsigned)a};
+                    ++head[which];
+                    if ((++hits % 400ull) == 0ull)
+                    {
+                        std::fprintf(stderr, "[gs/pixel] (%u,%u) writes=%llu\n", wx, wy, hits);
+                        for (int q = 0; q < 2; ++q)
+                        {
+                            std::fprintf(stderr, "  buffer %s last %u writes, oldest first:\n",
+                                         q ? "fbp56" : "fbp0",
+                                         head[q] < 12u ? head[q] : 12u);
+                            const unsigned n = head[q] < 12u ? head[q] : 12u;
+                            for (unsigned i = 0u; i < n; ++i)
+                            {
+                                const W &w = ring[q][(head[q] - n + i) % 12u];
+                                std::fprintf(stderr,
+                                    "    tbp0=0x%04x prim=%u tme=%u pixel=0x%08x rgba=(%u,%u,%u,%u)\n",
+                                    w.tbp0, w.prim, w.tme, w.pixel, w.r, w.g, w.b, w.a);
+                            }
+                        }
+                    }
+                }
             }
         }
 #endif
@@ -2528,6 +2664,9 @@ PresentationFrame GSCpuBackend::Present(const GSPresentationRequest &request)
 PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationRequest &request)
 {
     PresentationFrame result{};
+#if GHPC_DIAG
+    { extern bool g_ghpcPresentBlackFallback; g_ghpcPresentBlackFallback = false; }
+#endif
     const GSPmodeState pmode = decodePmode(request.pmode);
     const GSSmode2State smode2 = decodeSMode2(request.smode2);
     const bool fieldMode = smode2.interlaced && !smode2.frameMode;
@@ -2587,6 +2726,9 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
                     continue;
                 selected = candidate;
                 pixels.swap(candidatePixels);
+#if GHPC_DIAG
+                { extern bool g_ghpcPresentBlackFallback; g_ghpcPresentBlackFallback = true; }
+#endif
                 break;
             }
         }
@@ -2635,6 +2777,16 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
                 applyFieldPresentation(result.pixels, result.width, result.height, oddField);
             result.displayFbp = displayFrame1.fbp;
             result.sourceFbp = selected1.fbp;
+#if GHPC_DIAG
+            {
+                extern void ghpcNotePresentDecision(const char *, unsigned, unsigned, bool,
+                                                    bool, bool, const std::vector<uint8_t> &,
+                                                    unsigned, unsigned);
+                ghpcNotePresentDecision("dual", displayFrame1.fbp, selected1.fbp,
+                                        preferred1, fieldMode, oddField,
+                                        result.pixels, result.width, result.height);
+            }
+#endif
             return result;
         }
     }
@@ -2651,5 +2803,15 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
     normalizePresentationAlpha(result.pixels, result.width, result.height);
     result.displayFbp = displayFrame.fbp;
     result.sourceFbp = selected.fbp;
+#if GHPC_DIAG
+    {
+        extern void ghpcNotePresentDecision(const char *, unsigned, unsigned, bool,
+                                            bool, bool, const std::vector<uint8_t> &,
+                                            unsigned, unsigned);
+        ghpcNotePresentDecision("single", displayFrame.fbp, selected.fbp,
+                                result.usedPreferred, fieldMode, oddField,
+                                result.pixels, result.width, result.height);
+    }
+#endif
     return result;
 }
