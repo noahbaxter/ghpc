@@ -3,6 +3,9 @@
 // Source addresses 0x3e9328..0x3e93d4. Every body is one or two instructions,
 // so the whole class reads straight off the disassembly with no ambiguity.
 // GH2 never shipped mic support, which is why the whole class is inert.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

@@ -6,6 +6,9 @@
 // to clear a padded Vector3 while leaving the homogeneous w at 1. It is also a
 // direct dependency on vf00 being read-only, so these three are the cheapest
 // regression test for the ghpc vf00 fix in commit b2bfc48.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

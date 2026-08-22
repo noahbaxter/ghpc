@@ -11,6 +11,9 @@
 // where it was writable and got clobbered, fixed in commit b2bfc48. Anything
 // here that uses $vf0w as a literal 1.0 would silently produce garbage against
 // the unfixed runtime, so these are good regression targets.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

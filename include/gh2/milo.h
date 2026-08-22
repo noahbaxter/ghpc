@@ -21,7 +21,14 @@ public:
 } // namespace Hmx
 
 // Interned string. One word wide.
-class Symbol { public: const char *mStr; };
+class Symbol {
+public:
+    Symbol() : mStr(0) {}
+    Symbol(const char *s) : mStr(s) {} // 0x326f00
+    bool operator==(const Symbol &o) const { return mStr == o.mStr; }
+
+    const char *mStr;
+};
 
 // Two words wide. RndShader::Handle stores 6 to +0x04 and 0 to +0x00 on the way
 // out, and 6 is kDataInt in the Milo DataType enum, so +0x00 is the value and

@@ -3,6 +3,9 @@
 // Only the bodies that resolve without guessing at a virtual slot are here. The
 // rest of the class dispatches through the g++ 2.x vtable at +0x7c and is left
 // for later.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

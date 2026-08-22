@@ -4,6 +4,9 @@
 // Scanning every vtable in the ELF for that slot turns up exactly three
 // entries, MassChannelMapping, MultiChannelMapping and SingleSlotChannelMapping,
 // all of them GetNumSlots. That names both the slot and the member's type.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

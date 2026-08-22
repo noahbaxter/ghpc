@@ -2,6 +2,9 @@
 //
 // Assert line numbers are the ones GH2 baked into the failure strings, so they
 // are line numbers in the original TrackConfig.cpp.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

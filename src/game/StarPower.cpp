@@ -4,6 +4,9 @@
 // mEnabled from +0x28 and branch on it. The compiler used branch-likely for the
 // two-instruction cases, so the store sits in an annulled delay slot and the
 // whole body is just "if enabled, store".
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

@@ -4,6 +4,9 @@
 // The 0x3e90xx..0x3e91xx block is the defaults, all neutral values. The 0x260xxx
 // and 0x262xxx addresses are the non-virtual helpers that are implemented once
 // on the base and reach real members.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

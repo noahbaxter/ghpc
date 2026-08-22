@@ -6,6 +6,9 @@
 // same two cursors and reaches the same two fallback fields, with the read and
 // write roles swapped and the empty/full answer inverted. Getting the layout
 // wrong would break the symmetry, and it does not break.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

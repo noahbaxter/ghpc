@@ -4,6 +4,9 @@
 // 0x267dxx..0x267exx block is the handful that still drive an owned VarTimer, so
 // a caller polling GetTime sees time advance at the requested speed even though
 // nothing is being decoded.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

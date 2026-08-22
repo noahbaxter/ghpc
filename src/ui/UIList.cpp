@@ -5,6 +5,9 @@
 // speed, and a ListDisplay at +0x1c8 that owns geometry. Every forwarder is the
 // same six instructions with the constant offset in the delay slot, which is
 // what pins the two offsets beyond doubt.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

@@ -1,5 +1,8 @@
 // Rand, the engine's random number generator, plus two small utilities that
 // live nearby. Addresses 0x32d980, 0x32da88, 0x32f2e0 and 0x104ba8.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

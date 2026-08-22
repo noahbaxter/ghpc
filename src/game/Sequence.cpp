@@ -4,6 +4,9 @@
 // writes the same six offsets in ascending order through BinStream::WriteEndian
 // with a size of 4 each, which independently confirms both the order and that
 // every one of them really is a 4 byte float.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

@@ -9,6 +9,9 @@
 // in the ELF too, and tools/rodata.py reads them back, which is where the
 // parameter names ar, dr, sr, rr and sl come from. They are the original names,
 // not guesses.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

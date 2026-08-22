@@ -257,7 +257,9 @@ class Performer;
 // Performer methods reach through to consult player 0.
 class PlayerConfig {
 public:
-    unsigned char mUnk00[0xb4];
+    unsigned char mUnk00[0xa8];
+    int mTrackNum;         // 0xa8
+    unsigned char mUnkac[0x08];
     Performer *mPerformer; // 0xb4
 };
 
@@ -431,6 +433,10 @@ public:
 class GameGemInfoList {
 public:
     void Reset(); // 0x28d208
+
+    unsigned char mUnk00[0x08];
+    void *mBegin; // 0x08
+    void *mEnd;   // 0x0c
 };
 
 class TrackWatcherImpl {
@@ -443,10 +449,17 @@ public:
     void SetAllGemsUnplayed();
     void ResetFill();
     bool GemCanBePassed(int) const;
+    int NextGemAfter(int gem) const;
+    bool InSlopWindow(float nowMs, float gemMs) const;
+    float Slop(int) const;
 
-    unsigned char mUnk00[0x08];
-    GameGemInfoList *mGems;     // 0x08
-    unsigned char mUnk0c[0x10];
+    unsigned char mUnk00[0x04];
+    // begin at 0x08 and end at 0x0c, 16 byte elements (NextGemAfter shifts the
+    // byte difference right by 4).
+    GameGemInfoList *mGems;     // 0x04
+    unsigned char mUnk08[0x08];
+    float mSlop;                // 0x10 hit window half-width, in ms
+    unsigned char mUnk14[0x08];
     int mIsCurrentTrack;        // 0x1c
     unsigned char mUnk20[0x08];
     float mSyncOffset;          // 0x28
@@ -667,6 +680,47 @@ class RndShader {
 public:
     void Copy(const Hmx::Object *, Hmx::Object::CopyType); // 0x205c28
     DataNode Handle(DataArray *, bool);                    // 0x205c30
+};
+
+
+// PlayerMatcher wires one player's controller, watcher and audio together.
+// The members named here come from the leaf forwarders plus the constructor at
+// 0x117338, which zeroes 0x28 and lets ResetController fill it in.
+class BeatMatchController {
+public:
+    virtual void Disable(bool) = 0; // vtable slot +0x78
+};
+
+class BeatMatcher {
+public:
+    bool IsReady(); // 0x272698
+};
+
+class BeatMatchAudio {
+public:
+    float GetTime(); // 0x270cd0
+};
+
+class PlayerMatcher {
+public:
+    void SetRealtime(bool);
+    bool IsReady();
+    float GetSongMs();
+    int GetTrack();
+
+    unsigned char mUnk00[0x24];
+    int mPlayer;                       // 0x24
+    BeatMatchController *mController;  // 0x28
+    unsigned char mUnk2c[0x04];
+    BeatMatcher *mBeatMatcher;         // 0x30
+    BeatMatchAudio *mAudio;            // 0x34
+};
+
+// Loads sample banks in the background. Only the message handler is decompiled.
+class BankLoader {
+public:
+    void Reset();                       // 0x124e18
+    DataNode Handle(DataArray *, bool);  // 0x124e68
 };
 
 #endif // GH2_INFERRED_TYPES_H

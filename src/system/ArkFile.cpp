@@ -1,5 +1,8 @@
 // ArkFile, a read cursor over one entry in the ARK archive.
 // Addresses 0x2f8070..0x2f80e8 and 0x427a30.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 

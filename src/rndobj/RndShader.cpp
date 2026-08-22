@@ -2,6 +2,9 @@
 //
 // Two functions, and between them they document the Milo message protocol's
 // dead end, which is worth having written down once.
+//
+// Confidence for every function in this file, with the evidence behind it,
+// is in docs/confidence.md.
 
 #include "gh2/inferred_types.h"
 
@@ -18,6 +21,7 @@ void RndShader::Copy(const Hmx::Object *, Hmx::Object::CopyType) {} // 0x205c28
 // kDataUnhandled tag one might expect.
 DataNode RndShader::Handle(DataArray *msg, bool warn) { // 0x205c30
     Symbol name = msg->Node(1)->Sym(msg);
+    (void)name;
     if (warn)
         MILO_WARN("Unhandled msg: %s", name);
     return DataNode(0);
