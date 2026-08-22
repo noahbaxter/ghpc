@@ -29,10 +29,13 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   ( cd work && GHPC_DIAG=1 GHPC_PRESENT_MIN=150000 \
       ../ghpc/scripts/run.sh --quiet --debug > "$LOG" 2>&1 ) &
   RUNNER=$!
-  ( sleep "$SECS"; pkill -9 -f "$PAT" 2>/dev/null; kill -9 $RUNNER 2>/dev/null ) &
+  sleep "$SECS" &
+  SLEEPER=$!
+  ( wait $SLEEPER 2>/dev/null; pkill -9 -f "$PAT" 2>/dev/null; kill -9 $RUNNER 2>/dev/null ) &
   WATCHDOG=$!
   wait $RUNNER 2>/dev/null
   kill $WATCHDOG 2>/dev/null
+  kill -9 $SLEEPER 2>/dev/null
   pkill -9 -f "$PAT" 2>/dev/null
 
   line=$(grep '^\[gate\]' "$LOG" | tail -1)
