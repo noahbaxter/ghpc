@@ -861,3 +861,56 @@ should apply to.
 Do not re-chase: the present path itself is clean. `disp` always equals `sel`,
 `usedPreferred` is always 0, the black-content fallback never fires, and
 `fieldMode` is 0, so nothing in presentation is choosing the wrong buffer.
+
+## Disassembly pretty printer is missing cvt.w.s
+
+Found while ranking functions by difficulty. `cvt.w.s` has no entry in the
+recompiler's disassembly mnemonic table, so the comment above the translated
+instruction reads `.word 0x46000064 # cvt.w.s` instead of naming it.
+
+The emitted C++ is correct: it is a proper `FPU_CVT_W_S`. Only the comment is
+wrong. 134 generated files are affected.
+
+Worth fixing anyway. The comments are the specification anything reading these
+files works from, including tooling that parses them, so a missing mnemonic
+hides COP1 instructions from any such consumer. It already skewed the decomp
+difficulty ranking until that tool was worked around.
+
+## COP2 is the easiest dense code, not the hardest
+
+The decomp difficulty ranking initially weighted COP2 (VU0 macro mode) at 9.0
+per instruction, the heaviest weight in the model, on the assumption that vector
+code is hard to read. That is backwards.
+
+VU0 macro mode is ordinary MIPS with an explicit field mask. It is dense but
+mechanical. `Transform::Multiply` and `Transform::Multiply2` differ only in mask
+bits, so each cross-checks the other for free. The weight should be about 2.0.
+
+Two related structural facts about this binary, both from the same sweep. There
+are **zero computed jumps**, so no jump tables anywhere in the ELF. And the
+population breaks down as 1,636 leaf functions, 2,336 under 13 instructions, 203
+that are a bare `jr $ra`, 2,140 touching COP1, 219 touching COP2, and 1,729 with
+an indirect call.
+
+## The decomp wall is macro expansion, not comprehension
+
+`StarPower::SetUsing(bool)` at 0x122718 is 313 instructions, of which about 20
+are StarPower logic. The rest is two inlined expansions of Milo's "build a
+static message DataArray and export it" macro: a function-local static Symbol
+behind a .bss guard, `PoolAlloc`, `DataArray(int)`, three `DataNode::operator=`,
+a 16-bit refcount at +0x0a with a conditional destructor, and `atexit`
+registration. 28 calls in one function.
+
+Following it is possible. Writing it out is not a decompilation, it is a
+transliteration of 290 lines of refcount juggling, which is the thing decomp
+exists to replace. The honest output is the one line macro the original source
+had, and a macro leaves no trace in a binary. RB3 has equivalents but the
+GH1/GH2 era macros differ, so reconstructing the macro shape from GH2 evidence
+alone would be a guess presented as source.
+
+Scope of the blocker: **142 functions contain the inlined DataArray
+construction and 228 contain the PoolAlloc**, so 1 to 2 percent of the binary
+sits behind it.
+
+No general comprehension wall was hit. Everything attempted below rank ~10,500
+of 12,422 came out high or medium confidence.
