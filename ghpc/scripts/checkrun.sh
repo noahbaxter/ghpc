@@ -29,13 +29,17 @@ while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
   ( cd work && GHPC_DIAG=1 GHPC_PRESENT_MIN=150000 \
       ../ghpc/scripts/run.sh --quiet --debug > "$LOG" 2>&1 ) &
   RUNNER=$!
-  sleep "$SECS" &
-  SLEEPER=$!
-  ( wait $SLEEPER 2>/dev/null; pkill -9 -f "$PAT" 2>/dev/null; kill -9 $RUNNER 2>/dev/null ) &
+  # The watchdog sleeps in its own subshell. Do not try to `wait` on a sleep
+  # started by the parent shell: wait only accepts your own children, so it
+  # returns an error immediately and the watchdog fires about a second after
+  # launch, killing every run and looking exactly like a boot hang.
+  # To avoid leaving an orphaned sleep that fires a PID-agnostic pkill at a
+  # later attempt, kill the watchdog's children before the watchdog itself.
+  ( sleep "$SECS"; pkill -9 -f "$PAT" 2>/dev/null; kill -9 $RUNNER 2>/dev/null ) &
   WATCHDOG=$!
   wait $RUNNER 2>/dev/null
+  pkill -P $WATCHDOG 2>/dev/null
   kill $WATCHDOG 2>/dev/null
-  kill -9 $SLEEPER 2>/dev/null
   pkill -9 -f "$PAT" 2>/dev/null
 
   line=$(grep '^\[gate\]' "$LOG" | tail -1)
