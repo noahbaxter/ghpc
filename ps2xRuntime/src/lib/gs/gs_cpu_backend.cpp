@@ -810,6 +810,42 @@ void ghpcNotePresentDecision(const char *path, unsigned dispFbp, unsigned selFbp
         sameRun = 0ull;
     }
 
+    // Gate summary. Flicker is two stable pictures swapping every present, so
+    // detect strict alternation between exactly two signatures over a short
+    // window rather than comparing hashes across runs, which is not stable.
+    {
+        static unsigned long long gatePresents = 0ull, gateChanges = 0ull;
+        static unsigned long long ring[8] = {};
+        static unsigned ringHead = 0u;
+        static unsigned long long prevSig = 0ull;
+        if (nonBlack > traceMin)
+        {
+            ++gatePresents;
+            if (prevSig != 0ull && hash != prevSig) ++gateChanges;
+            prevSig = hash;
+            ring[ringHead % 8u] = hash;
+            ++ringHead;
+            if ((gatePresents % 200ull) == 0ull && ringHead >= 8u)
+            {
+                unsigned long long a = ring[0], b = 0ull;
+                unsigned distinct = 1u;
+                for (unsigned i = 1u; i < 8u; ++i)
+                {
+                    if (ring[i] == a) continue;
+                    if (b == 0ull) { b = ring[i]; distinct = 2u; }
+                    else if (ring[i] != b) { distinct = 3u; break; }
+                }
+                bool alt = (distinct == 2u);
+                if (alt)
+                    for (unsigned i = 2u; i < 8u; ++i)
+                        if (ring[i] != ring[i - 2u]) { alt = false; break; }
+                std::fprintf(stderr,
+                    "[gate] presents=%llu sigChanges=%llu alternating=%d distinct=%u\n",
+                    gatePresents, gateChanges, alt ? 1 : 0, distinct);
+            }
+        }
+    }
+
     if ((++total % 200ull) == 0ull)
     {
         std::fprintf(stderr, "[gs/presentcensus] presents=%llu shapes=%d\n", total, used);
