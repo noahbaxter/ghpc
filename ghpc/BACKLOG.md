@@ -914,3 +914,134 @@ sits behind it.
 
 No general comprehension wall was hit. Everything attempted below rank ~10,500
 of 12,422 came out high or medium confidence.
+
+## The boot hang is mostly tooling, not the game
+
+Three earlier entries in this file claim an intermittent boot hang at roughly 1
+run in 6. Treat that number with suspicion. Measured against about 18 real runs
+in one session, nearly all reached the loading screen, and `checkrun.sh` booted
+on its first attempt once its own bug was fixed.
+
+Two false hang reports were traced to their actual causes:
+
+1. **`wait` on a process that is not your child.** A watchdog written as
+   `sleep N & SLEEPER=$!` in the parent, then `( wait $SLEEPER; pkill ... ) &`
+   in a subshell, does not work. `wait` only accepts the calling shell's own
+   children, so it returns an error immediately and the watchdog fires about a
+   second after launch, SIGKILLing the run. Every attempt then looks like a
+   boot hang. The correct form keeps the sleep inside the watchdog subshell and
+   uses `pkill -P $WATCHDOG` before killing the watchdog, so no orphaned sleep
+   survives to fire a PID-agnostic `pkill` at a later attempt.
+
+2. **CPU starvation.** A run given a fixed 250 second window will miss it if a
+   12,664 file `ninja -j14` build is running at the same time. Do not run the
+   game and a full build concurrently and then read the result as a game defect.
+
+Before treating a failed run as a hang, check the wall clock. Three attempts
+finishing in three seconds is not three hangs, it is a harness killing its own
+runs.
+
+## Regression gate
+
+`ghpc/scripts/checkrun.sh` boots the game headless and asserts two things: that
+boot reached the loading screen, and that the presented picture is not
+alternating between two stable frames. About 4 minutes per attempt, up to 3
+attempts, and it prints how many it used.
+
+It currently exits 1, correctly, because the flicker is real:
+
+    [gate] presents=2200 sigChanges=1950 alternating=1 distinct=2
+
+The signal comes from `ghpcNotePresentDecision` in `gs_cpu_backend.cpp`, which
+emits a `[gate]` line every 200 qualifying presents. `alternating=1` means the
+last 8 presents strictly alternated between exactly two signatures. Hashes are
+not stable across runs, so never compare them between runs.
+
+## Loading screen flicker: four causes eliminated, mechanism localized
+
+The gate still fails. What follows is what the evidence actually supports, so
+the next pass does not re-derive it.
+
+### Eliminated by experiment, not by argument
+
+1. **Split draw list.** The standing hypothesis was that one frame's draws were
+   being split across both buffers. A monotonic run-length counter keyed on
+   destination fbp in `GSCpuBackend::DrawPrimitive` reports `runs == presents`
+   with a run length of 904, window after window. Every frame's whole draw list
+   goes to one buffer. The hypothesis is wrong.
+2. **Double-buffer overlap.** A 289 quadword batch does not fit the 143
+   quadword gap between the halves at `base=49 ofst=143`, so an unpack at
+   `TOP=49` was caught writing quadword 193. Forcing a non-overlapping layout
+   (`GHPC_FORCE_DBUF=0:330`, verified live as `top=0/330`) still flickers.
+3. **Unwritten unpack lanes.** V3-32 leaves W and V2-32 leaves Z and W, and the
+   runtime preserves whatever VU memory held, which differs per half. Hardware
+   does not: PCSX2 writes `v1v0v1v0` for V2 and runs V3 through the V4 path,
+   both confirmed against real hardware. Implementing that changed the data,
+   verified in the dumps, and left the mismatch at exactly 106 draws with an
+   identical signature. Reverted. Still worth doing for accuracy, separately.
+4. **Lazy XGKICK.** PATH1 streams the packet out of live VU memory while the
+   program keeps storing into it. Snapshotting the source at kick time
+   (`GHPC_XGKICK_SNAPSHOT=1`) changes nothing.
+
+### What the divergence actually is
+
+Comparing the two exact MSCALs behind the first diverging draw, in one run,
+aligned by MSCAL index rather than by batch index or header contents:
+
+    first diverging draw 46 from mscal 20431 (top=49) vs 20452 (top=192)
+    A at its top=49:   +0 qw=49  00000046 00000119 00000135 00000614
+    B at its top=192:  +0 qw=192 00000046 00000119 00000135 00000614
+
+Same batch header, same input, quadwords 0 to 48 byte-identical, and only the
+W lanes differing, which point 3 proved do not matter. Same program, same
+input, different TOP, different output. The corrupt vertices land on raw
+(2048, 2048), which is the screen centre, the transform of a zeroed position.
+
+The difference is where the program writes. Its output pointer `vi4` walks
+1, 13, 25, 37, 49, 61 and so on, step 12, from a base that does not track TOP.
+Measured store ranges:
+
+    top=49:  stores span qw 1 .. 333   (other half starts at 192)
+    top=192: stores span qw 1 .. 472   (other half is 49..192)
+
+So the program builds its packet in place across a region covering both halves,
+and the two parities land on the other half very differently. Classifying the
+failing run's input by last writer gives 114 of 290 quadwords last written by
+the program's own stores at `top=49` against 70 at `top=192`.
+
+### The open question
+
+Ordering. The program legitimately writes behind its read pointer, trailing by
+48 quadwords at `top=49` and 191 at `top=192`, so writing over its own input is
+expected and safe on its own. What is not established is whether a quadword was
+clobbered **before** it was read. The last-writer map is sampled at report time
+and cannot tell those apart. Establishing that is the next measurement, and it
+either confirms this mechanism or kills it like the other four.
+
+### Related facts worth keeping
+
+- Parity flips every frame: 29 DBF toggles per frame (21 MSCAL plus 8 MSCNT),
+  an odd number, stable. No MSCALs are rejected and none are duplicated, so the
+  guest really does emit an odd count. PCSX2 toggles DBF on MSCNT exactly as on
+  MSCAL, so matching that is correct and is not the parity leak.
+- `BASE` and `OFFSET` are genuine game VIFcodes (NUM 0, no high immediate bits),
+  re-affirmed periodically, never malformed. Nothing is dropped:
+  `truncUnpack=0`, `bytesDiscarded=0`, `badBaseRejects=0`.
+- Which buffer looks correct is not stable between runs, consistent with a
+  parity that depends on startup phase.
+
+### Instrumentation added, all behind GHPC_DIAG and an env flag
+
+`GHPC_DRAWSEQ` (two consecutive frames compared draw for draw, plus a VU1 input
+diff of the two MSCALs behind the first diverging draw), `GHPC_QW_WATCH` with
+`GHPC_QW_FROM` (every writer of one quadword, VIF and VU alike, in a window),
+`GHPC_VI_WATCH` (VI register writes with the setting pc), `GHPC_STORE_PC` (store
+address derivation), `GHPC_TOPMAP`, `GHPC_BATCHDIFF`, `GHPC_FORCE_DBUF`,
+`GHPC_XGKICK_SNAPSHOT`.
+
+Two traps cost time here and are worth restating. A count cap on a watch fills
+at the first event past its threshold and never reaches the interesting one, so
+watches need a window, not a cap. And instrumentation has its own bugs: the
+per-MSCAL ring was labelled before the MSCAL counter incremented, so every
+window dumped was off by one run, which produced a confident and completely
+wrong conclusion until it was caught.
