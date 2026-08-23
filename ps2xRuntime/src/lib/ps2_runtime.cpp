@@ -551,6 +551,28 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
         }
     }
 #endif
+    // Frame pacing, available in every build. GHPC_FPS=N reports every N frames.
+    {
+        static const int fpsEvery = []() {
+            const char *e = std::getenv("GHPC_FPS");
+            return e ? std::atoi(e) : 0;
+        }();
+        if (fpsEvery > 0)
+        {
+            static auto last = std::chrono::steady_clock::now();
+            static int frames = 0;
+            if (++frames >= fpsEvery)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                const double secs = std::chrono::duration<double>(now - last).count();
+                std::fprintf(stderr, "[fps] %.2f frames/sec  %.2f ms/frame  over %d frames\n",
+                             frames / secs, (secs * 1000.0) / frames, frames);
+                last = now;
+                frames = 0;
+            }
+        }
+    }
+
     s_lastDisplayFbp = displayFbp;
     s_lastSourceFbp = sourceFbp;
     s_lastPreferred = usedPreferredDisplaySource;

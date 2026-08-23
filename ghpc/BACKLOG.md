@@ -1045,3 +1045,40 @@ watches need a window, not a cap. And instrumentation has its own bugs: the
 per-MSCAL ring was labelled before the MSCAL counter incremented, so every
 window dumped was off by one run, which produced a confident and completely
 wrong conclusion until it was caught.
+
+## Menu and loading screen performance
+
+Measured on the loading screen with `GHPC_FPS=120` (frames per second reported
+every N frames, works in every build, env gated so it costs nothing when off).
+
+    --debug build      10.3 fps    97.1 ms/frame
+    release build      20.4 fps    49.0 ms/frame
+    release, fn ptrs   23.5 fps    42.6 ms/frame
+
+**Do not play on the `--debug` build.** Both build modes are `CMAKE_BUILD_TYPE=Release`;
+`--debug` only adds `PS2X_GHPC_DIAG`, and that costs exactly half the frame rate.
+The worst offender is `WritePixel`, which does a `std::map` lookup on
+`g_fragByFbp` for **every rasterized fragment**. If the diag build is ever
+needed at playable speed, replace that map with the small fixed-size array
+pattern `fbpSlot` already uses.
+
+A 15 second `sample` of the release build shows the cost is almost entirely the
+software rasterizer, by samples at top of stack:
+
+    2805  SampleTexture inner lambda
+    2189  WritePixel
+    1704  LookupCLUT
+    1061  DrawTriangle
+     899  SampleTexture
+     914  ReadCT32 + ReadP8
+     375  std::__function dispatch
+
+That last entry was pure overhead: `m_readVramFuncs` and `m_writeVramFuncs` were
+`std::function` arrays called once per pixel, holding nothing but plain
+functions. Now raw function pointers, worth the 49.0 to 42.6 ms above. Every
+slot is assigned in the constructor (`default:` fills `ReadNull`/`WriteNull`),
+so there is no null pointer risk.
+
+Next targets, in profile order: `LookupCLUT` runs per texel and re-derives the
+palette entry every time, so a 256 entry cache invalidated on `tex0` change
+should remove most of it. After that the texture sampler itself.
