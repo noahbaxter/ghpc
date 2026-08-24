@@ -791,7 +791,7 @@ namespace ps2_stubs
         size_t items_written = 0;
 
         const uint8_t *hostPtr = getConstMemPtr(rdram, ptrAddr);
-        FILE *fp = get_file_ptr(file_handle);
+        FILE *fp = resolve_file_ptr(rdram, file_handle);
 
         if (hostPtr && fp && size > 0 && count > 0)
         {
@@ -812,7 +812,7 @@ namespace ps2_stubs
     {
         uint32_t file_handle = getRegU32(ctx, 4); // $a0
         uint32_t format_addr = getRegU32(ctx, 5); // $a1
-        FILE *fp = get_file_ptr(file_handle);
+        FILE *fp = resolve_file_ptr(rdram, file_handle);
         const std::string formatOwned = readPs2CStringBounded(rdram, runtime, format_addr, 1024);
         int ret = -1;
 
@@ -902,7 +902,7 @@ namespace ps2_stubs
         }
         else
         {
-            FILE *fp = get_file_ptr(file_handle);
+            FILE *fp = resolve_file_ptr(rdram, file_handle);
             if (fp)
             {
                 ret = ::fflush(fp);
@@ -1118,7 +1118,7 @@ namespace ps2_stubs
         uint32_t file_handle = getRegU32(ctx, 4);  // $a0
         uint32_t format_addr = getRegU32(ctx, 5);  // $a1
         uint32_t va_list_addr = getRegU32(ctx, 6); // $a2
-        FILE *fp = get_file_ptr(file_handle);
+        FILE *fp = resolve_file_ptr(rdram, file_handle);
         const std::string formatOwned = readPs2CStringBounded(rdram, runtime, format_addr, 1024);
         int ret = -1;
 

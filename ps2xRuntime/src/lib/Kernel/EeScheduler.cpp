@@ -2221,6 +2221,35 @@ void EeScheduler::processEvent(const EeEvent &event)
         break;
     case EeEventType::VBlankStart:
         ++m_vsyncTick;
+        // Guest time is gated on m_eeCycle, so if emulated cycles advance
+        // slower than real time the game plays in slow motion however high the
+        // render frame rate is. Report the ratio. GHPC_EERATE=N, every N ticks.
+        {
+            static const int every = []() {
+                const char *e = std::getenv("GHPC_EERATE");
+                return e ? std::atoi(e) : 0;
+            }();
+            if (every > 0)
+            {
+                static auto last = std::chrono::steady_clock::now();
+                static uint64_t lastCycle = 0;
+                static uint32_t ticks = 0;
+                if (++ticks >= (uint32_t)every)
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    const double secs = std::chrono::duration<double>(now - last).count();
+                    const uint64_t cycles = m_eeCycle - lastCycle;
+                    std::fprintf(stderr,
+                                 "[eerate] %.1f%% of realtime  (%.2f Mcycles/sec vs %.2f nominal)  %.1f vblanks/sec\n",
+                                 100.0 * (double)cycles / (secs * (double)kEeClockHz),
+                                 (double)cycles / secs / 1e6, (double)kEeClockHz / 1e6,
+                                 ticks / secs);
+                    last = now;
+                    lastCycle = m_eeCycle;
+                    ticks = 0;
+                }
+            }
+        }
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         if ((m_vsyncTick & 1u) != 0u)
         {

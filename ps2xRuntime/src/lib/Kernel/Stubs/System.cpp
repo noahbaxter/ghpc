@@ -26,6 +26,14 @@ namespace ps2_stubs
 
     void exit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        // A guest exit or abort used to stop the run in complete silence, which
+        // reads as a crash with no message and leaves no host crash report.
+        // Say who called it: abort() reaches here via _exit with code 1, so the
+        // return address is the only handle on where the game gave up.
+        std::fprintf(stderr,
+                     "[guest] exit(%d) called from ra=0x%08x pc=0x%08x. Run is stopping.\n",
+                     (int)getRegU32(ctx, 4), (unsigned)GPR_U32(ctx, 31), (unsigned)ctx->pc);
+        std::fflush(stderr);
         if (runtime)
         {
             runtime->requestStop();

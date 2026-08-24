@@ -579,6 +579,40 @@ namespace
         auto it = g_file_map.find(handle);
         return (it != g_file_map.end()) ? it->second : nullptr;
     }
+
+    // The game statically links newlib, so its stdin/stdout/stderr are FILE
+    // structs inside impure_data and it passes their guest addresses straight
+    // to fprintf and friends. Those never match a handle fopen handed out, so
+    // treating the argument as a handle alone silently drops every write the
+    // game makes to its own stderr, including assert text. Read the fd out of
+    // the FILE struct (newlib keeps _file at +14) and map it to a host stream.
+    FILE *resolve_file_ptr(uint8_t *rdram, uint32_t handle)
+    {
+        if (FILE *fp = get_file_ptr(handle))
+            return fp;
+        if (handle == 0)
+            return nullptr;
+
+        const uint8_t *filePtr = getConstMemPtr(rdram, handle);
+        if (!filePtr)
+            return nullptr;
+
+        int16_t fd = 0;
+        std::memcpy(&fd, filePtr + 14, sizeof(fd));
+        switch (fd)
+        {
+        case 0:
+            return stdin;
+        case 1:
+            return stdout;
+        case 2:
+            return stderr;
+        default:
+            // Not a stream we recognise. Send it to stderr rather than dropping
+            // it: a lost diagnostic costs more than a misrouted one.
+            return stderr;
+        }
+    }
 }
 
 namespace

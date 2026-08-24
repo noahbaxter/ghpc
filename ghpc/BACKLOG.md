@@ -1082,3 +1082,65 @@ so there is no null pointer risk.
 Next targets, in profile order: `LookupCLUT` runs per texel and re-derives the
 palette entry every time, so a 256 entry cache invalidated on `tex0` change
 should remove most of it. After that the texture sampler itself.
+
+## Why the game "crashes" silently, and where the message went
+
+It does not crash. It calls `assert`, and the whole path was invisible.
+
+`__assert` at 0x35c568 loads `_impure_ptr`, reads `+0xc` from newlib's reent
+struct (that is `_stderr`), calls `fiprintf` with it, then falls into `abort` at
+0x35c558. `abort` calls `_exit`, which reaches `ps2_stubs::exit`, which called
+`requestStop()` and printed nothing. So the process ends with no message, no
+host fault, and no crash report in ~/Library/DiagnosticReports.
+
+Both halves of that were fixed:
+
+1. **The assert text was being thrown away.** The game passes the guest address
+   of its own static FILE struct (0x448d8c, inside `impure_data`). Our stubs
+   only understood the small integer handles `fopen` hands out, so every write
+   the game made to its own stderr was dropped and replaced with
+   "fprintf error: Invalid file handle". `resolve_file_ptr` now reads the fd out
+   of the FILE struct (newlib keeps `_file` at +14) and maps it to a host
+   stream, falling back to stderr rather than dropping the write. Wired into
+   `fprintf`, `vfprintf`, `fwrite` and `fflush`. Reads keep the strict lookup.
+2. **The exit was silent.** `ps2_stubs::exit` now prints the exit code, the
+   guest return address and pc before stopping.
+
+Tooling: `ghpc/scripts/debug.sh` runs the game under lldb with breakpoints on
+the exit funnel, and `ghpc/scripts/whereis.sh <addr>` maps a guest address to
+its containing function, which is how the chain above was identified.
+
+## Slow motion is not the frame rate, it is the EE cycle rate
+
+The game plays in slow motion even when the frame rate looks fine. An event in
+`EeScheduler` only fires when **both** deadlines pass:
+
+    item.deadlineCycle <= m_eeCycle && item.hostDeadline <= pacedNow
+
+So guest time is gated on the emulated EE cycle counter, not on wall clock.
+Measured with `GHPC_EERATE=60`:
+
+    [eerate] 39.2% of realtime  (115.63 Mcycles/sec vs 294.91 nominal)  23.5 vblanks/sec
+
+The guest gets 23.5 vblanks per second instead of 60, so the game runs at about
+40 percent speed. Note that vblanks/sec tracks the render frame rate exactly:
+rasterisation runs on the EE thread, so pixel work directly starves guest
+execution. Reaching full speed needs roughly 2.5x more rasteriser throughput,
+which micro-optimisation will not deliver. The structural fixes are getting
+rasterisation off the EE thread or a GPU backend.
+
+Do not "fix" this by firing vblank on the host deadline alone. That would make
+the clock right while the guest executes less code per frame, which trades a
+visible symptom for a subtle one.
+
+## Rejected: CLUT palette cache
+
+`LookupCLUT` runs per texel and re-reads the palette from VRAM, and caching the
+resolved palette looked like the obvious next win after the function pointer
+change. It was tried twice, eagerly rebuilding 256 entries on a key change and
+then lazily per entry with a filled bitmask, keyed on everything the lookup
+reads plus a generation bumped by whole-image transfers. Both measured inside
+noise (23.5 to 24.4 fps) **and the lazy version visibly corrupted the picture**,
+so the key is missing an input or the invalidation misses a path that writes
+palettes. Reverted. Do not retry without a frame comparison in the loop: the
+regression was obvious on screen and invisible in the frame rate.
