@@ -614,22 +614,18 @@ namespace
             if (!known && seenCount < 8)
             {
                 seen[seenCount++] = handle;
-                std::fprintf(stderr, "[libc] guest FILE* 0x%08x has fd %d\n", handle, (int)fd);
+                std::fprintf(stderr, "[libc] guest FILE* 0x%08x has fd %d, struct:", handle, (int)fd);
+                for (int i = 0; i < 20; ++i)
+                    std::fprintf(stderr, " %02x", filePtr[i]);
+                std::fprintf(stderr, "\n");
             }
         }
-        switch (fd)
-        {
-        case 0:
-            return stdin;
-        case 1:
-            return stdout;
-        case 2:
-            return stderr;
-        default:
-            // Not a stream we recognise. Send it to stderr rather than dropping
-            // it: a lost diagnostic costs more than a misrouted one.
-            return stderr;
-        }
+        // Only output calls reach here, so stdin is never a valid answer.
+        // newlib fills _file lazily in __sinit, so a stream the game never
+        // opened normally reads back as fd 0, and mapping that to stdin
+        // silently discarded the text. Anything that is not clearly stdout
+        // goes to stderr: a misrouted diagnostic beats a lost one.
+        return (fd == 1) ? stdout : stderr;
     }
 }
 
