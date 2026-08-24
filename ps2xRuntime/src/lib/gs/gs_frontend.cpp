@@ -1864,9 +1864,17 @@ void ghpcNoteSubmit(const GSPrimitiveBatch &b)
 }
 #endif
 
+#if GHPC_DIAG
+// Kicks split by whether ADC suppressed the draw. The GS frontend is
+// deterministic given a GIF stream, so if two frames draw the same geometry
+// differently the streams differ, and the kick pattern is where that shows.
+unsigned long long g_ghpcKickDraw = 0ull, g_ghpcKickAdc = 0ull;
+#endif
+
 void GS::vertexKick(bool drawing)
 {
 #if GHPC_DIAG
+    if (drawing) ++g_ghpcKickDraw; else ++g_ghpcKickAdc;
     {
         extern void ghpcNoteAdcSlot(uint32_t primType, int slot, int needed, bool adc);
         ghpcNoteAdcSlot(m_prim.type, m_vtxCount, 0, !drawing);

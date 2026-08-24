@@ -133,6 +133,20 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
         int16_t imm = IMM11(instr);
         uint32_t addr = ((uint32_t)(int32_t)(m_state.vi[it] + imm)) * 16u;
         addr &= (dataSize - 1);
+#if GHPC_DIAG
+        // Where does the program think its output buffer is? If the base VI is
+        // wrong the packet lands on top of the input double buffer.
+        if (std::getenv("GHPC_STORE_PC"))
+        {
+            extern unsigned long long g_ghpcVu1Mscals;
+            const unsigned long long from = std::strtoull(std::getenv("GHPC_STORE_PC"), nullptr, 0);
+            if (g_ghpcVu1Mscals >= from && g_ghpcVu1Mscals <= from + 2ull)
+                std::fprintf(stderr, "[vu1/storeaddr] ms=%llu pc=0x%04x vi%u=%d imm=%d -> qw=%u top=%u\n",
+                             g_ghpcVu1Mscals, (unsigned)m_state.pc, (unsigned)it,
+                             (int)m_state.vi[it], (int)imm, (unsigned)(addr / 16u),
+                             (unsigned)m_state.top);
+        }
+#endif
         if (addr + 16 <= dataSize)
         {
             uint32_t words[4]{};

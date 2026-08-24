@@ -4,6 +4,16 @@
 #include <iostream>
 #include "runtime/ps2_memory.h"
 #include <cstring>
+#if GHPC_DIAG
+// GHPC_QUIET silences the periodic diagnostic censuses. They are useful when
+// hunting a specific defect and pure noise when playing the game.
+static bool ghpcQuietLogs()
+{
+    static const bool quiet = std::getenv("GHPC_QUIET") != nullptr;
+    return quiet;
+}
+#endif
+
 #include <cstdlib>
 
 enum VIFCmd : uint8_t
@@ -618,7 +628,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         g_chunkFirstBadPos = -1;
         static auto tRep = std::chrono::steady_clock::now();
         auto nowR = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(nowR - tRep).count() >= 5.0)
+        if (std::chrono::duration<double>(nowR - tRep).count() >= 5.0 && !ghpcQuietLogs())
         {
             tRep = nowR;
             std::cerr << "[vif1] TOTALS sprAll=" << g_ghpcSprBytes
@@ -734,7 +744,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         dumpHist(pos - 4u, sizeBytes);
                 }
             }
-            if (++total % 50u == 0u)
+            if (++total % 50u == 0u && !ghpcQuietLogs())
             {
                 std::cerr << "[vif1] opcode histogram after " << total << ":";
                 for (uint32_t o = 0u; o < 128u; ++o)
@@ -779,7 +789,25 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             // VIF double-buffer setup. OFFSET clears DBF and resets TOPS to BASE.
             // Do not rewrite BASE from the previous TOPS value.
+#if GHPC_DIAG
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                std::fprintf(stderr, "[vif1/dbuf] OFFSET %u -> %u  (base=%u, mscals=%llu, num=%u, immhi=0x%04x, codePos=%u)\n",
+                             (unsigned)(vif1_regs.ofst & 0x3FFu), (unsigned)(imm & 0x3FFu),
+                             (unsigned)(vif1_regs.base & 0x3FFu), g_ghpcVu1Mscals,
+                             (unsigned)num, (unsigned)(imm & ~0x3FFu),
+                             (unsigned)(pos >= 4u ? pos - 4u : 0u));
+            }
+#endif
             vif1_regs.ofst = imm & 0x3FFu;
+#if GHPC_DIAG
+            if (const char *fb = std::getenv("GHPC_FORCE_DBUF"))
+            {
+                vif1_regs.base = (uint32_t)std::strtoul(fb, nullptr, 0) & 0x3FFu;
+                const char *c = std::strchr(fb, ':');
+                if (c) vif1_regs.ofst = (uint32_t)std::strtoul(c + 1, nullptr, 0) & 0x3FFu;
+            }
+#endif
             vif1_regs.tops = vif1_regs.base & 0x3FFu;
             vif1_regs.stat &= ~(1u << 7); // clear DBF
             continue;
@@ -843,8 +871,28 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 continue;
             }
 
+#if GHPC_DIAG
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                std::fprintf(stderr, "[vif1/dbuf] BASE %u -> %u  (ofst=%u, mscals=%llu, codePos=%u, size=%u)\n",
+                             (unsigned)(vif1_regs.base & 0x3FFu), (unsigned)(imm & 0x3FFu),
+                             (unsigned)(vif1_regs.ofst & 0x3FFu), g_ghpcVu1Mscals,
+                             (unsigned)(pos >= 4u ? pos - 4u : 0u), (unsigned)sizeBytes);
+            }
+#endif
             // BASE only updates the base register. TOPS changes on OFFSET/MSCAL.
             vif1_regs.base = imm & 0x3FFu;
+#if GHPC_DIAG
+            // Probe only. Force a double-buffer layout whose halves are far
+            // enough apart that a 289 quadword batch cannot reach the other
+            // half, to test whether the overlap is what corrupts a frame.
+            if (const char *fb = std::getenv("GHPC_FORCE_DBUF"))
+            {
+                vif1_regs.base = (uint32_t)std::strtoul(fb, nullptr, 0) & 0x3FFu;
+                const char *c = std::strchr(fb, ':');
+                if (c) vif1_regs.ofst = (uint32_t)std::strtoul(c + 1, nullptr, 0) & 0x3FFu;
+            }
+#endif
             continue;
         }
         else if (opcode == VIF_ITOP)
@@ -907,6 +955,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             else
                 vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
             vif1_regs.stat ^= (1u << 7); // toggle DBF
+#if GHPC_DIAG
+            { extern unsigned long long g_ghpcDbfToggles; ++g_ghpcDbfToggles; }
+#endif
 
 #if GHPC_DIAG
             {
@@ -948,6 +999,120 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 }
             }
 #endif
+#if GHPC_DIAG
+            // Same batch, seen again later, same input? The screen is static so
+            // every batch should read identical data every time it runs. Batches
+            // are identified by their header quadword at TOP+0, not by their
+            // index in the frame, because the batch count per frame varies and
+            // index keying compares unrelated objects.
+            if (std::getenv("GHPC_BATCHDIFF") && m_vu1Data)
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                static const uint32_t kQw = 300u;
+                struct Slot { uint32_t hdr[4]; unsigned char data[300 * 16]; unsigned long long top; bool used; };
+                static Slot slots[24] = {};
+                static int used = 0;
+                static int reported = 0;
+                if (g_ghpcVu1Mscals > 20000ull && reported < 3)
+                {
+                    unsigned char cur[300 * 16];
+                    for (uint32_t i = 0u; i < kQw; ++i)
+                        std::memcpy(cur + i * 16u, m_vu1Data + (((runTop + i) & 0x3FFu) * 16u), 16u);
+                    uint32_t hdr[4];
+                    std::memcpy(hdr, cur, sizeof(hdr));
+                    int slot = -1;
+                    for (int i = 0; i < used; ++i)
+                        if (std::memcmp(slots[i].hdr, hdr, sizeof(hdr)) == 0) { slot = i; break; }
+                    if (slot < 0)
+                    {
+                        if (used < 24)
+                        {
+                            slot = used++;
+                            std::memcpy(slots[slot].hdr, hdr, sizeof(hdr));
+                            std::memcpy(slots[slot].data, cur, sizeof(cur));
+                            slots[slot].top = runTop;
+                            slots[slot].used = true;
+                        }
+                    }
+                    else if (std::memcmp(slots[slot].data, cur, sizeof(cur)) != 0)
+                    {
+                        ++reported;
+                        unsigned diffs = 0u;
+                        std::fprintf(stderr,
+                            "[vu1/batchdiff] batch hdr=%08x,%08x,%08x,%08x seen at top=%llu then top=%u, input differs\n",
+                            hdr[0], hdr[1], hdr[2], hdr[3], slots[slot].top, (unsigned)runTop);
+                        for (uint32_t i = 0u; i < kQw && diffs < 12u; ++i)
+                            if (std::memcmp(cur + i * 16u, slots[slot].data + i * 16u, 16u) != 0)
+                            {
+                                ++diffs;
+                                const uint32_t *p = (const uint32_t *)(slots[slot].data + i * 16u);
+                                const uint32_t *n = (const uint32_t *)(cur + i * 16u);
+                                std::fprintf(stderr, "  +%3u then %08x %08x %08x %08x   now %08x %08x %08x %08x\n",
+                                             i, p[0], p[1], p[2], p[3], n[0], n[1], n[2], n[3]);
+                            }
+                        if (diffs == 0u)
+                            std::fprintf(stderr, "  (no quadword differs)\n");
+                        std::memcpy(slots[slot].data, cur, sizeof(cur));
+                        slots[slot].top = runTop;
+                    }
+                }
+            }
+
+            // Keep the input window of the last 64 MSCALs so the two runs that
+            // produced a diverging draw can be compared exactly, by MSCAL
+            // index. Batch index within a frame and header contents are both
+            // ambiguous, MSCAL index is not.
+            if (m_vu1Data)
+            {
+                extern unsigned char g_ghpcMscalRing[64][1024 * 16];
+                extern unsigned long long g_ghpcMscalRingIdx[64];
+                extern unsigned long long g_ghpcVu1Mscals;
+                const unsigned long long thisMscal = g_ghpcVu1Mscals + 1ull;
+                const unsigned slot = (unsigned)(thisMscal % 64ull);
+                // Whole data memory, not a TOP relative window: the program also
+                // reads the fixed region below BASE where the transforms live.
+                std::memcpy(g_ghpcMscalRing[slot], m_vu1Data, 1024u * 16u);
+                g_ghpcMscalRingIdx[slot] = thisMscal;
+            }
+
+            // Tag every draw with the VU1 double-buffer half that produced it.
+            extern unsigned long long g_ghpcVu1Top, g_ghpcVu1Mscals;
+            g_ghpcVu1Top = runTop;
+            ++g_ghpcVu1Mscals;
+            // One frame's geometry pass reads the buffer at TOP=49 and comes
+            // out corrupt; the next reads TOP=192 and is correct. Map which
+            // quadwords of each half actually hold data at MSCAL time.
+            if (std::getenv("GHPC_TOPMAP") && m_vu1Data && g_ghpcVu1Mscals > 20000ull)
+            {
+                static int dumped[2] = {0, 0};
+                const uint32_t ofst = vif1_regs.ofst & 0x3FFu;
+                const uint32_t base = vif1_regs.base & 0x3FFu;
+                const int which = (runTop == base) ? 0 : 1;
+                if (ofst > 0u && ofst < 512u && !dumped[which])
+                {
+                    dumped[which] = 1;
+                    std::fprintf(stderr, "[vu1/topmap] pc=0x%x top=%u base=%u ofst=%u map:",
+                                 (unsigned)startPC, (unsigned)runTop, (unsigned)base, (unsigned)ofst);
+                    for (uint32_t i = 0u; i < ofst; ++i)
+                    {
+                        const uint32_t qw = (runTop + i) & 0x3FFu;
+                        uint32_t w[4];
+                        std::memcpy(w, m_vu1Data + qw * 16u, sizeof(w));
+                        const bool zero = !(w[0] | w[1] | w[2] | w[3]);
+                        std::fputc(zero ? '.' : '#', stderr);
+                    }
+                    std::fputc('\n', stderr);
+                    for (uint32_t i = 0u; i < 16u; ++i)
+                    {
+                        const uint32_t qw = (runTop + i) & 0x3FFu;
+                        uint32_t w[4];
+                        std::memcpy(w, m_vu1Data + qw * 16u, sizeof(w));
+                        std::fprintf(stderr, "[vu1/topmap]   +%u qw=%u %08x %08x %08x %08x\n",
+                                     (unsigned)i, (unsigned)qw, w[0], w[1], w[2], w[3]);
+                    }
+                }
+            }
+#endif
             if (m_vu1MscalCallback)
                 m_vu1MscalCallback(startPC, runTop, runItop);
             continue;
@@ -965,6 +1130,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             else
                 vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
             vif1_regs.stat ^= (1u << 7); // toggle DBF
+#if GHPC_DIAG
+            { extern unsigned long long g_ghpcDbfToggles; ++g_ghpcDbfToggles; }
+#endif
 
             if (m_vu1MscntCallback)
                 m_vu1MscntCallback(runTop, runItop);
@@ -1172,6 +1340,45 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 }
             }
 #endif
+#if GHPC_DIAG
+            // The geometry buffer at TOP=49 comes out holding integer junk in
+            // lanes where the TOP=192 buffer holds floats. Log every UNPACK
+            // that lands on a watched quadword, in both halves, with the full
+            // cycle and mask state, so the two can be compared directly.
+            if (const char *w = std::getenv("GHPC_UNPACK_WATCH"))
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                // A leading '+' watches an offset inside whichever double-buffer
+                // half is current, so both halves can be compared in one run.
+                const uint32_t watch = (w[0] == '+')
+                    ? ((vif1_regs.tops & 0x3FFu) + (uint32_t)std::strtoul(w + 1, nullptr, 0))
+                    : (uint32_t)std::strtoul(w, nullptr, 0);
+                const uint32_t span = (cl >= wl && wl) ? ((writeVectorCount / wl) * cl + writeVectorCount % wl)
+                                                       : writeVectorCount;
+                static int logs = 0;
+                if (g_ghpcVu1Mscals > 20000ull && logs < 24 &&
+                    watch >= vuAddr && watch < vuAddr + span)
+                {
+                    ++logs;
+                    std::fprintf(stderr,
+                        "[vif1/unpackwatch] #%d code=0x%08x qw=%u dest=%u span=%u | vn=%u vl=%u num=%u cl=%u wl=%u "
+                        "mask=%u maskbits=0x%08x mode=%u | addrField=%u flg=%u tops=%u base=%u ofst=%u "
+                        "bpv=%u payload=%u fits=%d row=%08x,%08x,%08x,%08x\n",
+                        logs, [&]{ uint32_t cw = 0u; const uint32_t cp = (pos >= 4u) ? (pos - 4u) : 0u;
+                                   if (cp + 4u <= sizeBytes) std::memcpy(&cw, data + cp, 4); return cw; }(),
+                        (unsigned)watch, (unsigned)vuAddr, (unsigned)span,
+                        (unsigned)vn, (unsigned)vl, (unsigned)writeVectorCount,
+                        (unsigned)cl, (unsigned)wl, (unsigned)maskEnable, (unsigned)vif1_regs.mask,
+                        (unsigned)(vif1_regs.mode & 3u),
+                        (unsigned)(imm & 0x3FFu), (unsigned)((imm >> 15) & 1u),
+                        (unsigned)(vif1_regs.tops & 0x3FFu), (unsigned)(vif1_regs.base & 0x3FFu),
+                        (unsigned)(vif1_regs.ofst & 0x3FFu),
+                        (unsigned)bytesPerVector, (unsigned)totalBytes,
+                        (int)(pos + totalBytes <= sizeBytes),
+                        vif1_regs.row[0], vif1_regs.row[1], vif1_regs.row[2], vif1_regs.row[3]);
+                }
+            }
+#endif
             if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
             {
                 const uint8_t *srcBase = data + pos;
@@ -1366,6 +1573,42 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         lanes[field] = writeVal;
                     }
 
+#if GHPC_DIAG
+                    // Full write history of one VU1 quadword. The position
+                    // quadword ends up with a sane w in one double-buffer half
+                    // and integer junk in the other, so the question is which
+                    // write put it there.
+                    if (const char *ww = std::getenv("GHPC_QW_WATCH"))
+                    {
+                        extern unsigned long long g_ghpcVu1Mscals;
+                        const char *fromEnv = std::getenv("GHPC_QW_FROM");
+                        const unsigned long long from = fromEnv ? std::strtoull(fromEnv, nullptr, 0) : 20000ull;
+                        const uint32_t want = (uint32_t)std::strtoul(ww, nullptr, 0);
+                        if (destVec == want && g_ghpcVu1Mscals >= from && g_ghpcVu1Mscals <= from + 40ull)
+                        {
+                            uint32_t before[4];
+                            std::memcpy(before, m_vu1Data + destOff, sizeof(before));
+                            std::fprintf(stderr,
+                                "[vu1/qwwatch] qw=%u ms=%llu vn=%u vl=%u num=%u cl=%u wl=%u cyc=%u "
+                                "mask=%u maskbits=0x%08x mode=%u dec=%d fmt=%d tops=%u | %08x %08x %08x %08x -> %08x %08x %08x %08x\n",
+                                (unsigned)destVec, g_ghpcVu1Mscals, (unsigned)vn, (unsigned)vl,
+                                (unsigned)writeVectorCount, (unsigned)cl, (unsigned)wl, (unsigned)cyclePos,
+                                (unsigned)maskEnable, (unsigned)vif1_regs.mask, (unsigned)(vif1_regs.mode & 3u),
+                                (int)decoded, (int)handledFormat, (unsigned)(vif1_regs.tops & 0x3FFu),
+                                before[0], before[1], before[2], before[3],
+                                lanes[0], lanes[1], lanes[2], lanes[3]);
+                        }
+                    }
+#endif
+#if GHPC_DIAG
+                    {
+                        extern unsigned long long g_ghpcVu1Mscals;
+                        extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                        unsigned bef[4];
+                        std::memcpy(bef, m_vu1Data + destOff, sizeof(bef));
+                        ghpcLogQwWrite(g_ghpcVu1Mscals, 0, (unsigned)destVec, bef, (const unsigned *)lanes);
+                    }
+#endif
                     std::memcpy(m_vu1Data + destOff, lanes, sizeof(lanes));
                 }
             }

@@ -595,10 +595,28 @@ namespace
 
         const uint8_t *filePtr = getConstMemPtr(rdram, handle);
         if (!filePtr)
+        {
+            std::fprintf(stderr, "[libc] FILE* 0x%08x is not mapped guest memory, write dropped\n",
+                         handle);
             return nullptr;
+        }
 
         int16_t fd = 0;
         std::memcpy(&fd, filePtr + 14, sizeof(fd));
+        // Say what was resolved, once per handle. Without this a dropped guest
+        // diagnostic is invisible, which is what hid the lexer fatal error.
+        {
+            static uint32_t seen[8] = {};
+            static int seenCount = 0;
+            bool known = false;
+            for (int i = 0; i < seenCount; ++i)
+                if (seen[i] == handle) { known = true; break; }
+            if (!known && seenCount < 8)
+            {
+                seen[seenCount++] = handle;
+                std::fprintf(stderr, "[libc] guest FILE* 0x%08x has fd %d\n", handle, (int)fd);
+            }
+        }
         switch (fd)
         {
         case 0:

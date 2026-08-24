@@ -13,6 +13,15 @@
 #include <utility>
 #include <cstdlib>
 #include <cstring>
+#if GHPC_DIAG
+// GHPC_QUIET silences the periodic diagnostic censuses.
+static bool ghpcQuietLogs()
+{
+    static const bool quiet = std::getenv("GHPC_QUIET") != nullptr;
+    return quiet;
+}
+#endif
+
 #include <filesystem>
 #include <limits>
 #include <ps2_log.h>
@@ -720,10 +729,24 @@ void VU1Interpreter::queueVfWrite(uint8_t reg, uint8_t laneMask,
 uint32_t g_ghpcLastVf7WriterPc = 0;
 void ghpcNoteVuStore(uint32_t qw)
 {
+    // Does the program store over the batch buffer it is about to be fed?
+    if (const char *w = std::getenv("GHPC_QW_WATCH"))
+    {
+        extern unsigned long long g_ghpcVu1Mscals;
+        // Aim the window at the mscal that actually diverges. A plain count cap
+        // fills at the first mscal past the threshold and never gets there.
+        const char *fromEnv = std::getenv("GHPC_QW_FROM");
+        const unsigned long long from = fromEnv ? std::strtoull(fromEnv, nullptr, 0) : 20000ull;
+        const uint32_t want = (uint32_t)std::strtoul((w[0] == '+') ? w + 1 : w, nullptr, 0);
+        if ((qw & 0x3FFu) == want && g_ghpcVu1Mscals >= from && g_ghpcVu1Mscals <= from + 40ull)
+            std::fprintf(stderr, "[vu1/qwstore] VU store to qw=%u during mscal %llu\n",
+                         (unsigned)want, g_ghpcVu1Mscals);
+    }
+
     static std::map<uint32_t, unsigned long long> dest;
     ++dest[(qw & 0x3FFu) / 64u];
     static unsigned long long n = 0;
-    if ((++n % 20000ull) == 0ull)
+    if ((++n % 20000ull) == 0ull && !ghpcQuietLogs())
     {
         unsigned long long low = 0, tot = 0;
         for (const auto &kv : dest) { tot += kv.second; if (kv.first == 0u) low = kv.second; }
@@ -739,6 +762,21 @@ void VU1Interpreter::queueViWrite(uint8_t reg, int32_t value, uint32_t latency)
 {
     if (reg == 0u)
         return;
+#if GHPC_DIAG
+    // Which instruction sets the output pointer, and from what? If it is not
+    // derived from TOP the packet cannot follow the double buffer.
+    if (const char *w = std::getenv("GHPC_VI_WATCH"))
+    {
+        extern unsigned long long g_ghpcVu1Mscals;
+        const unsigned want = (unsigned)std::strtoul(w, nullptr, 0);
+        const char *fromEnv = std::getenv("GHPC_STORE_PC");
+        const unsigned long long from = fromEnv ? std::strtoull(fromEnv, nullptr, 0) : 20000ull;
+        if (reg == want && g_ghpcVu1Mscals >= from && g_ghpcVu1Mscals <= from + 1ull)
+            std::fprintf(stderr, "[vu1/viwrite] ms=%llu pc=0x%04x vi%u <- %d (top=%u itop=%u)\n",
+                         g_ghpcVu1Mscals, (unsigned)m_state.pc, (unsigned)reg, (int)value,
+                         (unsigned)m_state.top, (unsigned)m_state.itop);
+    }
+#endif
     for (PendingViWrite &write : m_viWritePipeline)
     {
         if (!write.valid)
@@ -834,6 +872,15 @@ void VU1Interpreter::commitReadyPipelines()
                 if ((store.laneMask & laneForComponent(component)) != 0u)
                     oldWords[component] = store.words[component];
             }
+#if GHPC_DIAG
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                unsigned bef[4];
+                std::memcpy(bef, m_activeVuData + store.address, sizeof(bef));
+                ghpcLogQwWrite(g_ghpcVu1Mscals, 1 + (int)(m_state.pc << 4), (unsigned)(store.address / 16u), bef, oldWords);
+            }
+#endif
             std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
         }
         store = {};
@@ -899,6 +946,15 @@ void VU1Interpreter::progressXgkick()
         for (uint32_t i = 0; i < 16u; ++i)
         {
             const uint32_t source = (m_xgkick.sourceAddress + m_xgkick.copiedBytes + i) % m_activeVuDataSize;
+#if GHPC_DIAG
+            extern unsigned char g_ghpcXgkickSnap[16384];
+            extern bool g_ghpcXgkickSnapActive;
+            if (g_ghpcXgkickSnapActive)
+            {
+                m_xgkick.packet[m_xgkick.copiedBytes + i] = g_ghpcXgkickSnap[source];
+                continue;
+            }
+#endif
             m_xgkick.packet[m_xgkick.copiedBytes + i] = m_activeVuData[source];
         }
         m_xgkick.copiedBytes += 16u;
@@ -1296,12 +1352,29 @@ void VU1Interpreter::finishXgkick()
     m_xgkick.active = false;
 }
 
+#if GHPC_DIAG
+// Probe. PATH1 streams the packet out of live VU memory while the program keeps
+// storing into it, so a packet can be read back after the program or the next
+// unpack has already overwritten its source. Snapshot the source at kick time
+// to test whether that is what corrupts alternate frames.
+unsigned char g_ghpcXgkickSnap[16384];
+bool g_ghpcXgkickSnapActive = false;
+static const bool g_ghpcXgkickSnapEnabled = std::getenv("GHPC_XGKICK_SNAPSHOT") != nullptr;
+#endif
+
 void VU1Interpreter::startXgkick(uint32_t qwordAddress)
 {
     if (m_unit != Unit::VU1 || !m_activeVuData || m_activeVuDataSize < 16u)
         return;
 
     const uint32_t sourceAddress = (qwordAddress * 16u) % m_activeVuDataSize;
+#if GHPC_DIAG
+    if (g_ghpcXgkickSnapEnabled && m_activeVuDataSize <= sizeof(g_ghpcXgkickSnap))
+    {
+        std::memcpy(g_ghpcXgkickSnap, m_activeVuData, m_activeVuDataSize);
+        g_ghpcXgkickSnapActive = true;
+    }
+#endif
     m_xgkick = {};
     m_xgkick.active = true;
     m_xgkick.sourceAddress = sourceAddress;
