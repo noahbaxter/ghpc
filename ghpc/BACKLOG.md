@@ -1144,3 +1144,178 @@ noise (23.5 to 24.4 fps) **and the lazy version visibly corrupted the picture**,
 so the key is missing an input or the invalidation misses a path that writes
 palettes. Reverted. Do not retry without a frame comparison in the loop: the
 regression was obvious on screen and invisible in the frame rate.
+
+## Song launch crash is a flex lexer fatal, and the four candidates are known
+
+Reproduction is exact: **launch a song**. It is not intermittent and not timing
+dependent. It does not reproduce on a plain boot that never starts a song, so a
+headless run that skips that step proves nothing about it.
+
+The game does not fault. `yy_fatal_error` (0x307cc0) prints its reason with
+`fprintf(stderr, "%s\n", msg)` through fprintf at 0x35b068, then calls `exit(2)`,
+which is flex's `YY_EXIT_FAILURE`. GH2 parses DTA with a flex scanner, so a song
+load is feeding it something it rejects.
+
+Five call sites reach it, carrying four distinct messages:
+
+    0x3075a4  yylex               0x4d4590  "fatal flex scanner internal error--no action found"
+    0x307658  yy_get_next_buffer  0x4d4658  "fatal flex scanner internal error--end of buffer missed"
+    0x307750  yy_get_next_buffer  0x4d4690  "fatal error - scanner input buffer overflow"
+    0x307bb4  yy_create_buffer    0x4d46e0  "out of dynamic memory in yy_create_buffer()"
+    0x307bd4  yy_create_buffer    0x4d46e0  (same message)
+
+The last two mean a failed allocation. The middle two are the classic symptom of
+`YY_INPUT` returning an inconsistent count, which points at the file read path
+rather than at the data.
+
+Note `fread` deliberately still uses the strict handle lookup, so a guest `FILE *`
+it cannot resolve returns 0 items read. Check that against the two buffer
+candidates before blaming game data.
+
+## GHPC_PAD_AUTO already exists
+
+`Pad.cpp` synthesizes START and CROSS button edges so a headless run can get past
+screens that wait for input:
+
+    GHPC_PAD_AUTO=1 ./ghpc/scripts/run.sh --quiet --debug
+
+It pulses rather than holds, because the UI reacts to a press edge, and it is
+behind GHPC_DIAG. It alternates the two buttons on a fixed 1.2 second cycle after
+a 6 second settle, enough to walk menus but not to select a specific song.
+Extending it into a scripted timeline (button, at time) plus logging what the game
+actually reads is the missing piece for reproducing the song launch crash without
+a human driving.
+
+Check this before ever claiming a crash cannot be reproduced headlessly.
+
+## The flex fatal is a drained heap, and guest malloc is stubbed away
+
+Resolved which of the four messages fires, and it is none of the interesting
+ones. The site is `yy_create_buffer+0x5c`, the **second** allocation:
+
+    yylex+0xa0       yy_create_buffer(yyin, 0x4000)
+    yy_create_buffer yy_flex_alloc(0x28)   -> ok      (307b9c)
+    yy_create_buffer yy_flex_alloc(0x4002) -> NULL    (307bc0)  dies here
+    yy_fatal_error   "out of dynamic memory in yy_create_buffer()"
+
+Both confirmations agreed: the message printed (so cb0d0e3 works), and the
+guest stack dump's first word was 0x307bdc, which is 0x307bd4 + 8, the
+delay-slot return of that call site. `whereis.sh` names all of it.
+
+So the DTA content is irrelevant. It is an allocation failure.
+
+### Guest malloc never runs
+
+`malloc_0x35c778.cpp` is two lines: set pc, call `ps2_stubs::malloc`. The
+recompiler discarded the real body and bound the name. The whole family goes
+the same way: malloc, free, realloc, memalign, _malloc_r, _free_r, _realloc_r,
+_calloc_r. None of them are in `ghpc/config/stub-denylist.txt`. This is the
+fifth instance of the name-collision hazard in CLAUDE.md.
+
+The game ships the complete allocator and it is stock newlib, not an Hmx
+override: `malloc` (80 bytes) is `__malloc_lock` / `_malloc_r` (1840 bytes,
+real dlmalloc) / `__malloc_unlock`, and it reaches `sbrk` (0x34b9b0), whose
+only ceiling test is the `EndOfHeap` syscall (0x3e). Proof that none of it
+runs: an instrumented `EndOfHeap` printed nothing at all across a whole run.
+
+### What actually exhausts the arena
+
+Every guest allocation lands in `PS2Runtime::guestMalloc`, a first-fit free
+list over a fixed arena. The game sizes its pools by asking for a huge block
+and halving until one fits:
+
+    REFUSED 536870912, 268435456, 134217728, 67108864, 33554432, 25165824,
+    25034752, ... 24939121   then takes 24939120
+
+It does that twice, taking about 19MB and then about 5MB. At the moment flex
+asks for its buffer:
+
+    guestMalloc REFUSED size=16386 | arena=25863KB
+    used=225/25857KB free=35/6KB largestFree=1296B
+
+6KB left in 35 scraps, biggest hole 1296 bytes. The arena is gone, so every
+later allocation fails and flex is just the first caller to check its result.
+
+Note the runtime allocates from this same arena (ps2_iop_host, EeScheduler
+thread stacks, Font.cpp, GS.cpp, MPEG.cpp), so after the game's pool grab the
+runtime's own allocations fail too. Any fix has to keep the guest heap and the
+runtime arena from overlapping, since real `sbrk` would hand out the same
+addresses `guestMalloc` does.
+
+### Reproduction is not what the earlier note said
+
+On the current tree this fires seconds into boot, right after
+`sceCdSearchFile failed: \VIDEOS\INTRO.PSS;1`, with no input at all. It
+reproduces headlessly:
+
+    (cd work && GHPC_QUIET=1 ../build/ps2xRuntime/ps2EntryRunner ./GH2_debug.elf)
+
+The claim above that it needs a song launch and that a plain boot runs
+indefinitely does not hold here. Do not spend time building pad automation for
+it.
+
+### Fixed by reserving the runtime's own working set
+
+`kGuestHeapRuntimeReserve` (1MB, `GHPC_HEAP_RESERVE` to override) is held back
+from any allocation larger than itself, so the pool probe converges lower and
+ordinary allocations still get served afterwards. Confirmed: probe 2 now stops
+at 4267010 instead of taking the whole 5309120, the 16386 request succeeds, and
+the run goes from dying in about 5 seconds to running indefinitely and
+rendering the loaded level.
+
+This is not a workaround for the stubbing. A PS2 game may take all of RAM; a
+recompiled one may not, because the host layer needs guest addressable memory
+the console never had (GIF packets, Font glyph and kerning tables, MPEG
+callback data, IOP host buffers, and a stack per guest thread). Reserving that
+is a requirement of the design. Sized from those consumers: about 58KB is
+fixed, the rest is headroom for thread stacks, which are game sized.
+
+### Still open: un-stub the allocator family
+
+Denylisting malloc, free, realloc, memalign and the four `_r` variants is still
+the right thing, because the game's real newlib heap is better than a first-fit
+arena and the stubbing will keep surfacing. It is **not** a fix for this crash,
+and that distinction matters: real `_malloc_r` grows through `sbrk` up to
+`EndOfHeap` and stops, so the probe would converge on the true ceiling, the
+game would take it, and the next allocation would fail exactly the same way.
+
+Doing it requires separating the two allocators first. The runtime's arena and
+the guest's `sbrk` region both start near the end of the ELF, so real `sbrk`
+would hand out addresses `guestMalloc` has already given away. Move the runtime
+arena to a reserved region and have `EndOfHeap` return its base so the guest
+stops below it. Land it on a branch and diff against this build.
+
+## The endless load is not I/O bound, so the 39% EE is not what blocks it
+
+Measured after the heap fix, with the game sitting on what looks like a loading
+screen. Sampled the ARK read offset rather than adding logging, so this is the
+same binary you would actually run:
+
+    18 samples over 6 minutes, 20s apart
+    arkOffset  never open, not once
+    cpu        110 to 112 percent, flat from t=40s to t=360s
+    logBytes   frozen at 5138 from t=40s onward
+
+Also polled `lsof` 100 times inside one 30 second window looking for brief
+opens, in case the game opens, reads 64KB and closes. Zero hits. `MAIN_0.ARK`
+is not held open, not opened briefly, and not memory mapped.
+
+So there is no streaming to accelerate. Making the EE 2.5x faster would reach
+the same non-progressing state 2.5x sooner. **Do not start the rasterization
+move or the GPU backend expecting it to fix the load.** That work is still
+worth doing on its own terms, it is just not this.
+
+What this does *not* prove is that the load completed. It only proves nothing
+is being read. The stall could sit on either side of that.
+
+Two leads visible in the log at the point it goes quiet, neither chased:
+
+  - `[IOP/RPC trace:unhandled] sid=0x75433178` against synth_r.irx, libsd.irx
+    and sdrdrv.irx. The sound path goes unanswered. A game waiting on an audio
+    service that never replies looks exactly like this. Only 4 such lines and
+    they do not repeat, so check whether the trace dedupes before concluding
+    the game is not retrying.
+  - `[guest-branch:missing-target] op=JALR target=0x0 source=0x126508`. An
+    indirect call through a null pointer, and the dumped vtable words decode as
+    ASCII rather than code addresses, so the object pointer is aimed at string
+    data.

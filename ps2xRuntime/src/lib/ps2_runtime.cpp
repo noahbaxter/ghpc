@@ -94,6 +94,16 @@ namespace
     constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
     constexpr uint32_t kGuestHeapHardLimit = 0x01F00000u;
 
+    // Guest memory the host layer keeps for itself. A PS2 game may take all
+    // of RAM; a recompiled one may not, because the runtime needs guest
+    // addressable memory the real console never had: GIF packets in GS.cpp,
+    // the glyph and kerning tables in Font.cpp, MPEG callback data, IOP host
+    // buffers, and a stack per guest thread in Thread.cpp. GH2 sizes its own
+    // pools by asking for a huge block and halving until one fits, so without
+    // a reserve it swallows the arena whole and the next allocation of any
+    // size fails. Overridable with GHPC_HEAP_RESERVE for bisecting.
+    constexpr uint32_t kGuestHeapRuntimeReserve = 0x00100000u;
+
     constexpr uint32_t COP0_CAUSE_EXCCODE_MASK = 0x0000007Cu;
     constexpr uint32_t COP0_CAUSE_BD = 0x80000000u;
     constexpr uint32_t COP0_STATUS_EXL = 0x00000002u;
@@ -1873,6 +1883,26 @@ uint32_t PS2Runtime::allocateGuestBlockLocked(uint32_t size, uint32_t alignment)
         return 0u;
     }
 
+    // Keep the runtime's reserve out of reach of bulk grabs. Only allocations
+    // larger than the reserve are held back, so ordinary small ones still get
+    // served once the game has taken its pools.
+    const uint32_t reserve = guestHeapRuntimeReserve();
+    if (reserve != 0u && allocSize > reserve)
+    {
+        uint64_t totalFree = 0;
+        for (const GuestHeapBlock &b : m_guestHeapBlocks)
+        {
+            if (b.free)
+            {
+                totalFree += b.size;
+            }
+        }
+        if (totalFree < static_cast<uint64_t>(allocSize) + static_cast<uint64_t>(reserve))
+        {
+            return 0u;
+        }
+    }
+
     for (size_t i = 0; i < m_guestHeapBlocks.size(); ++i)
     {
         const GuestHeapBlock block = m_guestHeapBlocks[i];
@@ -1975,11 +2005,56 @@ void PS2Runtime::configureGuestHeap(uint32_t guestBase, uint32_t guestLimit)
     resetGuestHeapLocked(normalizedBase, guestLimit);
 }
 
+uint32_t PS2Runtime::guestHeapRuntimeReserve()
+{
+    static const uint32_t value = []() -> uint32_t {
+        if (const char *env = std::getenv("GHPC_HEAP_RESERVE"))
+        {
+            return static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
+        }
+        return kGuestHeapRuntimeReserve;
+    }();
+    return value;
+}
+
 uint32_t PS2Runtime::guestMalloc(uint32_t size, uint32_t alignment)
 {
     std::lock_guard<std::mutex> lock(m_guestHeapMutex);
     ensureGuestHeapInitializedLocked();
-    return allocateGuestBlockLocked(size, alignment);
+    const uint32_t addr = allocateGuestBlockLocked(size, alignment);
+
+    // The game's malloc is bound to a stub that lands here, so a refusal is
+    // what the guest sees as a NULL. Bulk grabs being refused is how the game
+    // finds its pool size and is not worth reporting; a small request failing
+    // means the arena is actually gone, which is what killed the DTA lexer.
+    if (addr == 0u && size != 0u && size <= guestHeapRuntimeReserve())
+    {
+        uint64_t totalFree = 0, largestFree = 0;
+        size_t freeCount = 0, usedCount = 0;
+        for (const GuestHeapBlock &b : m_guestHeapBlocks)
+        {
+            if (b.free)
+            {
+                ++freeCount;
+                totalFree += b.size;
+                largestFree = std::max<uint64_t>(largestFree, b.size);
+            }
+            else
+            {
+                ++usedCount;
+            }
+        }
+        std::fprintf(stderr,
+                     "[heap] guestMalloc failed size=%u align=%u base=0x%08x limit=0x%08x"
+                     " blocks=%zu used=%zu free=%zu freeBytes=%llu largestFree=%llu reserve=%u\n",
+                     (unsigned)size, (unsigned)alignment, m_guestHeapBase, m_guestHeapLimit,
+                     m_guestHeapBlocks.size(), usedCount, freeCount,
+                     (unsigned long long)totalFree, (unsigned long long)largestFree,
+                     (unsigned)guestHeapRuntimeReserve());
+        std::fflush(stderr);
+    }
+
+    return addr;
 }
 
 uint32_t PS2Runtime::guestCalloc(uint32_t count, uint32_t size, uint32_t alignment)
