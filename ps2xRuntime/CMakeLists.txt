@@ -410,8 +410,12 @@ if(PS2X_ENABLE_AGRESSIVE_LOGS)
 endif()
 
 if(PS2X_ENABLE_CALL_HISTOGRAM)
+    # PS2_FUNCTION_LOG_TRACKER is what makes the generated functions include
+    # ps2_log.h and emit PS_LOG_ENTRY at all. Without it the counters compile
+    # but nothing ever increments them.
     target_compile_definitions(ps2_runtime PUBLIC
         CALL_HISTOGRAM=1
+        PS2_FUNCTION_LOG_TRACKER=1
     )
 endif()
 

@@ -96,6 +96,18 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
             float tmp[4];
             std::memcpy(tmp, vuData + addr, 16);
             applyDest(m_state.vf[it], tmp, dest);
+            #if GHPC_DIAG
+            // Reads on the same ordered log as the stores, so a quadword
+            // clobbered before it was read is distinguishable from one
+            // legitimately written after.
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                unsigned rv[4];
+                std::memcpy(rv, vuData + addr, sizeof(rv));
+                ghpcLogQwWrite(g_ghpcVu1Mscals, 2 + (int)(m_state.pc << 4), (unsigned)(addr / 16u), rv, rv);
+            }
+            #endif
 #if GHPC_DIAG
             { extern unsigned int g_ghpcVfSrcAddr[32]; g_ghpcVfSrcAddr[it] = addr | 0x80000000u; }
             if (addr >= 0x2bc0u && addr < 0x2c00u)
@@ -521,6 +533,18 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                     float tmp[4];
                     std::memcpy(tmp, vuData + addr, 16);
                     applyDest(m_state.vf[vfT], tmp, dest);
+                    #if GHPC_DIAG
+                    // Reads on the same ordered log as the stores, so a quadword
+                    // clobbered before it was read is distinguishable from one
+                    // legitimately written after.
+                    {
+                        extern unsigned long long g_ghpcVu1Mscals;
+                        extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                        unsigned rv[4];
+                        std::memcpy(rv, vuData + addr, sizeof(rv));
+                        ghpcLogQwWrite(g_ghpcVu1Mscals, 2 + (int)(m_state.pc << 4), (unsigned)(addr / 16u), rv, rv);
+                    }
+                    #endif
 #if GHPC_DIAG
                     { extern unsigned int g_ghpcVfSrcAddr[32]; g_ghpcVfSrcAddr[vfT] = addr | 0x80000000u; }
 #endif
@@ -554,6 +578,18 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                     float tmp[4];
                     std::memcpy(tmp, vuData + addr, 16);
                     applyDest(m_state.vf[vfT], tmp, dest);
+                    #if GHPC_DIAG
+                    // Reads on the same ordered log as the stores, so a quadword
+                    // clobbered before it was read is distinguishable from one
+                    // legitimately written after.
+                    {
+                        extern unsigned long long g_ghpcVu1Mscals;
+                        extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                        unsigned rv[4];
+                        std::memcpy(rv, vuData + addr, sizeof(rv));
+                        ghpcLogQwWrite(g_ghpcVu1Mscals, 2 + (int)(m_state.pc << 4), (unsigned)(addr / 16u), rv, rv);
+                    }
+                    #endif
                 }
                 return;
             }

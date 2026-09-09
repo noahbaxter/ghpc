@@ -400,6 +400,17 @@ public:
     bool registerFunction(uint32_t address, RecompiledFunction func);
     RecompiledFunction lookupFunction(uint32_t address);
     bool hasFunction(uint32_t address) const;
+#if GHPC_DIAG
+    // GHPCPROBE hit report, shared. dispatchGuestBranch is NOT the only way
+    // into a recompiled function: EeScheduler enters thread bodies and resumes
+    // yielded ones directly through lookupFunction, so a probe living only in
+    // the dispatch path reports a false NEGATIVE on every thread entry and
+    // every resume. That cost a whole debugging session: an entry probe on
+    // BeatMatch::UpdateSongPos never fired while the function demonstrably ran
+    // to completion. Both entry paths call this.
+    void noteProbeEntry(R5900Context *ctx, uint32_t targetPc, uint32_t sourcePc,
+                        const char *via);
+#endif
     bool dispatchGuestBranch(uint8_t *rdram,
                              R5900Context *ctx,
                              uint32_t targetPc,
@@ -446,6 +457,11 @@ public:
     uint32_t guestHeapEnd() const;
     uint32_t guestHeapLimit() const;
     static uint32_t guestHeapRuntimeReserve();
+    // Base of the runtime's own arena, and therefore the ceiling the guest
+    // allocator is told about by EndOfHeap. A constant, not guestHeapBase(),
+    // which returns the ELF derived suggestion until the arena is lazily
+    // configured and would hand the game a 4KB heap during boot.
+    static uint32_t runtimeArenaBase();
     uint32_t reserveAsyncCallbackStack(uint32_t size, uint32_t alignment = 16u);
 
     void drainCompletedDmacHandlers(uint8_t *rdram);

@@ -594,39 +594,34 @@ namespace ps2_syscalls
             heapLimit = kDefaultGuestHeapEnd;
         }
 
-        if (runtime)
-        {
-            runtime->configureGuestHeap(heapBase, heapLimit);
-
-            PS2_IF_AGRESSIVE_LOGS({
-                std::cerr << "[SetupHeap]"
-                          << " base=0x" << std::hex << heapBaseRaw
-                          << " alignedBase=0x" << heapBase
-                          << " size=0x" << heapSize
-                          << " runtimeBase=0x" << runtime->guestHeapBase()
-                          << " runtimeEnd=0x" << runtime->guestHeapEnd()
-                          << std::dec << std::endl;
-            });
-
-            setReturnU32(ctx, runtime->guestHeapBase());
-            return;
-        }
+        // Deliberately does not call configureGuestHeap. The runtime arena sits
+        // in its own fixed block; pointing it at the base the game just asked
+        // for is the overlap this separation exists to remove, and returning the
+        // arena's base here would hand the game somebody else's memory.
+        PS2_IF_AGRESSIVE_LOGS({
+            std::cerr << "[SetupHeap]"
+                      << " base=0x" << std::hex << heapBaseRaw
+                      << " alignedBase=0x" << heapBase
+                      << " size=0x" << heapSize
+                      << " limit=0x" << heapLimit
+                      << " arenaBase=0x" << PS2Runtime::runtimeArenaBase()
+                      << std::dec << std::endl;
+        });
 
         setReturnU32(ctx, heapBase);
     }
 
-    // 0x3E EndOfHeap: commonly returns current heap end; keep it stable for now.
+    // 0x3E EndOfHeap: the ceiling sbrk checks against before it moves the guest
+    // break. That is the base of the runtime arena, and it must be the constant
+    // rather than guestHeapBase()/guestHeapLimit(), which report the ELF derived
+    // suggestion until the arena is lazily configured. sbrk asks during boot,
+    // before that happens, and a suggestion-shaped answer yields a 4KB heap.
     void EndOfHeap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)rdram;
+        (void)runtime;
 
-        static constexpr uint32_t kDefaultGuestHeapEnd = 0x01F00000u;
-
-        const uint32_t ret = runtime
-                                 ? runtime->guestHeapLimit()
-                                 : kDefaultGuestHeapEnd;
-
-        setReturnU32(ctx, ret);
+        setReturnU32(ctx, PS2Runtime::runtimeArenaBase());
     }
 
     void GetMemorySize(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

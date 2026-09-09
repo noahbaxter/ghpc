@@ -110,6 +110,27 @@ namespace ps2_syscalls
                 return;
             }
 
+            // The signature dedupe below hides how OFTEN an unhandled service
+            // is called, and frequency is the whole question: a game polling an
+            // unimplemented service forever produces exactly the same handful
+            // of lines as one that asked a few times and gave up. Count calls.
+            {
+                static std::unordered_map<uint32_t, unsigned long long> callsBySid;
+                static unsigned long long totalUnhandled = 0ull;
+                ++callsBySid[event.sid];
+                ++totalUnhandled;
+                if ((totalUnhandled % 200ull) == 0ull)
+                {
+                    std::cerr << "[IOP/RPC unhandled census] total=" << totalUnhandled;
+                    for (const auto &entry : callsBySid)
+                    {
+                        std::cerr << " sid=0x" << std::hex << entry.first << std::dec
+                                  << ":" << entry.second;
+                    }
+                    std::cerr << std::endl;
+                }
+            }
+
             uint64_t signature = 1469598103934665603ull;
             auto mixSignature = [&](uint32_t value)
             {
@@ -636,6 +657,26 @@ namespace ps2_syscalls
                     logUnhandledRpcTrace(event);
                 }
 #endif
+                // EXPERIMENT (GHPC_SYNTH_ACK): stand in for the missing SYNTH_R
+                // IOP module. The EE ships SPU chunks to sid 0x75433178 and then
+                // waits on gSpuSendInFlight (0x444d94), whose only clear is
+                // CtlDispatch_impl message 13, delivered by the IOP calling the
+                // EE's own RPC server sid 0x75433179. With no SYNTH_R that reply
+                // never comes, so every SynthSamplePs::SynthPoll blocks forever.
+                // Acknowledging here tests whether that stall is what pins the
+                // screen. It is a probe, not the fix: the fix is a real module.
+                if (!handled && sid == 0x75433178u)
+                {
+                    static const bool ack = std::getenv("GHPC_SYNTH_ACK") != nullptr;
+                    if (ack)
+                    {
+                        if (uint32_t *inFlight =
+                                reinterpret_cast<uint32_t *>(getMemPtr(rdram, 0x444d94u)))
+                        {
+                            *inFlight = 0u;
+                        }
+                    }
+                }
                 pushSifRpcDebugEvent(event);
             };
 

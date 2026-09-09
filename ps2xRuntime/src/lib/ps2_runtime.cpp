@@ -27,6 +27,7 @@
 #include <atomic>
 #include <thread>
 #include <unordered_map>
+#include <mutex>
 #include <sstream>
 
 namespace ps2_stubs
@@ -93,6 +94,16 @@ namespace
     constexpr uint32_t kGuestHeapDefaultAlignment = 16u;
     constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
     constexpr uint32_t kGuestHeapHardLimit = 0x01F00000u;
+
+    // The runtime arena and the guest allocator have to live in separate
+    // regions once the game runs real newlib malloc, because sbrk grows the
+    // guest heap upward from the ELF's end with no idea the runtime is also
+    // handing out addresses. Fixed block, so EndOfHeap can name the ceiling
+    // during boot without waiting for the arena to be configured.
+    //   game    [ELF end .... 0x01D00000)   sbrk, ceiling = EndOfHeap
+    //   runtime [0x01D00000 .. 0x01F00000)  guestMalloc only
+    //   stacks  [0x01F00000 .. 0x02000000)  unchanged
+    constexpr uint32_t kRuntimeArenaBase = 0x01D00000u;
 
     // Guest memory the host layer keeps for itself. A PS2 game may take all
     // of RAM; a recompiled one may not, because the runtime needs guest
@@ -644,10 +655,10 @@ PS2Runtime::PS2Runtime()
 
     m_loadedModules.clear();
     m_guestHeapBlocks.clear();
-    m_guestHeapBase = kGuestHeapDefaultBase;
-    m_guestHeapEnd = kGuestHeapDefaultBase;
+    m_guestHeapBase = kRuntimeArenaBase;
+    m_guestHeapEnd = kRuntimeArenaBase;
     m_guestHeapLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-    m_guestHeapSuggestedBase = kGuestHeapDefaultBase;
+    m_guestHeapSuggestedBase = kRuntimeArenaBase;
     m_guestHeapConfigured = false;
     m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
     m_asyncCallbackStackTop = PS2_RAM_SIZE;
@@ -1073,10 +1084,13 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
         std::lock_guard<std::mutex> lock(m_guestHeapMutex);
         if (!m_guestHeapConfigured)
         {
+            // The ELF derived base belongs to the guest allocator, not to us.
+            // Anchoring the arena there puts it directly on top of the region
+            // sbrk is about to grow into.
             const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-            m_guestHeapSuggestedBase = std::min(suggestedHeapBase, hardLimit);
-            m_guestHeapBase = m_guestHeapSuggestedBase;
-            m_guestHeapEnd = m_guestHeapSuggestedBase;
+            m_guestHeapSuggestedBase = kRuntimeArenaBase;
+            m_guestHeapBase = kRuntimeArenaBase;
+            m_guestHeapEnd = kRuntimeArenaBase;
             m_guestHeapLimit = hardLimit;
         }
     }
@@ -1217,6 +1231,61 @@ bool PS2Runtime::registerFunction(uint32_t address, RecompiledFunction func)
 {
     return replaceFunction(address, func);
 }
+
+#if GHPC_DIAG
+void PS2Runtime::noteProbeEntry(R5900Context *ctx, uint32_t targetPc,
+                                uint32_t sourcePc, const char *via)
+{
+    // Watch list comes from the environment, so changing it needs no rebuild:
+    //   GHPC_PROBE=0x2fcf98,0x24b970 ./scripts/run.sh --quiet --debug
+    static uint32_t s_watch[16];
+    static unsigned s_count = 0u;
+    static uint32_t s_lo = 0xFFFFFFFFu, s_hi = 0u;
+    static unsigned long long s_hits[16] = {0};
+    static bool s_init = false;
+    if (!s_init)
+    {
+        s_init = true;
+        if (const char *env = std::getenv("GHPC_PROBE"))
+        {
+            const char *p = env;
+            while (*p && s_count < 16u)
+            {
+                char *end = nullptr;
+                const unsigned long v = std::strtoul(p, &end, 0);
+                if (end == p) break;
+                const uint32_t a = static_cast<uint32_t>(v);
+                s_watch[s_count++] = a;
+                if (a < s_lo) s_lo = a;
+                if (a > s_hi) s_hi = a;
+                p = end;
+                while (*p == ',' || *p == ' ') ++p;
+            }
+            std::fprintf(stderr, "[probe] GHPCPROBE watching %u address(es)\n", s_count);
+        }
+    }
+    // Common case with no watch list is two compares.
+    if (s_count == 0u || targetPc < s_lo || targetPc > s_hi)
+    {
+        return;
+    }
+    for (unsigned i = 0; i < s_count; ++i)
+    {
+        if (s_watch[i] != targetPc) continue;
+        const unsigned long long n = ++s_hits[i];
+        if (n <= 40ull || (n % 1000ull) == 0ull)
+        {
+            std::fprintf(stderr,
+                         "[probe] 0x%x #%llu via=%s a0=0x%x a1=0x%x a2=0x%x a3=0x%x ra=0x%x from=0x%x\n",
+                         targetPc, n, via,
+                         (unsigned)getRegU32(ctx, 4), (unsigned)getRegU32(ctx, 5),
+                         (unsigned)getRegU32(ctx, 6), (unsigned)getRegU32(ctx, 7),
+                         (unsigned)getRegU32(ctx, 31), sourcePc);
+        }
+        return;
+    }
+}
+#endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
 {
@@ -1382,6 +1451,29 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
         readGuestU32Offset(a0Word0, 0x08u, vtableSlot8) &&
         readGuestU32Offset(a0Word0, 0x0cu, vtableSlotC);
 
+    // firstReport is one global latch for the whole run, across every site, so
+    // a single line can hide something firing every frame. Frequency has been
+    // the deciding question repeatedly here, and a first-only line cannot
+    // answer it. Count, rate limited.
+    {
+        static std::mutex branchCensusMutex;
+        static std::unordered_map<uint32_t, unsigned long long> branchBySource;
+        static unsigned long long branchTotal = 0ull;
+        std::lock_guard<std::mutex> lock(branchCensusMutex);
+        ++branchBySource[sourcePc];
+        if ((++branchTotal % 200ull) == 0ull)
+        {
+            std::fprintf(stderr, "[guest-branch census] total=%llu", branchTotal);
+            for (const auto &entry : branchBySource)
+            {
+                std::fprintf(stderr, " src=0x%08x:%llu",
+                             (unsigned)entry.first, (unsigned long long)entry.second);
+            }
+            std::fprintf(stderr, "\n");
+            std::fflush(stderr);
+        }
+    }
+
     if (firstReport)
     {
         std::ostringstream oss;
@@ -1471,51 +1563,56 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     //   GHPC_PROBE=0x2fcf98,0x24b970 ./scripts/run.sh --quiet --debug
     if (isCall)
     {
-        static uint32_t s_watch[16];
-        static unsigned s_count = 0u;
-        static uint32_t s_lo = 0xFFFFFFFFu, s_hi = 0u;
-        static unsigned long long s_hits[16] = {0};
-        static bool s_init = false;
-        if (!s_init)
+        noteProbeEntry(ctx, targetPc, sourcePc, "call");
+    }
+
+    // GHPCASSERT: name the guest assert at the call, not after the fact.
+    // EeScheduler::dumpStackStrings scavenges the stalled stack for printable
+    // runs, which is why the text has been arriving as a fragment ("Data (").
+    // Debug::Fail takes the already formatted message in $a1, so reading it
+    // here gets the whole string with its file and line still attached.
+    //
+    // Notify (0x2ebd88) is covered too. It is the non-fatal spelling and it is
+    // currently invisible, which hides every warning the game raises before the
+    // one that stops it.
+    //
+    // +0x0c is the already-failing latch and +0x1c the try nesting depth, both
+    // pinned by the decomp's Debug::Fail and Debug::SetTry. Depth is read here
+    // because it is the value Fail is about to test: at depth 0 it goes modal,
+    // above 0 it longjmps back out and the game carries on. That is what
+    // separates an assert that kills the boot from one the game handles.
+    if (isCall && (targetPc == 0x2EBDA8u || targetPc == 0x2EBD88u))
+    {
+        const uint32_t self = getRegU32(ctx, 4) & 0x01FFFFFFu;
+        const uint32_t msg = getRegU32(ctx, 5) & 0x01FFFFFFu;
+
+        char text[192];
+        unsigned n = 0u;
+        if (msg >= 0x00100000u && msg < 0x02000000u)
         {
-            s_init = true;
-            if (const char *env = std::getenv("GHPC_PROBE"))
+            for (; n + 1u < sizeof(text); ++n)
             {
-                const char *p = env;
-                while (*p && s_count < 16u)
+                const uint8_t c = rdram[msg + n];
+                if (c == 0u)
                 {
-                    char *end = nullptr;
-                    const unsigned long v = std::strtoul(p, &end, 0);
-                    if (end == p) break;
-                    const uint32_t a = static_cast<uint32_t>(v);
-                    s_watch[s_count++] = a;
-                    if (a < s_lo) s_lo = a;
-                    if (a > s_hi) s_hi = a;
-                    p = end;
-                    while (*p == ',' || *p == ' ') ++p;
+                    break;
                 }
-                std::fprintf(stderr, "[probe] GHPCPROBE watching %u address(es)\n", s_count);
+                text[n] = (c >= 0x20u && c < 0x7Fu) ? static_cast<char>(c) : '?';
             }
         }
-        // Common case with no watch list is two compares.
-        if (s_count != 0u && targetPc >= s_lo && targetPc <= s_hi)
+        text[n] = '\0';
+
+        uint32_t latch = 0u;
+        uint32_t depth = 0u;
+        if (self >= 0x00100000u && self + 0x20u < 0x02000000u)
         {
-            for (unsigned i = 0; i < s_count; ++i)
-            {
-                if (s_watch[i] != targetPc) continue;
-                const unsigned long long n = ++s_hits[i];
-                if (n <= 40ull || (n % 1000ull) == 0ull)
-                {
-                    std::fprintf(stderr,
-                                 "[probe] 0x%x #%llu a0=0x%x a1=0x%x a2=0x%x a3=0x%x ra=0x%x from=0x%x\n",
-                                 targetPc, n,
-                                 (unsigned)getRegU32(ctx, 4), (unsigned)getRegU32(ctx, 5),
-                                 (unsigned)getRegU32(ctx, 6), (unsigned)getRegU32(ctx, 7),
-                                 (unsigned)getRegU32(ctx, 31), sourcePc);
-                }
-                break;
-            }
+            std::memcpy(&latch, rdram + self + 0x0Cu, sizeof(latch));
+            std::memcpy(&depth, rdram + self + 0x1Cu, sizeof(depth));
         }
+
+        std::fprintf(stderr, "[assert] %s depth=%u latch=%u from=0x%x msg=\"%s\"\n",
+                     targetPc == 0x2EBDA8u ? "Fail" : "Notify",
+                     depth, latch, sourcePc, text);
     }
 #endif
 
@@ -2012,6 +2109,11 @@ void PS2Runtime::configureGuestHeap(uint32_t guestBase, uint32_t guestLimit)
     }
     m_guestHeapSuggestedBase = normalizedBase;
     resetGuestHeapLocked(normalizedBase, guestLimit);
+}
+
+uint32_t PS2Runtime::runtimeArenaBase()
+{
+    return kRuntimeArenaBase;
 }
 
 uint32_t PS2Runtime::guestHeapRuntimeReserve()

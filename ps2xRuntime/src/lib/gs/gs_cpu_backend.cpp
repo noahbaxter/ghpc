@@ -775,7 +775,7 @@ void ghpcNotePresent(uint32_t fbp)
     GhpcTexDiag::notePresent(fbp);
 }
 
-struct GhpcQwWrite { unsigned long long ms; int writer; unsigned qw; unsigned before[4]; unsigned after[4]; };
+struct GhpcQwWrite { unsigned long long ms; unsigned long long seq; int writer; unsigned qw; unsigned before[4]; unsigned after[4]; };
 // Draw order keyed on destination framebuffer. If each frame's draw list went
 // to one buffer, the fbp seen at DrawPrimitive would hold for a whole frame and
 // flip once per present. Short runs mean one frame's draws are split across
@@ -798,7 +798,25 @@ void ghpcNoteDrawTarget(unsigned fbp, const GSPrimitiveBatch &batch)
         static bool done = false;
         static unsigned long long calls = 0ull;
         ++calls;
-        if (!done && calls > 1000000ull)
+        // The trigger is a draw-call count, so where it lands depends entirely
+        // on how far the game got. At the default it fires on whatever screen
+        // is up after a million draws, which is a menu, and a menu animates:
+        // two consecutive frames legitimately differ and the report is
+        // meaningless. GHPC_DRAWSEQ takes a count so it can be aimed at the
+        // loading screen, and GHPC_DRAWSEQ_EVERY re-arms it so one long run
+        // yields a report per interval instead of a single early one.
+        static const unsigned long long drawseqFrom = []() -> unsigned long long {
+            const char *e = std::getenv("GHPC_DRAWSEQ");
+            const unsigned long long v = (e && *e) ? std::strtoull(e, nullptr, 0) : 0ull;
+            return v > 1ull ? v : 1000000ull;
+        }();
+        static const unsigned long long drawseqEvery = []() -> unsigned long long {
+            const char *e = std::getenv("GHPC_DRAWSEQ_EVERY");
+            return e ? std::strtoull(e, nullptr, 0) : 0ull;
+        }();
+        static unsigned long long nextArm = 0ull;
+        if (nextArm == 0ull) nextArm = drawseqFrom;
+        if (!done && calls > nextArm)
         {
             // The first run is entered mid-frame, so it is partial and cannot
             // be compared draw for draw. Skip it and capture the next two.
@@ -825,6 +843,20 @@ void ghpcNoteDrawTarget(unsigned fbp, const GSPrimitiveBatch &batch)
             if (frame >= 3)
             {
                 done = true;
+                // Re-arm at scope exit, not here: the report below still reads
+                // n[] and seq[][], so resetting them now would gut it.
+                struct ReArm
+                {
+                    bool *done; int *n0, *n1, *frame; unsigned *prevFbp;
+                    unsigned long long *nextArm, calls, every;
+                    ~ReArm()
+                    {
+                        if (every == 0ull) return;
+                        *done = false; *n0 = 0; *n1 = 0; *frame = -1;
+                        *prevFbp = 0xFFFFFFFFu; *nextArm = calls + every;
+                    }
+                } rearm{&done, &n[0], &n[1], &frame, &prevFbp, &nextArm, calls, drawseqEvery};
+                std::fprintf(stderr, "[gs/drawseq] armed at draw call %llu\n", calls);
                 const int m = n[0] < n[1] ? n[0] : n[1];
                 std::fprintf(stderr, "[gs/drawseq] frameA fbp=%u n=%d | frameB fbp=%u n=%d\n",
                              fbpOf[0], n[0], fbpOf[1], n[1]);
@@ -868,8 +900,84 @@ void ghpcNoteDrawTarget(unsigned fbp, const GSPrimitiveBatch &batch)
                                     side == 0 ? 'A' : 'B', t, byUnpack, byStore, staleStore);
                             }
                         }
+                        // The open question: was a quadword clobbered BEFORE it was
+                        // read, or only written after the program had consumed it?
+                        // The last writer map above cannot tell those apart. This
+                        // can, because reads and stores share one ordered log.
+                        if (std::getenv("GHPC_RW_FROM"))
                         {
-                            extern GhpcQwWrite g_ghpcQwLog[1024];
+                            extern GhpcQwWrite g_ghpcQwLog[65536];
+                            extern unsigned long long g_ghpcQwLogN;
+                            const unsigned long long tot = g_ghpcQwLogN;
+                            const unsigned long long lo = tot > 65536ull ? tot - 65536ull : 0ull;
+
+                            for (int side = 0; side < 2; ++side)
+                            {
+                                const unsigned long long t = (side == 0) ? seq[0][firstBad].top : seq[1][firstBad].top;
+                                const unsigned long long m = (side == 0) ? ma : mb;
+
+                                static unsigned long long firstRead[1024], firstStore[1024], unpackSeq[1024];
+                                for (unsigned i = 0; i < 1024u; ++i)
+                                {
+                                    firstRead[i] = ~0ull; firstStore[i] = ~0ull; unpackSeq[i] = ~0ull;
+                                }
+                                unsigned long long events = 0ull;
+                                for (unsigned long long i = lo; i < tot; ++i)
+                                {
+                                    const GhpcQwWrite &e = g_ghpcQwLog[i % 65536ull];
+                                    if (e.ms != m || e.qw >= 1024u) continue;
+                                    ++events;
+                                    const int kind = e.writer & 0xF;
+                                    if (kind == 2) { if (e.seq < firstRead[e.qw]) firstRead[e.qw] = e.seq; }
+                                    else if (kind == 1) { if (e.seq < firstStore[e.qw]) firstStore[e.qw] = e.seq; }
+                                    else { if (e.seq < unpackSeq[e.qw]) unpackSeq[e.qw] = e.seq; }
+                                }
+
+                                unsigned clobbered = 0u, safeOrder = 0u, neverRead = 0u, neverStored = 0u;
+                                unsigned firstClobberQw = 0u; bool haveExample = false;
+                                for (uint32_t i = 0u; i < 290u; ++i)
+                                {
+                                    const uint32_t qw = (uint32_t)((t + i) & 0x3FFull);
+                                    const bool hasRead = firstRead[qw] != ~0ull;
+                                    const bool hasStore = firstStore[qw] != ~0ull;
+                                    if (!hasRead) { ++neverRead; continue; }
+                                    if (!hasStore) { ++neverStored; continue; }
+                                    if (firstStore[qw] < firstRead[qw])
+                                    {
+                                        ++clobbered;
+                                        if (!haveExample) { haveExample = true; firstClobberQw = qw; }
+                                    }
+                                    else ++safeOrder;
+                                }
+
+                                std::fprintf(stderr,
+                                    "[gs/rworder] %c mscal=%llu top=%llu events=%llu | CLOBBERED-BEFORE-READ=%u"
+                                    " safe=%u neverRead=%u neverStored=%u\n",
+                                    side == 0 ? 'A' : 'B', m, t, events,
+                                    clobbered, safeOrder, neverRead, neverStored);
+
+                                // Validate the trace on one quadword before trusting the count.
+                                if (haveExample)
+                                {
+                                    std::fprintf(stderr,
+                                        "[gs/rworder]   example qw=%u unpackSeq=%llu firstStoreSeq=%llu firstReadSeq=%llu\n",
+                                        firstClobberQw,
+                                        unpackSeq[firstClobberQw], firstStore[firstClobberQw], firstRead[firstClobberQw]);
+                                    for (unsigned long long i = lo; i < tot; ++i)
+                                    {
+                                        const GhpcQwWrite &e = g_ghpcQwLog[i % 65536ull];
+                                        if (e.ms != m || e.qw != firstClobberQw) continue;
+                                        const int kind = e.writer & 0xF;
+                                        std::fprintf(stderr, "[gs/rworder]     seq=%llu %s pc=0x%04x\n",
+                                                     e.seq,
+                                                     kind == 0 ? "UNPACK " : (kind == 1 ? "STORE  " : "READ   "),
+                                                     (unsigned)(e.writer >> 4));
+                                    }
+                                }
+                            }
+                        }
+                        {
+                            extern GhpcQwWrite g_ghpcQwLog[65536];
                             extern unsigned long long g_ghpcQwLogN;
                             const unsigned long long total = g_ghpcQwLogN;
                             const unsigned long long start = total > 1024ull ? total - 1024ull : 0ull;
@@ -1039,7 +1147,7 @@ unsigned long long g_ghpcMscalRingIdx[64] = {};
 // Every write to a double-buffer head quadword, from either writer, in order.
 // Ordering between the unpack that fills a batch and the program's own stores
 // can only be judged inside one run.
-GhpcQwWrite g_ghpcQwLog[1024] = {};
+GhpcQwWrite g_ghpcQwLog[65536] = {};
 int g_ghpcLastWriter[1024] = {};
 unsigned long long g_ghpcLastWriterMs[1024] = {};
 unsigned long long g_ghpcQwLogN = 0ull;
@@ -1050,10 +1158,38 @@ void ghpcLogQwWrite(unsigned long long ms, int writer, unsigned qw,
     // by an unpack" or "clobbered by the program's own output stores".
     extern int g_ghpcLastWriter[1024];
     extern unsigned long long g_ghpcLastWriterMs[1024];
-    if (qw < 1024u) { g_ghpcLastWriter[qw] = writer == 0 ? 0 : 1; g_ghpcLastWriterMs[qw] = ms; }
-    if (qw != 49u && qw != 192u) return;
-    GhpcQwWrite &e = g_ghpcQwLog[g_ghpcQwLogN % 1024ull];
-    e.ms = ms; e.writer = writer; e.qw = qw;
+    // Reads (kind 2) must not disturb the last-WRITER map.
+    const int kind = writer & 0xF;
+    if (qw < 1024u && kind != 2)
+    {
+        g_ghpcLastWriter[qw] = (kind == 0) ? 0 : 1;
+        g_ghpcLastWriterMs[qw] = ms;
+    }
+
+    // GHPC_RW_FROM opens a window on the mscal that actually diverges and
+    // records every quadword in it, reads included, so read against clobber
+    // order can be judged. Without it, keep the old two quadword behaviour.
+    static const unsigned long long rwFrom = []() -> unsigned long long {
+        const char *e = std::getenv("GHPC_RW_FROM");
+        return e ? std::strtoull(e, nullptr, 0) : 0ull;
+    }();
+    static const unsigned long long rwSpan = []() -> unsigned long long {
+        const char *e = std::getenv("GHPC_RW_SPAN");
+        return e ? std::strtoull(e, nullptr, 0) : 64ull;
+    }();
+    if (rwFrom != 0ull)
+    {
+        if (ms < rwFrom || ms > rwFrom + rwSpan) return;
+    }
+    else if (qw != 49u && qw != 192u)
+    {
+        return;
+    }
+
+    GhpcQwWrite &e = g_ghpcQwLog[g_ghpcQwLogN % 65536ull];
+    // Stamp the mscal at event time. Labelling from a ring index afterwards is
+    // what produced the off by one that gave a confident wrong answer before.
+    e.ms = ms; e.seq = g_ghpcQwLogN; e.writer = writer; e.qw = qw;
     for (int i = 0; i < 4; ++i) { e.before[i] = before ? before[i] : 0u; e.after[i] = after ? after[i] : 0u; }
     ++g_ghpcQwLogN;
 }
