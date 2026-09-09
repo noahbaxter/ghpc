@@ -93,17 +93,19 @@ namespace
     constexpr uint32_t kGuestHeapDefaultBase = 0x00100000u;
     constexpr uint32_t kGuestHeapDefaultAlignment = 16u;
     constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
-    constexpr uint32_t kGuestHeapHardLimit = 0x01F00000u;
+    constexpr uint32_t kGuestHeapHardLimit = PS2_RAM_SIZE - 0x00100000u;
 
     // The runtime arena and the guest allocator have to live in separate
     // regions once the game runs real newlib malloc, because sbrk grows the
     // guest heap upward from the ELF's end with no idea the runtime is also
     // handing out addresses. Fixed block, so EndOfHeap can name the ceiling
     // during boot without waiting for the arena to be configured.
-    //   game    [ELF end .... 0x01D00000)   sbrk, ceiling = EndOfHeap
-    //   runtime [0x01D00000 .. 0x01F00000)  guestMalloc only
-    //   stacks  [0x01F00000 .. 0x02000000)  unchanged
-    constexpr uint32_t kRuntimeArenaBase = 0x01D00000u;
+    // Sized off PS2_RAM_SIZE, so the split follows the map instead of pinning
+    // itself to where the top of a 32MB one used to be. At 128MB:
+    //   game    [ELF end .... 0x07D00000)   sbrk, ceiling = EndOfHeap
+    //   runtime [0x07D00000 .. 0x07F00000)  guestMalloc only
+    //   stacks  [0x07F00000 .. 0x08000000)  RPC/TLS pools, callback stacks
+    constexpr uint32_t kRuntimeArenaBase = PS2_RAM_SIZE - 0x00300000u;
 
     // Guest memory the host layer keeps for itself. A PS2 game may take all
     // of RAM; a recompiled one may not, because the runtime needs guest
