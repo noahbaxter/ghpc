@@ -168,6 +168,41 @@ bytes below `gThreadID`:
 a slot and returns without signalling, so the worker does not wake until the
 main loop polls.
 
+## What the hung screen actually is
+
+**Look at the framebuffer before theorising.** The runtime dumps frames to
+`/tmp/ghpc_frame_NN.ppm`; convert one with ffmpeg and open it. The hung frame
+is the memory card load screen, the one reading "LOADING... Loading Guitar
+Hero II data. Do not remove memory card in MEMORY CARD slot 1".
+
+So it is not a song load and it is not a menu. Two full sessions were spent
+reasoning about a "song load hang" that is a memory card load screen.
+
+**The memory card read itself completes.** The trace, all of it before log line
+5395 of 54596:
+
+    sceMcInit / sceMcGetInfo / sceMcGetDir
+    sceMcOpen  a2=0x523d70
+    sceMcSync  a1=0x523cd0 a2=0x523cd4
+    sceMcRead  a1=0xf29e70 a2=0x21c00      138240 bytes
+    sceMcSync  a1=0x523cf0 a2=0x523cf4
+    sceMcSync  a1=0x523d00 a2=0x523d04
+
+`work/mc0/BASLUS-21447/data` is exactly 138240 bytes, so the `fread` in
+`sceMcRead` returns the full count and is not a short read. `sceMcSync` printed
+7 times against its own cap of 10, so it really was called 7 times and the game
+is not polling it. After line 5395 there is no memory card traffic at all for
+the remaining 49000 lines. The card path did its job and the game moved on.
+
+Note `sceMcSync` in `MemoryCard.cpp` is one-shot: it consumes
+`g_mcCommandPending`, returns 1 with the result, and returns -1 on every later
+call. It also ignores its `mode` argument. That is worth remembering, but it is
+not what is stalling this screen, because the game stops calling it.
+
+**Both `[mc]` probes are capped** at 10 lines each (`static int c=0; if(c++<10)`),
+so absence of later lines would not have proven absence of calls. Here the
+counts stayed under the cap, which is the only reason the conclusion holds.
+
 ## It is not a spin loop. It is waiting.
 
 Settled with `build.sh --calls`, which counts guest function entries per census
