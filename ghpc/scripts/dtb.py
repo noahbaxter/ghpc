@@ -61,15 +61,70 @@ TYPES = {0: "int", 1: "float", 2: "var", 3: "func", 4: "object", 5: "symbol",
          16: "array", 17: "command", 18: "string", 19: "property", 20: "glob"}
 
 
-def dump(d, pos=0, depth=0, limit=400):
-    """Walk the node tree, printing structure only (types and counts)."""
-    if depth == 0:
-        flag = d[0]
-        cnt = struct.unpack_from("<H", d, 1)[0]
-        idv = struct.unpack_from("<I", d, 3)[0]
-        print("flag=%d rootCount=%d id=%d size=%d" % (flag, cnt, idv, len(d)))
-        pos = 7
-    return pos
+# Node encoding, validated by walking all 179 DTBs in the ARK to exactly their
+# own length. Header is flag byte, u16 count, u32 id. Every node starts with a
+# u32 type, then:
+#   16/17/19                array, command, property: u16 count, u32 id, nodes
+#   2/5/7/18/32/33/34/35    a name: u32 length, then that many bytes
+#   anything else                                    u32 value
+# The name-carrying set is wider than it looks: besides symbol and string it
+# covers variable and the directives ifdef, define, include, merge and ifndef.
+# Sizing any of them as a plain u32 desyncs the walk a few hundred bytes in,
+# which reads as a corrupt file rather than a parser bug.
+NAME_TYPES = {2: "$", 5: "", 7: "#ifdef ", 18: "", 32: "#define ",
+              33: "#include ", 34: "#merge ", 35: "#ifndef "}
+ARRAY_TYPES = {16: "()", 17: "{}", 19: "[]"}
+BARE_TYPES = {8: "#else", 9: "#endif"}
+
+
+def parse(d, pos, count):
+    out = []
+    for _ in range(count):
+        t = struct.unpack_from("<I", d, pos)[0]; pos += 4
+        if t in ARRAY_TYPES:
+            n = struct.unpack_from("<H", d, pos)[0]; pos += 6  # count, then id
+            kids, pos = parse(d, pos, n)
+            out.append((t, kids))
+        elif t in NAME_TYPES:
+            n = struct.unpack_from("<I", d, pos)[0]; pos += 4
+            out.append((t, d[pos:pos + n].decode("latin1"))); pos += n
+        elif t == 1:
+            out.append((t, struct.unpack_from("<f", d, pos)[0])); pos += 4
+        else:
+            out.append((t, struct.unpack_from("<I", d, pos)[0])); pos += 4
+    return out, pos
+
+
+def render(nodes, ind=0):
+    for t, v in nodes:
+        pad = "  " * ind
+        if t in ARRAY_TYPES:
+            op, cl = ARRAY_TYPES[t]
+            # Keep a leaf array on one line; that is how the .dta reads.
+            if all(k[0] not in ARRAY_TYPES for k in v):
+                print(pad + op + " ".join(str(k[1]) for k in v) + cl)
+            else:
+                print(pad + op)
+                render(v, ind + 1)
+                print(pad + cl)
+        elif t in BARE_TYPES:
+            print(pad + BARE_TYPES[t])
+        elif t in NAME_TYPES:
+            print(pad + NAME_TYPES[t] + str(v))
+        else:
+            print(pad + str(v))
+
+
+def dump(d):
+    """Walk the node tree and print it as readable .dta."""
+    flag = d[0]
+    cnt = struct.unpack_from("<H", d, 1)[0]
+    idv = struct.unpack_from("<I", d, 3)[0]
+    print("# flag=%d rootCount=%d id=%d size=%d" % (flag, cnt, idv, len(d)))
+    tree, end = parse(d, 7, cnt)
+    if end != len(d):
+        print("# WARNING: consumed %d of %d bytes, tree is unreliable" % (end, len(d)))
+    render(tree)
 
 
 def main():
@@ -108,8 +163,6 @@ def main():
         open(a.out, "wb").write(dec)
         print("# wrote %d bytes to %s" % (len(dec), a.out))
     dump(dec)
-    zeros = dec.count(0)
-    print("# zeros=%d/%d (%.1f%%) distinct=%d" % (zeros, len(dec), 100.0 * zeros / len(dec), len(set(dec))))
 
 
 if __name__ == "__main__":
