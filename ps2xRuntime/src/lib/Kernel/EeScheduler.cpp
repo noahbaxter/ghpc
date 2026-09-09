@@ -139,6 +139,25 @@ namespace
     {
         (void)idle;
 
+        // ThreadCall_EE state, five words at fixed guest addresses. Decompiled
+        // from GH2_debug.elf: ThreadCallPoll is the only signaller of gSema, so
+        // work pending with gSignalled==0 means the main loop stopped polling,
+        // and work pending with gSignalled==1 means the worker never finished.
+        if (rdram)
+        {
+            auto gw = [rdram](uint32_t a) { uint32_t v = 0;
+                std::memcpy(&v, rdram + (a & 0x01FFFFFFu), sizeof(v)); return v; };
+            const uint32_t curCall = gw(0x445054u);
+            const uint32_t curFunc = (curCall < 5u) ? gw(0x523ec0u + curCall * 12u) : 0xFFFFFFFFu;
+            std::cerr << "[ghpc/tcall] sema=" << gw(0x445044u)
+                      << " thread=" << gw(0x445048u)
+                      << " callDone=" << gw(0x44504cu)
+                      << " signalled=" << gw(0x445050u)
+                      << " curCall=" << curCall
+                      << " freeCall=" << gw(0x445058u)
+                      << " curFunc=0x" << std::hex << curFunc << std::dec
+                      << std::endl;
+        }
         std::cerr << "[ee/stall] thread census" << std::endl;
         for (const EeThreadSnapshot &thread : snapshot.threads)
         {
@@ -163,6 +182,34 @@ namespace
             if (thread.status == EeThreadStatus::Running)
             {
                 dumpStackStrings(rdram, thread.sp);
+                // Return addresses still on the live stack, which name the
+                // caller chain. ra alone gives only the innermost frame, and a
+                // pc frozen at a call-return point cannot say whether the loop
+                // is inside that callee or in something above it. Resolve with
+                // ghpc/scripts/whereis.sh.
+                if (rdram && thread.sp)
+                {
+                    std::cerr << "[ghpc/frames] sp=0x" << std::hex << thread.sp << std::dec;
+                    unsigned shown = 0u;
+                    for (uint32_t i = 0u; i < 128u; ++i)
+                    {
+                        const uint32_t slot = (thread.sp & 0x01FFFFFFu) + i * 4u;
+                        if (slot + 4u > 0x02000000u)
+                            break;
+                        uint32_t w = 0u;
+                        std::memcpy(&w, rdram + slot, sizeof(w));
+                        if (w < 0x00100000u || w >= 0x00500000u || (w & 3u) != 0u)
+                            continue;
+                        if (shown >= 24u)
+                        {
+                            std::cerr << " ...(capped at 24)";
+                            break;
+                        }
+                        std::cerr << " +0x" << std::hex << (i * 4u) << ":" << w << std::dec;
+                        ++shown;
+                    }
+                    std::cerr << std::endl;
+                }
             }
         }
         for (const EeSemaphoreSnapshot &sema : snapshot.semaphores)
