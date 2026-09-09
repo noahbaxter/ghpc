@@ -299,12 +299,24 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
     if (requestedEnd > static_cast<uint64_t>(PS2_RAM_SIZE))
         sizeBytes = PS2_RAM_SIZE - srcPhys;
 
+#if GHPC_DIAG
+    extern unsigned int g_ghpcVif1SrcPhys;
+    extern int g_ghpcVif1SrcKnown;
+    g_ghpcVif1SrcPhys = srcPhys;
+    g_ghpcVif1SrcKnown = 1;
+#endif
     processVIF1Data(m_rdram + srcPhys, sizeBytes);
+#if GHPC_DIAG
+    g_ghpcVif1SrcKnown = 0;
+#endif
 }
 
 #if GHPC_DIAG
 static int g_vif1TraceRemaining = 0;
 unsigned int g_ghpcVif1ChunkSource = 0u;
+unsigned int g_ghpcVif1SrcPhys = 0u;
+int g_ghpcVif1SrcKnown = 0;
+char g_ghpcCamPre[2][4096] = {};
 #include <map>
 #include <set>
 static std::map<uint32_t,uint32_t> g_mpgRanges;   // dest -> bytes
@@ -1305,6 +1317,62 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
 #if GHPC_DIAG
+            // PsCam::Select camera/projection upload. The two VIFcodes below are
+            // the only writers of VU1 qw696..703. Dump what VIF1 is about to
+            // consume, then (after the write loop) what landed in VU1 memory, so
+            // "packet already bad" and "unpack corrupts it" can be told apart.
+            const bool ghpcCamCode = (cmd == 0x7C0202B8u || cmd == 0x6C0602BAu);
+            if (ghpcCamCode)
+            {
+                static int camLogs = 0;
+                static bool guardBandDone = false;
+                if (!guardBandDone)
+                {
+                    guardBandDone = true;
+                    uint32_t gb = 0u;
+                    std::memcpy(&gb, m_rdram + (0x4f3038u & (PS2_RAM_SIZE - 1u)), 4);
+                    float gbf;
+                    std::memcpy(&gbf, &gb, 4);
+                    std::fprintf(stderr, "[ghpc/cam] sGuardBand@0x4f3038 = 0x%08x (%g)\n",
+                                 (unsigned)gb, (double)gbf);
+                }
+                {
+                    ++camLogs;
+                    extern char g_ghpcCamPre[2][4096];
+                    char *pb = g_ghpcCamPre[(cmd == 0x7C0202B8u) ? 0 : 1];
+                    int pn = 0;
+                    const uint32_t avail = sizeBytes - pos;
+                    const uint32_t dumpBytes = (totalBytes < avail) ? totalBytes : avail;
+                    pn += std::snprintf(pb + pn, (size_t)(4096 - pn),
+                        "[ghpc/cam] PRE  #%d cmd=0x%08x dest=%u writeVecs=%u srcVecs=%u bpv=%u "
+                        "totalBytes=%u avail=%u dumping=%u%s | srcPhys=%s0x%08x chunkBytes=%u pos=0x%x "
+                        "cl=%u wl=%u mask=%u maskbits=0x%08x mode=%u tops=%u flg=%u\n",
+                        camLogs, (unsigned)cmd, (unsigned)vuAddr, (unsigned)writeVectorCount,
+                        (unsigned)sourceVectorCount, (unsigned)bytesPerVector,
+                        (unsigned)totalBytes, (unsigned)avail, (unsigned)dumpBytes,
+                        (dumpBytes < totalBytes) ? " CAPPED-BY-CHUNK-END" : "",
+                        g_ghpcVif1SrcKnown ? "" : "unknown:", (unsigned)g_ghpcVif1SrcPhys,
+                        (unsigned)sizeBytes, (unsigned)pos,
+                        (unsigned)cl, (unsigned)wl, (unsigned)maskEnable,
+                        (unsigned)vif1_regs.mask, (unsigned)(vif1_regs.mode & 3u),
+                        (unsigned)(vif1_regs.tops & 0x3FFu), (unsigned)((imm >> 15) & 1u));
+                    for (uint32_t q = 0u; q * 16u + 16u <= dumpBytes; ++q)
+                    {
+                        uint32_t w[4];
+                        std::memcpy(w, data + pos + q * 16u, sizeof(w));
+                        float f[4];
+                        std::memcpy(f, w, sizeof(f));
+                        pn += std::snprintf(pb + pn, (size_t)(4096 - pn),
+                            "[ghpc/cam] PRE  #%d src[%u] -> qw%u  %08x %08x %08x %08x  (%g, %g, %g, %g)\n",
+                            camLogs, (unsigned)q, (unsigned)(vuAddr + q),
+                            w[0], w[1], w[2], w[3],
+                            (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
+                    }
+                    (void)pn;
+                }
+            }
+#endif
+#if GHPC_DIAG
             {
                 extern unsigned long long g_ghpcUnpackBytesSinceMscal;
                 g_ghpcUnpackBytesSinceMscal += totalBytes;
@@ -1612,6 +1680,76 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     std::memcpy(m_vu1Data + destOff, lanes, sizeof(lanes));
                 }
             }
+#if GHPC_DIAG
+            // Widened watch: after ANY unpack, is lane x of qw701/702/703
+            // nonzero? If it flips without the two PsCam codes touching it,
+            // something other than PsCam::Select is writing there.
+            if (m_vu1Data)
+            {
+                static bool prevBad = false;
+                static int flips = 0;
+                uint32_t vx[3];
+                std::memcpy(&vx[0], m_vu1Data + 701u * 16u, 4);
+                std::memcpy(&vx[1], m_vu1Data + 702u * 16u, 4);
+                std::memcpy(&vx[2], m_vu1Data + 703u * 16u, 4);
+                const bool nowBad = (vx[0] | vx[1] | vx[2]) != 0u;
+                if (nowBad != prevBad)
+                {
+                    prevBad = nowBad;
+                    if (flips < 30)
+                    {
+                        ++flips;
+                        const bool destCovers = (vuAddr <= 703u) &&
+                                                (vuAddr + writeVectorCount > 701u);
+                        std::fprintf(stderr,
+                            "[ghpc/camflip] #%d -> %s by cmd=0x%08x dest=%u writeVecs=%u "
+                            "destCovers701_703=%d | x701=%08x x702=%08x x703=%08x\n",
+                            flips, nowBad ? "NONZERO" : "zero", (unsigned)cmd,
+                            (unsigned)vuAddr, (unsigned)writeVectorCount, (int)destCovers,
+                            vx[0], vx[1], vx[2]);
+                        if (flips == 30)
+                            std::fprintf(stderr, "[ghpc/camflip] CAPPED at 30 flips\n");
+                    }
+                }
+            }
+            if (ghpcCamCode && m_vu1Data)
+            {
+                extern char g_ghpcCamPre[2][4096];
+                static int camPost = 0;
+                static int camGood = 0;
+                // Lane x of qw701/702/703 must be zero in a sane projection.
+                // Log every event whose result violates that, plus the first
+                // few sane ones as a baseline.
+                uint32_t lx[3];
+                std::memcpy(&lx[0], m_vu1Data + 701u * 16u, 4);
+                std::memcpy(&lx[1], m_vu1Data + 702u * 16u, 4);
+                std::memcpy(&lx[2], m_vu1Data + 703u * 16u, 4);
+                const bool bad = (lx[0] | lx[1] | lx[2]) != 0u;
+                bool emit = false;
+                if (bad && camPost < 40) { ++camPost; emit = true; }
+                else if (!bad && camGood < 4) { ++camGood; emit = true; }
+                else if (bad && camPost == 40) { ++camPost;
+                    std::fprintf(stderr, "[ghpc/cam] CAPPED: 40 bad events logged, suppressing further\n"); }
+                if (emit)
+                {
+                    std::fprintf(stderr, "[ghpc/cam] --- event verdict=%s ---\n%s%s",
+                                 bad ? "BAD" : "ok",
+                                 g_ghpcCamPre[0], g_ghpcCamPre[1]);
+                    for (uint32_t q = 696u; q <= 703u; ++q)
+                    {
+                        uint32_t w[4];
+                        std::memcpy(w, m_vu1Data + q * 16u, sizeof(w));
+                        float f[4];
+                        std::memcpy(f, w, sizeof(f));
+                        std::fprintf(stderr,
+                            "[ghpc/cam] POST #%d cmd=0x%08x qw%u  %08x %08x %08x %08x  (%g, %g, %g, %g)\n",
+                            camPost, (unsigned)cmd, (unsigned)q,
+                            w[0], w[1], w[2], w[3],
+                            (double)f[0], (double)f[1], (double)f[2], (double)f[3]);
+                    }
+                }
+            }
+#endif
 #if GHPC_DIAG
             if (g_vif1TraceRemaining > 0)
                 std::cerr << "[vif1]   UNPACK vn=" << (unsigned)vn << " vl=" << (unsigned)vl
