@@ -1,5 +1,6 @@
 #include "Common.h"
 #include "Pad.h"
+#include "ghpc_drive.h"
 
 namespace ps2_stubs
 {
@@ -58,6 +59,26 @@ namespace
         constexpr int32_t kPadStateStable = 6;
         constexpr size_t kPadPortCount = 2;
         constexpr size_t kPadSlotCount = 1;
+
+        // GHPC_PAD_GUITAR presents port 0 as a RedOctane PS2 guitar.
+        // system/run/config/gen/joypad.dtb classifies controllers under HX_EE:
+        //     ro_guitar  (detect (type kJoypadAnalog) (button kPad_DLeft))
+        //     digital / analog / dualshock  (detect (type kJoypad...))
+        // so the real guitar is an analog pad with no actuators that holds
+        // D-pad Left forever, and GH2 keys off that quirk.
+        //
+        // Note the button mapping changes with it. Per
+        // config/gen/beatmatch_controller.dtb the guitar's green fret is R2,
+        // not cross, so a driver that keeps pressing cross will sit on the
+        // guitar help screen forever and look like a hang.
+        bool ghpcGuitarMode()
+        {
+            static const bool on = []() {
+                const char *e = std::getenv("GHPC_PAD_GUITAR");
+                return e && *e && *e != '0';
+            }();
+            return on;
+        }
 
         constexpr uint16_t kPadBtnSelect = 1u << 0;
         constexpr uint16_t kPadBtnL3 = 1u << 1;
@@ -309,7 +330,8 @@ namespace
             data[19] = pressureValue(state, portState, kPadBtnR2);
         }
 
-        bool readPadPortData(int port, int slot, PS2Runtime *runtime, uint8_t *outData, uint32_t dataAddr)
+        bool readPadPortData(int port, int slot, PS2Runtime *runtime, uint8_t *outData, uint32_t dataAddr,
+                             const uint8_t *rdram)
         {
             if (!outData)
             {
@@ -358,6 +380,23 @@ namespace
                 }
             }
 
+            if (ghpcGuitarMode() && port == 0)
+            {
+                // Held, not pulsed: the real guitar asserts D-Left permanently
+                // and the detect match samples a level. Active low.
+                state.buttons = static_cast<uint16_t>(state.buttons & ~kPadBtnLeft);
+            }
+
+            if (port == 0 && ghpc_drive::Driver::instance().enabled())
+            {
+                // Screen driven. Presses once per settled UI screen and reports
+                // the screen it cannot leave, which is what makes "how far does
+                // it get" a measurement rather than a guess. Takes precedence
+                // over the GHPCAUTOPAD timer below.
+                const uint16_t held = ghpc_drive::Driver::instance().poll(rdram);
+                state.buttons = static_cast<uint16_t>(state.buttons & ~held);
+            }
+
 #if GHPC_DIAG
             // GHPCAUTOPAD: synthesize button edges so headless runs can advance
             // past screens that wait for input. Off unless GHPC_PAD_AUTO is set:
@@ -380,7 +419,7 @@ namespace
                     if (s_auto > 0)
                         std::fprintf(stderr, "[pad] GHPCAUTOPAD enabled\n");
                 }
-                if (s_auto > 0)
+                if (s_auto > 0 && !ghpc_drive::Driver::instance().enabled())
                 {
                     const double t = std::chrono::duration<double>(
                                          std::chrono::steady_clock::now() - s_t0)
@@ -593,6 +632,13 @@ namespace
             return;
         }
 
+        if (ghpcGuitarMode())
+        {
+            // A guitar has no motors. Reporting any classifies the pad as
+            // kJoypadDualShock instead of kJoypadAnalog, which loses ro_guitar.
+            setReturnS32(ctx, 0);
+            return;
+        }
         if (act < 0)
         {
             setReturnS32(ctx, 2); // small + large motors
@@ -748,7 +794,7 @@ namespace
         }
 
         ps2TraceGuestRangeWrite(rdram, dataAddr, 32u, "scePadRead", ctx);
-        if (!readPadPortData(port, slot, runtime, data, dataAddr))
+        if (!readPadPortData(port, slot, runtime, data, dataAddr, rdram))
         {
 #if GHPC_DIAG
             ghpcNotePad("read", port, slot, 0, 0xFFFFu);
