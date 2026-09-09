@@ -420,6 +420,9 @@ public:
     void noteHeapCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
     void noteHeapCeilingCheck(R5900Context *ctx);
     void dumpGuestHeapCensus(uint8_t *rdram, const char *why);
+
+    // GHPCLOAD: name the file a stalled song load is waiting on.
+    void noteLoaderCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
 #endif
     bool dispatchGuestBranch(uint8_t *rdram,
                              R5900Context *ctx,

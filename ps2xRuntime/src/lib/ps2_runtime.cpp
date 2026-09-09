@@ -1530,6 +1530,99 @@ void PS2Runtime::noteHeapCeilingCheck(R5900Context *ctx)
                  refused ? "REFUSED" : "ok");
 }
 
+// GHPCLOAD: name the file the song load is waiting on.
+//
+// LoadMgr::PollUntilLoaded walks the loader list at TheLoadMgr+0x38 and spins
+// until the head reports IsLoaded. FileLoader::IsLoaded is only "the stream at
+// +0x18 is null", and PollLoading nulls it only when the stream's readiness
+// virtual (vtable +0x6c) returns nonzero. So a load that never finishes shows
+// up here as a stream pointer that never clears, and the useful fact is which
+// file it belongs to.
+namespace
+{
+    constexpr uint32_t kLoadMgrGetLoader = 0x0031D6C0u;
+    constexpr uint32_t kLoadMgrAddLoader = 0x0031D7F0u;
+    constexpr uint32_t kFileLoaderPoll = 0x0031E2D8u;
+
+    // FilePath is a String-alike, so the text is either inline or one pointer
+    // away. Try both rather than guessing the layout.
+    void describeGuestPath(const uint8_t *rdram, uint32_t addr, char *out, size_t outSize)
+    {
+        out[0] = '\0';
+        auto readText = [&](uint32_t at) -> bool {
+            if (at < 0x00100000u || at >= PS2_RAM_SIZE) return false;
+            size_t n = 0;
+            while (n + 1 < outSize && (at + n) < PS2_RAM_SIZE)
+            {
+                const uint8_t c = rdram[at + n];
+                if (c == 0u) break;
+                if (c < 0x20u || c >= 0x7Fu) return false;
+                out[n++] = static_cast<char>(c);
+            }
+            out[n] = '\0';
+            return n > 1;
+        };
+        // FilePath derives from String, and String::operator=(const char*)
+        // does strcpy(this + 0x10, src), so the text buffer pointer is at
+        // +0x10. Confirmed against __as__6StringPCc at 0x325a40, not guessed.
+        uint32_t text = 0u;
+        if (guestRead32(rdram, addr + 0x10u, text) && readText(text))
+        {
+            return;
+        }
+        // Layout is a guess, so when the guess fails say so with the bytes
+        // rather than printing whatever printable noise happened to be near.
+        char hex[64];
+        int n = 0;
+        for (uint32_t i = 0u; i < 16u && n < (int)sizeof(hex) - 4; ++i)
+        {
+            const uint32_t at = (addr & 0x1FFFFFFFu) + i;
+            n += std::snprintf(hex + n, sizeof(hex) - n, "%02x",
+                               (at < PS2_RAM_SIZE) ? rdram[at] : 0u);
+        }
+        std::snprintf(out, outSize, "<no text at 0x%08x, bytes %s>", addr, hex);
+    }
+}
+
+void PS2Runtime::noteLoaderCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    if (targetPc == kFileLoaderPoll)
+    {
+        // Report only when the stream pointer changes, so a loader that is
+        // simply pending does not drown the log.
+        static uint32_t s_lastLoader = 0xFFFFFFFFu;
+        static uint32_t s_lastStream = 0xFFFFFFFFu;
+        static unsigned long long s_polls = 0ull;
+        ++s_polls;
+        const uint32_t loader = getRegU32(ctx, 4);
+        uint32_t stream = 0u;
+        guestRead32(rdram, loader + 0x18u, stream);
+        if (loader == s_lastLoader && stream == s_lastStream)
+        {
+            return;
+        }
+        s_lastLoader = loader;
+        s_lastStream = stream;
+        uint32_t vtable = 0u;
+        if (stream != 0u) guestRead32(rdram, stream, vtable);
+        std::fprintf(stderr,
+                     "[ghpc/load] FileLoader 0x%08x stream=0x%08x vt=0x%08x (poll #%llu)%s\n",
+                     loader, stream, vtable, s_polls,
+                     (stream == 0u) ? " LOADED" : "");
+        return;
+    }
+
+    static unsigned long long s_requests = 0ull;
+    const uint32_t pathAddr = getRegU32(ctx, 5);
+    char path[128];
+    describeGuestPath(rdram, pathAddr, path, sizeof(path));
+    if (++s_requests <= 200ull)
+    {
+        std::fprintf(stderr, "[ghpc/load] %s \"%s\" ra=0x%x\n",
+                     (targetPc == kLoadMgrAddLoader) ? "AddLoader" : "GetLoader",
+                     path, (unsigned)getRegU32(ctx, 31));
+    }
+}
 #endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
@@ -1816,6 +1909,13 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     if (isCall && (targetPc == 0x0035C778u || targetPc == 0x00307CC0u))
     {
         noteHeapCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCLOAD: which file the loader list is stuck on.
+    if (isCall && (targetPc == 0x0031D6C0u || targetPc == 0x0031D7F0u ||
+                   targetPc == 0x0031E2D8u))
+    {
+        noteLoaderCall(rdram, ctx, targetPc);
     }
 
     // GHPCASSERT: name the guest assert at the call, not after the fact.
