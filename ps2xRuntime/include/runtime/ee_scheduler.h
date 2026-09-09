@@ -188,6 +188,7 @@ struct EeThreadSnapshot
     uint32_t stack = 0;
     uint32_t stackSize = 0;
     uint32_t gp = 0;
+    uint32_t gpr17 = 0; // $s1, holds `this` in Milo member functions
     int initialPriority = 0;
     int currentPriority = 0;
     EeThreadStatus status = EeThreadStatus::Dormant;

@@ -1895,6 +1895,7 @@ void EeScheduler::publishSnapshot()
         snapshot.id = id;
         snapshot.pc = item.activeContext().pc;
         snapshot.ra = getRegU32(&item.activeContext(), 31);
+        snapshot.gpr17 = getRegU32(&item.activeContext(), 17);
         snapshot.sp = getRegU32(&item.activeContext(), 29);
         snapshot.cop0Count = item.activeContext().cop0_count;
         snapshot.entry = item.entry;
