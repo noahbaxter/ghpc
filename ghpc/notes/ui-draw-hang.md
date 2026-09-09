@@ -221,6 +221,25 @@ unhandled service, and that the audio poll path runs forever in the steady
 state. Confirming it means finding what the steady state is actually polling
 for, which needs the histogram widened past the top 12.
 
+### What implementing it would involve
+
+There is no SYNTH_R module. `ps2xIOP/src/modules/` holds clfile, cri_dtx,
+dbcman, fileio, libsd, mcserv, sdrdrv, sound_update_stub, tsnddrv and usbkb,
+and every service id they register is Sony standard:
+
+    kFileioSid  0x80000001    kMcservSid  0x80000400
+    kLibSdSid   0x80000701    kUsbKbSid   0x80000211
+    kDbcManSid  0x80001300
+
+`0x75433178` is nowhere near that range, which fits it being Harmonix's own
+service rather than a Sony one, and matches the note in BACKLOG that GH2's IOP
+audio is `LGAUD` plus Harmonix `SYNTH_R`/`SYNTH_S` and undocumented. So this is
+the M5 audio work, entered from a known point: bind sid `0x75433178` in a new
+module under `ps2xIOP/src/modules/`, modelled on `sdrdrv.cpp` and `tsnddrv.cpp`,
+which are the closest audio analogues already in the tree. The request payloads
+are visible in the `[IOP/RPC trace:unhandled]` lines (`send=` sizes 304, 20500,
+92 and 12 in one run) and are the first thing to decode.
+
 ## Tooling added for this
 
 - `GHPC_NO_FOCUS` keeps keyboard focus on the terminal. It does not stop the
