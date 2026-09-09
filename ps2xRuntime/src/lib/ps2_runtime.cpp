@@ -833,7 +833,16 @@ bool PS2Runtime::initialize(const char *title)
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+        unsigned int windowFlags = FLAG_WINDOW_RESIZABLE;
+        // GHPC_NO_FOCUS keeps keyboard focus on the terminal. It does NOT stop
+        // the raise: GLFW's cocoa show path calls orderFront unconditionally and
+        // offers no hint to suppress it, so a visible window always stacks on top.
+        // GHPC_HIDE_WINDOW is the only way to keep an unattended run off screen.
+        if (std::getenv("GHPC_NO_FOCUS") != nullptr)
+            windowFlags |= FLAG_WINDOW_UNFOCUSED;
+        if (std::getenv("GHPC_HIDE_WINDOW") != nullptr)
+            windowFlags |= FLAG_WINDOW_HIDDEN;
+        SetConfigFlags(windowFlags);
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
         InitAudioDevice();
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
