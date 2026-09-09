@@ -12,6 +12,7 @@ option(PS2X_ENABLE_SCCACHE "Use sccache as compiler launcher when available" ON)
 
 option(PS2X_ENABLE_RUNTIME_LOGS "Enable PS2 runtime logs" OFF)
 option(PS2X_ENABLE_AGRESSIVE_LOGS "Enable very verbose/agressive PS2 runtime logs" OFF)
+option(PS2X_ENABLE_CALL_HISTOGRAM "Count guest function entries instead of logging them" OFF)
 option(PS2X_GHPC_DIAG "Enable ghpc bring-up diagnostics (thread census, GS/CD/ARK tracing)" OFF)
 option(PS2X_ENABLE_IOP_RPC_TRACE "Log unhandled IOP/SIF RPC trace suggestions" ON)
 option(PS2X_STRICT_RETURN_DIAGNOSTICS "Route generated JR $ra returns through runtime branch diagnostics" OFF)
@@ -405,6 +406,12 @@ if(PS2X_ENABLE_AGRESSIVE_LOGS)
     target_compile_definitions(ps2_runtime PUBLIC
         AGRESSIVE_LOGS=1
         PS2_FUNCTION_LOG_TRACKER=1
+    )
+endif()
+
+if(PS2X_ENABLE_CALL_HISTOGRAM)
+    target_compile_definitions(ps2_runtime PUBLIC
+        CALL_HISTOGRAM=1
     )
 endif()
 

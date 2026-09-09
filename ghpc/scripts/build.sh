@@ -22,7 +22,7 @@ ELF="$WORK/GH2_debug.elf"
 SRC_ELF="$ROOT/third_party/milo-executable-library/gh2/PS2 Final Debug/SLUS_214.47"
 JOBS="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"
 
-FROM=all; TO=build; RUN=0; UNITY=ON; RESTORE=0; LTO=ON; DIAG=OFF
+FROM=all; TO=build; RUN=0; UNITY=ON; RESTORE=0; LTO=ON; DIAG=OFF; HIST=OFF
 for a in "$@"; do case "$a" in
   --from=*)   FROM="${a#*=}" ;;
   --to=*)     TO="${a#*=}" ;;
@@ -30,6 +30,7 @@ for a in "$@"; do case "$a" in
   --no-unity) UNITY=OFF ;;
   --fast)     LTO=OFF ;;
   --debug)    DIAG=ON ;;
+  --calls)    HIST=ON; DIAG=ON ;;
   --restore)  RESTORE=1 ;;
   -h|--help)  sed -n '2,11p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
@@ -38,6 +39,9 @@ esac; done
 # Debug and release live in separate build trees so they coexist and neither
 # forces a full recompile of the other when you switch.
 [ "$DIAG" = ON ] && BUILD="$PS2R/build-debug"
+# The histogram changes every generated TU, so it gets its own tree rather than
+# forcing build-debug through a full rebuild on every toggle.
+[ "$HIST" = ON ] && BUILD="$PS2R/build-calls"
 
 b(){ printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok(){ printf '\033[1;32m    %s\033[0m\n' "$*"; }
@@ -68,7 +72,7 @@ if want tools; then
   cmake -S "$PS2R" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=ON \
     -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
-    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY -DPS2X_ENABLE_LTO=$LTO -DPS2X_GHPC_DIAG=$DIAG $LAUNCHER
+    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY -DPS2X_ENABLE_LTO=$LTO -DPS2X_GHPC_DIAG=$DIAG -DPS2X_ENABLE_CALL_HISTOGRAM=$HIST $LAUNCHER
   cmake --build "$BUILD" --target ps2_recomp ps2_analyzer -j "$JOBS"
   ok "ps2_recomp + ps2_analyzer ready"; stage_t
 fi
@@ -135,7 +139,7 @@ if want build; then
   cmake -S "$PS2R" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=ON \
     -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
-    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY -DPS2X_ENABLE_LTO=$LTO -DPS2X_GHPC_DIAG=$DIAG $LAUNCHER > /dev/null
+    -DPS2X_ENABLE_RUNNER_UNITY_BUILD=$UNITY -DPS2X_ENABLE_LTO=$LTO -DPS2X_GHPC_DIAG=$DIAG -DPS2X_ENABLE_CALL_HISTOGRAM=$HIST $LAUNCHER > /dev/null
   cmake --build "$BUILD" --target ps2EntryRunner -j "$JOBS"
   ok "binary: $BUILD/ps2xRuntime/ps2EntryRunner"
   ls -lh "$BUILD/ps2xRuntime/ps2EntryRunner" | awk '{print "    size: "$5}'

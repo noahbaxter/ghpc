@@ -138,6 +138,11 @@ namespace
     void reportEeStall(const EeKernelSnapshot &snapshot, bool idle, const uint8_t *rdram)
     {
         (void)idle;
+#if CALL_HISTOGRAM
+        // Which guest functions ran since the last census. Names a spin loop
+        // directly, where a saved-context pc only names the last yield.
+        ps2_log::call_hist_dump(12u);
+#endif
 
         // ThreadCall_EE state, five words at fixed guest addresses. Decompiled
         // from GH2_debug.elf: ThreadCallPoll is the only signaller of gSema, so
