@@ -370,7 +370,12 @@ namespace
                 if (s_auto < 0)
                 {
                     const char *env = std::getenv("GHPC_PAD_AUTO");
+                    // GHPC_PAD_AUTO=cross (or =x) presses CROSS and nothing
+                    // else, at 3 Hz. START backs out of the menu CROSS just
+                    // entered, so the mixed mode below never reaches a song.
                     s_auto = (env && *env && *env != '0') ? 1 : 0;
+                    if (env && (env[0] == 'c' || env[0] == 'x'))
+                        s_auto = 2;
                     s_t0 = std::chrono::steady_clock::now();
                     if (s_auto > 0)
                         std::fprintf(stderr, "[pad] GHPCAUTOPAD enabled\n");
@@ -383,19 +388,35 @@ namespace
                     const double delay = 6.0; // let boot settle first
                     if (t >= delay)
                     {
+                        // A 50/50 CROSS and START alternation does not walk into
+                        // a song: START backs out of the menu CROSS just entered.
+                        // Bias hard toward CROSS and keep START only often enough
+                        // to clear a title screen that wants it.
+                        //
+                        // The duty cycle must be a fraction of the period. A
+                        // fixed 0.35 against a 0.33 period is never false, so the
+                        // button was held rather than pulsed and the UI saw one
+                        // press edge for the whole run, which stalled every
+                        // screen after the first.
+                        const double period = (s_auto == 2) ? 0.33 : 1.0;
+                        const double duty = period * 0.5;
                         const double span = t - delay;
-                        const int cycle = static_cast<int>(span / 1.2);
-                        const double phase = span - (cycle * 1.2);
-                        if (phase < 0.2)
+                        const int cycle = static_cast<int>(span / period);
+                        const double phase = span - (cycle * period);
+                        if (phase < duty)
                         {
-                            const uint16_t btn = (cycle & 1) ? kPadBtnStart : kPadBtnCross;
+                            const bool useStart = (s_auto != 2) && ((cycle % 8) == 7);
+                            const uint16_t btn = useStart ? kPadBtnStart : kPadBtnCross;
                             state.buttons = static_cast<uint16_t>(state.buttons & ~btn);
-                            static int s_logged = 0;
-                            if (s_logged < 12)
+                            // Rate limited, not capped. A cap goes quiet early and
+                            // then cannot tell "still pressing" from "stopped".
+                            static int s_lastCycle = -1;
+                            if (cycle != s_lastCycle)
                             {
-                                ++s_logged;
-                                std::fprintf(stderr, "[pad] GHPCAUTOPAD press %s t=%.1f buttons=0x%04x\n",
-                                             (cycle & 1) ? "START" : "CROSS", t, state.buttons);
+                                s_lastCycle = cycle;
+                                if ((cycle % 20) == 0)
+                                    std::fprintf(stderr, "[pad] GHPCAUTOPAD cycle=%d press %s t=%.1f buttons=0x%04x\n",
+                                                 cycle, useStart ? "START" : "CROSS", t, state.buttons);
                             }
                         }
                     }
