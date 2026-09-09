@@ -621,6 +621,13 @@ namespace ps2_syscalls
         (void)rdram;
         (void)runtime;
 
+#if GHPC_DIAG
+        if (runtime != nullptr)
+        {
+            runtime->noteHeapCeilingCheck(ctx);
+        }
+#endif
+
         setReturnU32(ctx, PS2Runtime::runtimeArenaBase());
     }
 

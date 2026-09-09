@@ -1287,6 +1287,245 @@ void PS2Runtime::noteProbeEntry(R5900Context *ctx, uint32_t targetPc,
         return;
     }
 }
+// GHPCHEAP: the newlib allocator state, read straight out of guest memory.
+//
+// GH2 links newlib's dlmalloc, so __malloc_av_ (0x449188, 1032 bytes = the
+// classic mbinptr av_[NAV*2+2] with NAV=128) is the whole allocator: av_[2] is
+// the top chunk and each bin i is a circular list rooted at a fake chunk at
+// av_ + 8*i. A chunk keeps prev_size at +0, size at +4 (low bits are flags),
+// fd at +8, bk at +12.
+//
+// Addresses are GH2 PS2 Final Debug specific, like the Debug::Fail probe above.
+namespace
+{
+    constexpr uint32_t kMallocAvBase = 0x00449188u;   // __malloc_av_
+    constexpr uint32_t kMallocSbrkBase = 0x004495A0u; // __malloc_sbrk_base
+    constexpr uint32_t kMallocEntry = 0x0035C778u;    // malloc
+    constexpr uint32_t kFlexFatalError = 0x00307CC0u; // yy_fatal_error
+    constexpr unsigned kMallocBinCount = 128u;
+
+    std::atomic<uint32_t> g_lastMallocSize{0u};
+    std::atomic<unsigned long long> g_mallocCalls{0ull};
+    std::atomic<uint32_t> g_lastSbrkOld{0u};
+    std::atomic<uint32_t> g_lastSbrkNew{0u};
+    std::atomic<int32_t> g_lastSbrkIncrement{0};
+    std::atomic<unsigned long long> g_sbrkCalls{0ull};
+    std::atomic<unsigned long long> g_sbrkRefusals{0ull};
+
+    bool guestRead32(const uint8_t *rdram, uint32_t addr, uint32_t &out)
+    {
+        addr &= 0x01FFFFFFu;
+        if (addr < 0x00100000u || (addr + 4u) > PS2_RAM_SIZE || (addr & 3u) != 0u)
+        {
+            return false;
+        }
+        std::memcpy(&out, rdram + addr, sizeof(out));
+        return true;
+    }
+}
+
+void PS2Runtime::dumpGuestHeapCensus(uint8_t *rdram, const char *why)
+{
+    uint32_t top = 0u;
+    uint32_t sbrkBase = 0u;
+    if (!guestRead32(rdram, kMallocAvBase + 8u, top) ||
+        !guestRead32(rdram, kMallocSbrkBase, sbrkBase))
+    {
+        std::fprintf(stderr, "[ghpc/heap] %s: __malloc_av_ unreadable\n", why);
+        return;
+    }
+
+    uint32_t topSize = 0u;
+    guestRead32(rdram, top + 4u, topSize);
+    topSize &= ~0x3u;
+
+    // Bin 0 is the top chunk, so the free lists start at 1.
+    uint64_t binFree = 0u;
+    uint32_t largest = 0u;
+    unsigned chunks = 0u;
+    bool truncated = false;
+    for (unsigned bin = 1u; bin < kMallocBinCount; ++bin)
+    {
+        const uint32_t root = kMallocAvBase + 8u * bin;
+        uint32_t p = 0u;
+        if (!guestRead32(rdram, root + 8u, p))
+        {
+            continue;
+        }
+        for (unsigned guard = 0u; p != root && guard < 4096u; ++guard)
+        {
+            uint32_t size = 0u;
+            uint32_t next = 0u;
+            if (!guestRead32(rdram, p + 4u, size) || !guestRead32(rdram, p + 8u, next))
+            {
+                truncated = true;
+                break;
+            }
+            size &= ~0x3u;
+            binFree += size;
+            largest = std::max(largest, size);
+            ++chunks;
+            p = next;
+        }
+    }
+
+    // Linear walk of every chunk between sbrk_base and top. A chunk is in use
+    // when the NEXT chunk's size field carries PREV_INUSE, which is the only
+    // record dlmalloc keeps of who is holding memory. This separates the two
+    // ways a full heap gets that way: one huge live chunk is a pool the game
+    // reserved and is not allocating out of, while a flood of small ones means
+    // the memory is genuinely spent.
+    //
+    // newlib nudges the first chunk so the user pointer lands 8 aligned, and
+    // the exact nudge depends on where the ELF ended, so rather than assume it
+    // the walk tries each offset and keeps the one whose chain lands exactly on
+    // top. Landing on top is what proves the walk was reading real chunks.
+    uint32_t walkStart = 0u;
+    uint64_t liveBytes = 0u;
+    uint64_t freeBytes = 0u;
+    unsigned liveCount = 0u;
+    unsigned freeCount = 0u;
+    uint32_t biggestLive = 0u;
+    uint32_t biggestLiveAt = 0u;
+    unsigned liveByBucket[32] = {};
+    for (uint32_t nudge = 0u; nudge < 32u && walkStart == 0u; nudge += 4u)
+    {
+        const uint32_t start = ((sbrkBase + 7u) & ~7u) + nudge;
+        uint32_t p = start;
+        uint64_t live = 0u, dead = 0u;
+        unsigned liveN = 0u, deadN = 0u, big = 0u, bigAt = 0u;
+        unsigned buckets[32] = {};
+        bool sane = true;
+        while (p < top)
+        {
+            uint32_t sizeRaw = 0u;
+            uint32_t nextRaw = 0u;
+            const uint32_t size = (guestRead32(rdram, p + 4u, sizeRaw)) ? (sizeRaw & ~0x3u) : 0u;
+            if (size < 16u || (p + size) > top || !guestRead32(rdram, p + size + 4u, nextRaw))
+            {
+                sane = false;
+                break;
+            }
+            if ((nextRaw & 1u) != 0u)
+            {
+                live += size;
+                ++liveN;
+                unsigned bucket = 0u;
+                while (bucket < 31u && (size >> bucket) > 1u)
+                {
+                    ++bucket;
+                }
+                ++buckets[bucket];
+                if (size > big)
+                {
+                    big = size;
+                    bigAt = p;
+                }
+            }
+            else
+            {
+                dead += size;
+                ++deadN;
+            }
+            p += size;
+        }
+        if (sane && p == top)
+        {
+            walkStart = start;
+            liveBytes = live;
+            freeBytes = dead;
+            liveCount = liveN;
+            freeCount = deadN;
+            biggestLive = big;
+            biggestLiveAt = bigAt;
+            std::memcpy(liveByBucket, buckets, sizeof(buckets));
+        }
+    }
+
+    const uint32_t ceiling = runtimeArenaBase();
+    const uint32_t brk = g_lastSbrkNew.load();
+    std::fprintf(stderr,
+                 "[ghpc/heap] %s req=%u (malloc #%llu)\n"
+                 "[ghpc/heap]   top=0x%08x size=%u (%.1f KB), headroom to ceiling 0x%08x = %d KB\n"
+                 "[ghpc/heap]   bins: %u free chunks, %llu bytes total, largest %u\n"
+                 "[ghpc/heap]   sbrk: base=0x%08x brk=0x%08x calls=%llu refused=%llu last=%+d%s\n",
+                 why, (unsigned)g_lastMallocSize.load(), g_mallocCalls.load(),
+                 top, topSize, (double)topSize / 1024.0, ceiling,
+                 (int)((int64_t)ceiling - (int64_t)(top + topSize)) / 1024,
+                 chunks, (unsigned long long)binFree, largest,
+                 sbrkBase, brk, g_sbrkCalls.load(), g_sbrkRefusals.load(),
+                 (int)g_lastSbrkIncrement.load(), truncated ? " (bin walk truncated)" : "");
+
+    if (walkStart == 0u)
+    {
+        std::fprintf(stderr, "[ghpc/heap]   walk: no chunk chain from 0x%08x lands on top, "
+                             "cannot say who holds the heap\n", sbrkBase);
+        return;
+    }
+
+    std::fprintf(stderr,
+                 "[ghpc/heap]   walk from 0x%08x: %u live chunks holding %llu bytes (%.1f MB), "
+                 "%u free holding %llu\n"
+                 "[ghpc/heap]   biggest live chunk 0x%08x = %u bytes (%.1f MB), %.1f%% of the heap\n",
+                 walkStart, liveCount, (unsigned long long)liveBytes,
+                 (double)liveBytes / (1024.0 * 1024.0), freeCount, (unsigned long long)freeBytes,
+                 biggestLiveAt, biggestLive, (double)biggestLive / (1024.0 * 1024.0),
+                 (liveBytes > 0u) ? (100.0 * (double)biggestLive / (double)liveBytes) : 0.0);
+
+    std::fprintf(stderr, "[ghpc/heap]   live chunks by size:");
+    for (unsigned bucket = 0u; bucket < 32u; ++bucket)
+    {
+        if (liveByBucket[bucket] != 0u)
+        {
+            std::fprintf(stderr, " %u:%u", 1u << bucket, liveByBucket[bucket]);
+        }
+    }
+    std::fprintf(stderr, "\n");
+}
+
+void PS2Runtime::noteHeapCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    if (targetPc == kMallocEntry)
+    {
+        g_lastMallocSize.store(getRegU32(ctx, 4));
+        g_mallocCalls.fetch_add(1ull);
+        return;
+    }
+
+    // flex prints "out of dynamic memory" and exits, so this is the last place
+    // the failing request and the heap that refused it are both still around.
+    dumpGuestHeapCensus(rdram, "yy_fatal_error");
+}
+
+// sbrk computes the new break in the delay slot of its jal to EndOfHeap, so at
+// syscall entry $s0 is that break and $a0 is still the increment. That makes
+// this the exact point where "the heap is full" becomes true or does not.
+void PS2Runtime::noteHeapCeilingCheck(R5900Context *ctx)
+{
+    // Only sbrk sets up those registers; anyone else asking for the ceiling
+    // would report garbage.
+    if (getRegU32(ctx, 31) != 0x0034BA08u)
+    {
+        return;
+    }
+
+    const uint32_t newBreak = getRegU32(ctx, 16);
+    const int32_t increment = (int32_t)getRegU32(ctx, 4);
+    g_lastSbrkNew.store(newBreak);
+    g_lastSbrkOld.store(newBreak - (uint32_t)increment);
+    g_lastSbrkIncrement.store(increment);
+    g_sbrkCalls.fetch_add(1ull);
+
+    const uint32_t ceiling = runtimeArenaBase();
+    const bool refused = newBreak > ceiling;
+    if (refused)
+    {
+        g_sbrkRefusals.fetch_add(1ull);
+    }
+    std::fprintf(stderr, "[ghpc/heap] sbrk %+d: 0x%08x -> 0x%08x ceiling 0x%08x %s\n",
+                 increment, newBreak - (uint32_t)increment, newBreak, ceiling,
+                 refused ? "REFUSED" : "ok");
+}
 #endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
@@ -1566,6 +1805,13 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     if (isCall)
     {
         noteProbeEntry(ctx, targetPc, sourcePc, "call");
+    }
+
+    // GHPCHEAP: remember every malloc request so the flex fatal error can name
+    // the one that failed, and dump the allocator when it does.
+    if (isCall && (targetPc == 0x0035C778u || targetPc == 0x00307CC0u))
+    {
+        noteHeapCall(rdram, ctx, targetPc);
     }
 
     // GHPCASSERT: name the guest assert at the call, not after the fact.

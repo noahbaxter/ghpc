@@ -410,6 +410,16 @@ public:
     // to completion. Both entry paths call this.
     void noteProbeEntry(R5900Context *ctx, uint32_t targetPc, uint32_t sourcePc,
                         const char *via);
+
+    // GHPCHEAP: newlib allocator census. The game links newlib's dlmalloc, so
+    // its whole state is guest data the runtime can read: __malloc_av_ holds
+    // the top chunk and 128 free bins, and sbrk's ceiling check comes through
+    // the EndOfHeap syscall. Together those answer the only question that
+    // matters at an allocation failure: was the heap actually full, or did the
+    // allocator give up with room left.
+    void noteHeapCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+    void noteHeapCeilingCheck(R5900Context *ctx);
+    void dumpGuestHeapCensus(uint8_t *rdram, const char *why);
 #endif
     bool dispatchGuestBranch(uint8_t *rdram,
                              R5900Context *ctx,
