@@ -1314,7 +1314,10 @@ namespace
 
     bool guestRead32(const uint8_t *rdram, uint32_t addr, uint32_t &out)
     {
-        addr &= 0x01FFFFFFu;
+        // Strip the kseg segment bits, do NOT mask to a fixed width: a 25 bit
+        // mask silently truncates every address above 32MB, which is most of
+        // the map now that PS2_RAM_SIZE is 128MB.
+        addr &= 0x1FFFFFFFu;
         if (addr < 0x00100000u || (addr + 4u) > PS2_RAM_SIZE || (addr & 3u) != 0u)
         {
             return false;
@@ -1526,6 +1529,7 @@ void PS2Runtime::noteHeapCeilingCheck(R5900Context *ctx)
                  increment, newBreak - (uint32_t)increment, newBreak, ceiling,
                  refused ? "REFUSED" : "ok");
 }
+
 #endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
