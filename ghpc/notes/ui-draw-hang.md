@@ -168,6 +168,59 @@ bytes below `gThreadID`:
 a slot and returns without signalling, so the worker does not wake until the
 main loop polls.
 
+## It is not a spin loop. It is waiting.
+
+Settled with `build.sh --calls`, which counts guest function entries per census
+instead of logging them. The count of distinct functions running between
+censuses over one run:
+
+    boot:      1520, 885, 448, 1008, 681, 825   variable, real work
+    from #20:  175, 169, 169, 175, 169, 169, ... exact 3-cycle to the end
+
+Roughly 170 functions run every census with byte-identical per-function counts
+(`SetRegister=6324`, `CloseGifTag=4862`, `CloseDmaTag=4488`, `WorldXfm=1428`
+every single time). That is a full render loop redrawing an unchanging screen,
+not a spin. **Both loop candidates above are dead as explanations.** Nothing
+overruns a container; the game is idle and waiting for something.
+
+The two censuses before the steady state are the song load, and it looks
+healthy:
+
+    11925  Heap::InsertFreeBlock
+     9226  BinStream::Read / ChunkStream::ReadImpl
+     8350  FreeBlock::AttemptMerge
+     8005  BinStream::ReadEndian
+     7044  MemTrackAlloc      6554  MemTrackFree
+     6018  Heap::Alloc        6018  MemAlloc
+
+It reads and allocates hard, then stops, and no file function appears in the
+steady state at all. `[FILEIO]` lines occur only at lines 15-26 of the log, ie
+at boot, so that burst is `BinStream`/`ChunkStream` working in memory rather
+than fresh file traffic.
+
+## The audio service is unimplemented, and that is the best remaining lead
+
+Exactly four RPCs in a whole run go unanswered, all to the same service, and
+there are no other unhandled sids:
+
+    [IOP/RPC trace:unhandled] sid=0x75433178 pc=0x269c3c recv=0x0/0
+    loadedModules=[cdrom0:/iop/synth_r.irx; cdvdstm.irx; sdrdrv.irx;
+                   libsd.irx; mtapman.irx; msifrpc.irx]
+
+`0x269c3c` is `CtlClientPoll +0x6c`, so the caller is a poll function, and
+`SynthPoll` and `SPUSendBusy` both keep ticking 1564 times per census forever
+in the steady state. So the EE polls the SYNTH_R control service continuously
+and never gets a reply. That would explain the missing audio and a song that
+never starts with one cause.
+
+**Caveat, do not skip it.** Those four RPCs land at log line 10163, which is
+*before* the load burst at 10169-11440, not after it. So the ordering does not
+by itself prove the audio service is what the game is finally waiting on. What
+is established is that sid `0x75433178` is unhandled, that it is the only
+unhandled service, and that the audio poll path runs forever in the steady
+state. Confirming it means finding what the steady state is actually polling
+for, which needs the histogram widened past the top 12.
+
 ## Tooling added for this
 
 - `GHPC_NO_FOCUS` keeps keyboard focus on the terminal. It does not stop the
