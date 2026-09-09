@@ -48,7 +48,7 @@ The main thread last yielded here, and has not yielded since. Resolved from
 the live stack via `[ghpc/frames]` and `ghpc/scripts/whereis.sh`:
 
     App::Run                      +0x138
-    UIManager::Poll               +0x7d0
+    UIManager::Draw               +0x88
     GHScreen::Draw                +0x8c
     HelpBarPanel::DrawHelpBar     +0x58
     ButtonHBElement::Draw         +0x2c
@@ -58,6 +58,41 @@ the live stack via `[ghpc/frames]` and `ghpc/scripts/whereis.sh`:
 
 A main loop that stops reaching vsync is consistent with an infinite loop in
 guest code somewhere in this path. The saved context cannot say where in it.
+
+**Resolve addresses against ELF symbol boundaries, not `data/ranked.tsv`.** Its
+instruction count for `UIManager::Poll` overruns into `UIManager::Draw`, so a
+containing-function lookup driven by it named `Poll +0x7d0` for an address that
+is really `Draw +0x88`, putting a function in this chain that is not in it.
+`llvm-objdump -d` prints the real boundaries.
+
+## The only two loops in that chain
+
+Every other function in the chain has no backward branch at all: `DrawMidBG`,
+`PanelDir::DrawShowing`, `ButtonHBElement::Draw`, `GHScreen::Draw` and
+`WorldXfm`. Two remain, and they are the same shape. Walk a container, dispatch
+a virtual per element, stop on pointer equality with an end marker.
+
+`HelpBarPanel::DrawHelpBar` (0x152940, 36 insns) walks an
+`stlpmtx_std::vector<HelpBarElement *>`, `_M_start` at `this+0x90` and
+`_M_finish` at `this+0x94`, calling `vtable+0x34` per element:
+
+    it = *(this+0x90); end = *(this+0x94)
+    do { ++it; call (*it)->vtable[0x34]; end = *(this+0x94); } while (it != end)
+
+`UIManager::Draw` (0x24cd08) walks a linked list, `next` at `+0x0`, payload at
+`+0x8`, calling `vtable+0x84` per node until `next` equals a sentinel held in a
+register.
+
+Both terminate on equality only, so either runs forever if the end marker is
+not exactly reachable by the step.
+
+**Reallocation during iteration is ruled out for the vector.** It was the
+obvious candidate, since reallocating mid-walk leaves `it` in the freed buffer
+and the reloaded `end` in the new one, never equal. But `_M_insert_overflow` is
+called only from `HelpBarPanel::AddElement`, `AddElement` only from
+`HelpBarPanel::SetDisplay`, and `SetDisplay` only from
+`GHScreen::UpdateHelpText` and `HelpBarPanel::Handle`. None is reachable from
+`GHScreen::Draw`, so nothing on the draw path can mutate that vector.
 
 ## Ruled out, with evidence. Do not re-chase these.
 
