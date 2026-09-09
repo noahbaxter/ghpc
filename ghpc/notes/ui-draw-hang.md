@@ -4,6 +4,175 @@ Written after a session that spent most of its time aimed at problems the
 build had already moved past. The first section exists so that does not happen
 again.
 
+## Corrections from the 2026-09-09 session. Read these first.
+
+**The answer: there was no hang.** `GHPC_PAD_AUTO=cross` held CROSS down
+instead of pulsing it, so the game got one press edge for the whole run. Fixing
+the duty cycle walks the build into Quick Play. Everything else in this file is
+either a genuine second bug or a wrong turn, and both are labelled below.
+
+Three claims below are wrong and each of them cost time. They are left in
+place with the evidence that killed them, not deleted, so nobody re-derives
+them.
+
+1. **The stuck screen is not the memory card load screen.** It is the "Using
+   the Guitar Controller" instruction screen, the one with the guitar diagram
+   and a single `CONTINUE` help bar button. Captured with
+   `GHPC_FRAME_ONCHANGE=1`, which dumps only when the picture changes and so
+   costs one frame on a static screen. Everything below reasoning about a
+   memory card wait is history. The help bar, `ButtonHBElement`,
+   `LabelHBElement` and `BandLabel` in the steady state should have been the
+   tell: a modal load screen has no help bar with a button on it.
+
+2. **There is no hang inside `UIManager::Draw`.** `App::Run` runs 64 times per
+   census in the steady state, and `BeginDrawing`/`SwapBuffers`/`vblank_e_handler`
+   all run 32 times. The main loop iterates freely at full rate. The saved-context
+   chain in "Where the hang is" names where the thread last yielded, which is
+   just wherever the census happened to land inside a healthy draw. Both loop
+   candidates in "The only two loops in that chain" are dead, as that section
+   already suspected for a different reason.
+
+3. **The frame is not byte-identical.** It alternates between two buffers,
+   `nonBlack=200646` at `displayFbp=0` and `nonBlack=179748` at `displayFbp=56`.
+   The second is a torn, half-drawn picture. That is a separate presentation
+   bug, the runtime presenting a buffer mid-draw, and it is not the blocker.
+
+### A real stall, but not the blocker: the SPU send handshake
+
+Confirmed, and confirmed fixed, this session. The chain, all resolved out of
+`GH2_debug.elf`:
+
+    SPUStartSend(src,size,dst)   0x26e3f0   asserts !SPUSendBusy, sets
+                                            gSpuPending = 0x444d90
+    SPUSendPoll                  0x26e4c8   if !pending return; if inflight
+                                            return; inflight = 1; ship one
+                                            chunk of at most 0x5000 bytes
+    SPUSendBusy                  0x26e478   return pending || inflight
+    SPUSetSendDone               0x26e4b8   inflight = 0
+
+    gSpuPending   0x444d90
+    gSpuInFlight  0x444d94
+
+`SPUSetSendDone` has exactly one caller, `SynthEE::CtlDispatch_impl`
+(0x3eb828) at +0x1d8. That is the inbound IOP to EE dispatcher: a 15 entry
+jump table at **0x4eb680**, and **message id 13** is the arm that calls it.
+The EE receives those messages on **its own RPC server, sid 0x75433179**,
+registered by `SynthEE::ServerThreadEntry` (0x268568) via `CtlServerInit`,
+which then parks in `sceSifRpcLoop`. Outbound is the other half of the pair,
+sid **0x75433178**, the one already noted below as unhandled.
+
+So with no SYNTH_R module on the IOP, nothing ever calls EE server
+0x75433179, message 13 never arrives, `gSpuInFlight` latches at 1 and
+`SPUSendBusy` is busy forever. Every `SynthSamplePs::SynthPoll` then blocks,
+which is why it and `SPUSendBusy` each burn 1472 calls per census in the
+steady state.
+
+Measured with a `[ghpc/spu]` census probe:
+
+    early boot   pending=0          inflight=0
+    line 2310    pending=0x1990410  inflight=1     latches here
+    line 10245   pending=0          inflight=1     pending drained, still busy
+    to the end   pending=0          inflight=1
+
+Note it latches at line 2310, long before the load burst at 10169. Audio has
+been dead since early boot.
+
+`GHPC_SYNTH_ACK=1` (in `RPC.cpp`, an explicitly labelled probe, not a fix)
+clears `gSpuInFlight` after an unhandled call to sid 0x75433178, standing in
+for the missing module. With it on, `inflight` stays 0 for the whole run and
+`SynthPoll` and `SPUSendBusy` **disappear from the steady state entirely**,
+active count 175 -> 167. The sample pipeline drains. That is the audio stall
+solved in principle, and it confirms the mechanism.
+
+### It did not unstick the screen
+
+Same run, same instruction screen, same two alternating buffers, same content
+frame count. So the SPU stall is a real bug on the M5 audio path and worth
+fixing properly with a module, but it is **not** what pins this screen.
+
+### The screen blocker was the test harness, not the game
+
+`GHPC_PAD_AUTO=cross` held CROSS down for the entire run. In `Pad.cpp`:
+
+    const double period = (s_auto == 2) ? 0.33 : 1.0;
+    const double phase  = span - (cycle * period);   // phase in [0, 0.33)
+    if (phase < 0.35)                                // never false
+
+`phase` cannot reach 0.35 when the period is 0.33, so the press was a level,
+not an edge. The UI reacts to a press edge, so the game saw exactly one CROSS
+at t=6.0s and none after. Every screen past the first stopped advancing. The
+function's own comment says "Pulsed rather than held, because the UI reacts to
+a press edge, not a level", which is what the `cross` mode broke.
+
+Fix is a duty cycle expressed as a fraction of the period:
+
+    const double duty = period * 0.5;
+    if (phase < duty)
+
+With that alone, no other change, the build walks the title screen ("PRESS ANY
+BUTTON TO BEGIN", rendering correctly), past the guitar instruction screen, and
+into **Quick Play**. The last census is 903914 `BinStream::Read`, 23824
+`RndMesh::Vert` and 23224 `RndMesh::Face` deserialisations and
+`Hmx::Object::Load`, with the active-function count swinging 204 to 1494. That
+is scene loading, not a hang.
+
+**The lesson, and it is the same one this file already teaches.** Two sessions
+were spent on the game when the harness driving it was broken. Before
+attributing a stall to guest code, verify the input actually being delivered is
+the shape the game expects. A counter that says a button is "pressed" says
+nothing about whether it was ever released.
+
+### Two real bugs found on the way, neither of them the blocker
+
+Both were confirmed, and both were wrongly promoted to "the cause" before the
+harness bug turned up. They are worth fixing on their own merits.
+
+**The SPU send handshake never completes**, as described above. Real, still
+unfixed, gates all sample upload. It is not what pinned the screen: with
+`GHPC_SYNTH_ACK=1` the screen sat exactly where it had before.
+
+**The pad does not present as a guitar.** `system/run/config/gen/joypad.dtb`
+classifies controllers under `HX_EE` as:
+
+    ro_guitar  (detect (type kJoypadAnalog) (button kPad_DLeft))
+    digital    (detect (type kJoypadDigital))
+    analog     (detect (type kJoypadAnalog))
+    dualshock  (detect (type kJoypadDualShock))
+
+So the real RedOctane PS2 guitar is an analog pad with no actuators that holds
+D-pad Left forever, and GH2 uses that quirk as its signature.
+`TutorialPanel::IsMissingGuitar` (0x146e78) needs port 0 connected and
+`JoypadIsGuitar(0)`, and it is exposed as a script handler out of
+`TutorialPanel::Handle` (+0x334), so DTA branches on it. Our stub reports
+DualShock, `scePadInfoAct` returning 2 motors, so it classifies as `dualshock`.
+`GHPC_PAD_GUITAR=1` presents the guitar shape and is the starting point for
+real HID guitar support. It did **not** unblock the screen either, tested on
+its own.
+
+### Reading the joypad globals correctly
+
+`gJoypadIdx` at **0x51ddb0**, one word per port, is an **index**, not a
+pointer: `JoypadGetData` (0x2ef750) asserts it is under 8, and the entry is
+`gJoypadData = 0x51dbc8 + idx * 0x30`. A probe that dereferenced the word as an
+address printed convincing nonsense for a while. `+0x20` of the entry is the
+connected flag. `JoypadDetectionIsStable(i)` (0x2f3f68) is a different array,
+`0x51e000 + i*0x180 + 0x11c`, and wants **0x63**. It reached 0x63 the whole
+time, so detection was never the problem.
+
+### Tooling: dtb.py could not dump a tree
+
+`dump()` in `ghpc/scripts/dtb.py` printed the header and returned. The node
+encoding, validated by consuming `joypad.dtb` to exactly 5467 of 5467 bytes:
+
+    header  byte flag, u16 count, u32 id            (7 bytes)
+    node    u32 type
+              type 16/17/19 (array/command/property): u16 count, u32 id, children
+              type 5/18/7   (symbol/string/ifdef):    u32 len, len bytes
+              everything else:                       u32 value
+
+Type 7 (`ifdef`) being length prefixed is the one that is easy to miss; sizing
+it as a plain u32 desyncs the parse and it then dies 668 bytes in.
+
 ## What the build actually does, measured
 
 Driven with `GHPC_PAD_AUTO=cross`, three separate runs:
@@ -43,6 +212,9 @@ any counter, every time.
   means no work was posted, not that a signal was lost.
 
 ## Where the hang is
+
+**Superseded, see correction 2.** There is no hang here; the main loop runs
+at full rate. This chain is only where the census caught the thread.
 
 The main thread last yielded here, and has not yielded since. Resolved from
 the live stack via `[ghpc/frames]` and `ghpc/scripts/whereis.sh`:
@@ -170,6 +342,10 @@ main loop polls.
 
 ## What the hung screen actually is
 
+**Superseded, see correction 1.** The screen is the guitar controller
+instruction screen, not the memory card load screen. The advice in this
+section is still right, the conclusion it reached is not.
+
 **Look at the framebuffer before theorising.** The runtime dumps frames to
 `/tmp/ghpc_frame_NN.ppm`; convert one with ffmpeg and open it. The hung frame
 is the memory card load screen, the one reading "LOADING... Loading Guitar
@@ -234,6 +410,10 @@ at boot, so that burst is `BinStream`/`ChunkStream` working in memory rather
 than fresh file traffic.
 
 ## The audio service is unimplemented, and that is the best remaining lead
+
+**Resolved, see the SPU send handshake section.** The caveat below about
+ordering was the right worry, and the answer is that the unhandled sid does
+stall audio but does not pin the screen.
 
 Exactly four RPCs in a whole run go unanswered, all to the same service, and
 there are no other unhandled sids:
