@@ -156,27 +156,21 @@ this next starts from a true statement rather than a half-finished round.
 
 ## Current target
 
-See `ghpc/BACKLOG.md`. As of this writing it is the song load. What the state
-word waits on is now known and confirmed from two directions: the EE's state 2
-handler sends `StreamInfoArg` as CTL 0x190 and blocks until the IOP answers with
-CTL command 2, and the runtime's own trace shows that send going out to
-`sid=0x75433178` marked **unhandled**. No IOP synth module services it. Chain and
-addresses in `notes/song-load-crash.md`, whose ruled-out list is long.
+See `ghpc/BACKLOG.md`. The song load is **solved**: `ps2xIOP/src/modules/synth.cpp`
+services the CTL link on sid 0x75433178 and answers by dispatching into the EE's
+own `CtlDispatch__7SynthEE` (0x268760) through `RpcResult::guestFunction`. Reply
+2 drives `StreamEE` 2 -> 3, reply 14 releases `SynthEE::Terminate`. Measured on a
+stock build with no probes: zero unhandled 0x190, `[ghpc/strm]` at state 3 with
+no STAND-IN line, `game_screen` reached.
 
-**0x190 is not the only unserviced CTL, and it is not the one that ends the
-run.** Measured 2026-09-10 with a same-build control arm: under
-`GHPC_STREAM_READY` the game reaches `game_screen`, polls `GamePanel` for
-exactly one frame, then enters `SynthEE::Terminate` (0x268418) and spins there
-for the remaining 230s. That loop issues `CtlClientCall(1)` and waits on
-`SynthEE+0x4130` until the IOP writes it; nothing does, so the main EE thread
-never returns and the whole UI poll stops with it. With the probe off,
-`Terminate` is entered zero times and `UIScreen::Poll` reaches #4375 against
-#600. So an IOP synth module has to answer at least CTL command 1 as well as
-command 2.
+The blocker is now a different bug entirely, `CharBonesSamples.cpp:114`
+`*frac >= 0?`, which calls `exit(1)` at about 94s. Because that ends the run, the
+held rung is 0 and the service is **opt-in behind `GHPC_SYNTH_IOP=1`** so the
+rung 8 floor survives for the next round. Fix the assert, then flip the switch
+and score it.
 
-`GHPC_STREAM_READY` is therefore worse than useless as a shortcut: rung 9 under
-it is a **deader** guest than rung 8 without it. Do not leave it on for
-convenience. Details, addresses and the disassembled spin in the topic note.
+`GHPC_STREAM_READY` is retired. Do not reach for it: the real answer makes it
+unnecessary and it produced a deader guest than the unserviced gate.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
 a drop-in**. Check it for a function's name and shape before disassembling. It

@@ -18,31 +18,34 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Build the IOP synth module, and make it answer CTL command 1 as well as
-command 2.** Measured 2026-09-10 on `build-debug` with same-build control arms,
-300s each. Under `GHPC_STREAM_READY` the game reaches `game_screen`, runs
-`GamePanel::Poll` for exactly one frame, then enters `Terminate__7SynthEE`
-(0x268418) and spins for the remaining 230s: `CtlClientCall(1)` followed by a
-`Timer::Sleep(10)` loop waiting on `SynthEE+0x4130`, a word only the IOP writes.
-The main EE thread never returns, so `UIManager::Poll` and the whole UI poll die
-with it. With the probe off, `Terminate` is entered zero times and
-`UIScreen::Poll` reaches #4375 against #600.
+**Fix the `CharBonesSamples.cpp:114` assert, then make the synth service default
+on.** The song load is solved. `ps2xIOP/src/modules/synth.cpp` answers the CTL
+link and, on a stock build with no probes, the `[IOP/RPC trace:unhandled]` line
+for 0x190 is gone and `[ghpc/strm]` reaches state 3 with no STAND-IN line. The
+game reaches `game_screen` on its own. It then dies:
 
-So command 2 (the `StreamInfoArg` answer to CTL 0x190, via
-`CtlDispatch_impl__7SynthEE` at 0x3eb828, jump table 0x4eb680 entry 2) was never
-going to be enough on its own. `CtlClientCall` is 0x269b38 and `CtlClientPoll`
-is 0x269bd0. Full chain in `notes/song-load-crash.md`.
+    [assert] Fail depth=0 latch=0 from=0x1b7b60
+             msg="File: CharBonesSamples.cpp Line: 114 Error: *frac >= 0?"
+    [guest] exit(1) called from ra=0x002ebf74
 
-**`GHPC_STREAM_READY` is now known to make things worse, not just fail to help.**
-Rung 9 under it is a deader guest than rung 8 without it: one frame, then a hung
-main thread. It stays a probe and it stays off for any scoring run.
+A negative interpolation fraction in character bone animation sampling, at about
+94s. Always there, previously unreachable because nothing ever animated a
+character. Absent from the control arm.
 
-**Scoring is in place for both.** `progress.py` carries a `song_tick` sub-rung
-from `[ghpc/song]` (`PlayerMatcher::Poll`, 0x117dd0), so rung 9 no longer scores
-a win on its own: it reports `song_tick`, `song_tick_from` and
-`song_tick_advanced`. `GHPC_PROBE_EVERY` sets the entry watch's print cadence so
-"did this stop being called" is answerable without a rebuild. Audio is still
-unmeasured.
+Measured on held rung that is 8 -> 0, since a run that exits cannot hold a screen
+for the 60s window, so the service ships **opt-in behind `GHPC_SYNTH_IOP=1`**
+until the assert is fixed. Flipping it back to default on is part of finishing
+that work, not a separate task. Protocol, sids, the reply jump table and the
+control-arm table are in `notes/song-load-crash.md`.
+
+**`GHPC_STREAM_READY` is retired.** The real answer makes it unnecessary, and it
+was never a shortcut: it produced a deader guest than leaving the gate shut.
+
+**Then: does the chart advance?** Still unmeasured. `progress.py` carries the
+`song_tick` sub-rung from `PlayerMatcher::Poll` (0x117dd0) and it has never once
+fired, in any run, with or without probes. Reaching `game_screen` is not the
+same as the song playing, and the assert lands before that question can be
+asked.
 
 ## Next
 

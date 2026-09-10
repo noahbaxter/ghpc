@@ -453,6 +453,82 @@ branch is not what stops the Poll. Ruled out before the `Terminate` spin was
 found, and worth keeping ruled out: "the panel is paused" is the obvious first
 guess and it is wrong.
 
+## Done: the IOP synth service, and the assert behind it
+
+Built 2026-09-10 as `ps2xIOP/src/modules/synth.cpp`. It answers the CTL link and
+the song load gate opens for real. The whole protocol was read off the debug ELF
+rather than guessed.
+
+**Both sids, from the ELF.**
+
+    SynthEE::SynthEE        0x268204  lui $4,0x7543 / ori $4,0x3178
+                                      -> CtlClientInit(0x75433178)   EE -> IOP
+    SynthEE::ServerThreadEntry
+                            0x26857c  lui $5,0x7543 / ori $5,0x3179
+                            0x268584  $6 = 0x268760
+                                      -> CtlServerInit(_, 0x75433179,
+                                         CtlDispatch__7SynthEE)       IOP -> EE
+
+**The EE half is a queue, not a call.** `CtlClientCall(cmd, data, len)` appends a
+packed `{cmd:u32, len:u32, data[len]}` record, no padding, to a buffer at
+0x4FA6B0 with its cursor at 0x444D70. `CtlClientPoll` flushes the whole queue
+with a single `sceSifCallRpc(rpc=0, mode=NOWAIT)` and **no receive buffer**. So
+nothing written into a reply buffer is ever read. The answer has to arrive as a
+call into the EE's own handler, which is why a "reply with the right bytes"
+approach cannot work here.
+
+**The reply command space is 0..14, and is unrelated to the request space.**
+`CtlDispatch_impl` bounds checks with `sltiu $2, $5, 0xf` and indexes a 15 entry
+table of raw addresses at 0x4EB680. Requests run much larger (0x190, 0x136,
+0x133 all observed). The two entries that matter:
+
+    entry  2 -> 0x3EB888  lw $4, 0($8); StreamEE::Dispatch(id, 2, 0)
+                          the only thing that makes Poll write state 3
+    entry 14 -> 0x3EBA10  sw 1, 0x4130(this)
+                          the only writer, outside the constructor, of the word
+                          SynthEE::Terminate spins on
+
+**`data[0]` is the stream id, confirmed by the data rather than assumed.** The
+service logs each `StreamInfoArg`, and the leading words across one run are
+`0x0, 0x1, 0x2, 0x3, 0x4` on `len=84` payloads. Sequential ids are not something
+a wrong offset produces. Entry 2's handler reads that word straight out of the
+buffer it is handed, so the EE's own payload is passed through rather than
+copied into a scratch allocation.
+
+**Observed EE -> IOP commands** in one boot, for whoever implements the rest:
+`0x0` (len 24), `0x3` (20), `0x4` (20), `0x5` (4), `0x133` (4), `0x136` (4),
+`0x190` (84).
+
+**Result, stock build, no probes, against a control arm on the same build:**
+
+| arm | verdict | held rung | peak | unhandled 0x190 | strm state | CharBones assert |
+|---|---|---|---|---|---|---|
+| service on | REGRESSED | 0, died at 94.6s | 9 `game_screen` | **0** | **3, no STAND-IN** | exit(1) |
+| service off | SAME | 8 `loading_screen` | 8 | 4 | 2 | none |
+
+Both mechanism checks pass on the arm that matters: the `[IOP/RPC
+trace:unhandled]` line for 0x190 is gone, and `[ghpc/strm]` reaches state 3 with
+no STAND-IN line, on a build with no `GHPC_*` set. `GHPC_STREAM_READY` is
+retired by this; it was never needed, only misleading.
+
+**The new blocker, which is a different bug:**
+
+    [assert] Fail depth=0 latch=0 from=0x1b7b60
+             msg="File: CharBonesSamples.cpp Line: 114 Error: *frac >= 0?"
+    [guest] exit(1) called from ra=0x002ebf74. Run is stopping.
+
+Character bone animation sampling with a negative interpolation fraction. It was
+always there and simply unreachable, because the game never got far enough to
+animate a character. It does not appear in the control arm at all.
+
+**Why the service ships opt-in behind `GHPC_SYNTH_IOP=1`.** Measured on held
+rung this is 8 -> 0, because a run that exits at 94s cannot hold anything for
+the 60s window. Default-on would hand every later round a floor that dies before
+it can score, and the floor is what keeps an unattended loop honest. So it is
+off by default until the assert is fixed, then the switch flips and it gets
+scored properly. The floor was re-measured after flipping the switch: rung 8,
+held 300s, no probes, `SAME`.
+
 ## Ruled out, with evidence. Do not re-chase these.
 
 - **Not a loop, in the crash phase.** Two call-histogram samples across the load
@@ -506,6 +582,16 @@ guess and it is wrong.
   `Poll__9GamePanel` (0x107140), not the `UIPanel` base version, and the
   runtime probe confirms the call arrives with `a0` = the GamePanel. The
   1000-plus `UIPanel::Poll` calls are other panels, not a mis-slotted GamePanel.
+
+- **`IopHost::invokeGuestFunction` is a stub. Do not build on it.**
+  `ps2xRuntime/src/lib/ps2_iop_host.cpp:485` ignores every argument, sets the
+  result to 0 and returns false. The working path for an IOP service that must
+  run EE code is `RpcResult::guestFunction` plus `guestArguments`, consumed at
+  `Kernel/Syscalls/RPC.cpp:572` and dispatched at 722 as a single
+  `GuestInvocation`. That is **one guest call per RPC**, which is why the synth
+  service picks one record per flush to answer and counts the rest.
+- **The IOP cannot answer this link through a reply buffer.** `CtlClientPoll`
+  calls with no receive buffer at all, so there is nothing to write into.
 
 - **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
   jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it
