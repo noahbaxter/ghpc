@@ -190,19 +190,63 @@ the same place. This retests the earlier `ui-draw-hang.md` conclusion against th
 post-128MB stall rather than against the crash, and it still holds: the SPU stall
 is real, unfixed, and not what blocks the song load.
 
-### What is left
+### What is left: the gate is StreamEE, proven by control flow
 
-The remaining per-frame predicates, all still polling in both runs:
+The UI is not waiting to decide, it is stuck **mid-transition**. All 203
+`[ghpc/ui]` samples in the stall are byte identical:
 
-    IsReady__11MasterAudio      IsBankLoaded__5Synth     IsReady__C8StreamEE
-    IsReady__9BeatMatch         IsReady__11BeatMatcher   IsReady__14BeatMatchAudio
-    IsReady__13PlayerMatcher    Poll__17VAGFileReader_New
-    ScanData__17VAGFileReader_New
-    ArePanelsLoaded__8UIScreen  PicsAreLoaded__9GamePanel
+    cur=0xad1c20 next=0xad4b00 xition=1 name="loading_screen" nextName="game_screen"
 
-These are called, which is not the same as returning false. The next step is to
-capture the **return value** of the top-level ones and find which predicate never
-flips, rather than assuming it is the audio chain because audio is loudest.
+So `game_screen` is already the committed target and the transition never
+completes, which means `UIScreen::ArePanelsLoaded` on `game_screen` returns
+false. It is `for each panel: if (!CheckIsLoaded()) return 0; return 1`
+(0x24b4b0).
+
+`GamePanel::IsLoaded` (0x1067c0) is a sequential gate chain, each gate reached
+only if the previous returned true:
+
+    1 UIPanel::IsLoaded          4 PicsAreLoaded__9GamePanel
+    2 sub-panel CheckIsLoaded    5 IsReady__9BeatMatch
+    3 IsLoaded__10BankLoader
+
+`IsLoaded__10BankLoader`, `PicsAreLoaded__9GamePanel` **and** `IsReady__9BeatMatch`
+all sit at 278 per window, exactly one per frame, so gates 1 through 4 pass every
+frame and the last gate is reached every frame. `CreateBeatMatch__9GamePanel` and
+`StartLoadingPics__9GamePanel` are absent from the set, so both had already run.
+This is derived from control flow, not from assuming the audio chain because
+audio is loudest in the histogram.
+
+The tail below gate 5, every one at exactly one per frame, is a single chain:
+
+    IsReady__9BeatMatch -> IsReady__11BeatMatcher -> IsReady__13PlayerMatcher
+    -> IsReady__14BeatMatchAudio -> IsReady__11MasterAudio -> IsReady__C8StreamEE
+
+`MasterAudio::IsReady` (0x277168) delegates through `this+0xc`, vtable +0x14.
+`StreamEE::IsReady` (0x26ba28) is four instructions:
+
+    lw    $2, 0x4c($4)
+    addiu $2, $2, -3
+    sltiu $2, $2, 3        # return (unsigned)(state - 3) < 3
+
+So the entire song load hangs on one word, `StreamEE+0x4c`, never reaching a
+value in {3, 4, 5}.
+
+Two stores to `+0x4c` inside `Poll__8StreamEE` (0x26cf58, 1632 bytes):
+
+- 0x26d400 writes **2**, reached after `VAGFileReader::SetBuffer` and a backward
+  branch at 0x26d3f0. State 2 is not ready.
+- 0x26d054 writes **3**, but it sits immediately after a `Debug::Fail` call at
+  0x26d040 whose message is built by `MakeString`. Worth knowing whether that
+  path is actually taken and whether `Debug::Fail` returns here.
+
+Not yet established, do not assume either way:
+
+- the actual runtime value of `StreamEE+0x4c` during the stall
+- whether anything outside `Poll__8StreamEE` also writes `+0x4c`
+
+Next step is to read that word at runtime rather than infer it. `MasterAudio`
+reaches the object through `this+0xc`, so the address is recoverable from the
+existing per-frame call into `IsReady__11MasterAudio`.
 
 Useful reference facts found the hard way:
 
