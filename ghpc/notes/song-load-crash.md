@@ -744,6 +744,51 @@ behaviour is not the same on the two hosts this project builds on**, which is a
 correctness divergence rather than a performance one, and it is invisible until
 something depends on it.
 
+## The chart advances. Stock build, no probes.
+
+2026-09-10, a 7200s run on `build-debug` with `env: {}`. Verbatim from
+`notes/evidence/2026-09-10-chart-advances.json`:
+
+    "rung": 9, "screen": "game_screen", "bounced": false,
+    "ran_secs": 7200.1,
+    "detail": { "song_tick": "737.085",
+                "song_tick_from": "0.000",
+                "song_tick_advanced": "yes" },
+    "env": {}
+
+and the two samples behind it:
+
+    [ghpc/song] #1   this=0x016b12d0 ms=0.000    tick=0.000
+    [ghpc/song] #120 this=0x016b12d0 ms=983.301  tick=737.085
+
+`PlayerMatcher::Poll` is running and the `SongPos` it is handed is moving. Zero
+`Debug::Fail`, zero guest `exit()`, zero `CharBonesSamples` asserts across the
+whole two hours. The count-in reached its threshold at about t=5100, `StartGame`
+ran, `realtime` went 1 -> 0 and `startGate88` went 0 -> 1, which incidentally
+confirms `+0x88` is the game-started latch rather than a gate anything else
+sets.
+
+That is the goal as stated: a stock build, no `GHPC_*` set, and the chart
+actually advancing rather than a screen named `game_screen` sitting still.
+
+**Read these three caveats before treating it as finished.**
+
+1. **It is not playable and this is not close.** `StartGame` arrives about 85
+   minutes of wall clock after the song is chosen, because the count-in is ten
+   guest seconds and guest time advances at roughly 0.0019 seconds per real
+   second. The chart advances correctly; it advances 500x too slowly to play.
+2. **The oracle cannot score this in a normal round.** The recorded mark comes
+   from a 300s run and its `detail` has no `song_tick` at all, because 300s does
+   not get within an hour of the chart starting. `song_tick_advanced` is only
+   observable in a multi-hour run. A stop condition that depends on it therefore
+   cannot be checked by the standard measurement, which is a real hole in the
+   contract rather than a detail.
+3. **The `[ghpc/song]` heartbeat is too coarse for this regime.** The hook
+   prints call #1 and then every 120th, which was chosen for normal frame rates
+   and here means one sample per ten minutes. Two samples is enough to prove
+   advancement and not enough to say anything about rate, smoothness or
+   correctness of the timing.
+
 ## Ruled out, with evidence. Do not re-chase these.
 
 - **Not a loop, in the crash phase.** Two call-histogram samples across the load

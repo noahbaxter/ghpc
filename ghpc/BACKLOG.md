@@ -18,30 +18,38 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Measure throughput on a release build before sizing the `Rnd` work.** Every
-frame rate number recorded so far, including the 525x, comes from
-`build-debug`, and a live `sample` shows `fwrite` plus iostream formatting
-taking a large slice of host CPU. The diagnostics are part of what is being
-measured. Until there is a release number, the size of the `Rnd` job is unknown.
+**The song load and the chart are done. The `Rnd` seam is the only thing between
+here and playable.** Measured 2026-09-10 on a stock build with no probes: rung 9
+held, `song_tick` 0.000 -> 737.085, `song_tick_advanced: yes`, zero asserts and
+zero guest exits across 7200 seconds. Evidence kept in
+`notes/evidence/2026-09-10-chart-advances.json` and `.log` rather than in
+gitignored `work/`.
 
-**Then the `Rnd` seam**, which remains the critical path to the chart starting.
-Confirmed from two directions that VU1 interpretation is the cost: 1,905,500 VU1
-stores per game frame against 4,289 per menu frame (444x), and a live profile
-dominated by `VU1Interpreter::run`, `commitReadyPipelines`,
-`calculateFmacExactResult` and `execUpper`. `GSCpuBackend::WritePixel` is well
-below that cluster, so optimising the rasteriser alone would not have helped.
+It is not playable and not near it. `StartGame` lands about 85 minutes after the
+song is chosen because guest time advances at roughly 0.0019 seconds per real
+second. The chart is correct and 500x too slow.
 
-**Cheap and separate: cache three `getenv` calls.** `ps2_vif1_interpreter.cpp:947`
-reads `GHPC_ALLOW_MASKED_MSCAL` on every MSCAL, and 816/901 read
-`GHPC_FORCE_DBUF` the same way. 45 profile samples landed in `getenv` and
-`__findenv_locked`. Every other `GHPC_*` read in the runtime is a
-function-local `static`; these three are the exceptions.
+The cost is VU1 interpretation, confirmed by volume (1,905,500 VU1 stores per
+game frame against 4,289 per menu frame) and by a live profile dominated by
+`VU1Interpreter`. `GSCpuBackend::WritePixel` sits well below it. So the native GL
+or Vulkan backend at the `Rnd` layer is the right target and it is the whole
+target.
 
-**Correctness, unrelated to speed:** the VU1 FMAC path uses `long double` to
-hold an intermediate wider than `float`, but `long double` is exactly `double`
-on Apple arm64 and 80 bit on x86-64 Linux. VU1 rounding therefore differs
-between the two hosts this project builds on. Not urgent, but it should not be
-discovered later by a bug that only reproduces on one machine.
+**Measure a release build before sizing that work.** Every throughput number
+here is `build-debug`, and the profile shows `fwrite` plus iostream formatting
+taking a real slice. This is still the cheapest next thing.
+
+**Fix the measurement hole first, though.** `song_tick_advanced` is only
+observable in a multi-hour run, so `progress.py` cannot score the project's own
+goal in a 300s round: the recorded mark has no `song_tick` in its detail at all.
+Either the oracle needs a way to record a long run's result, or the count-in
+needs a supported way to be shortened for tests. Without one of those, the next
+person cannot tell a regression here from a slow day.
+
+Also cheap and pending: cache three `getenv` calls in the VIF1 hot path
+(`ps2_vif1_interpreter.cpp:947` per MSCAL, plus 816 and 901), 45 profile
+samples; and lower the `[ghpc/song]` heartbeat from every 120th call, which at
+this frame rate is one sample per ten minutes.
 
 ## Next
 

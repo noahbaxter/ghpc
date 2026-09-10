@@ -1,0 +1,6 @@
+[drive] loading_screen -> game_screen after 0 presses (t=56.9)
+[ghpc/song] #1 this=0x016b12d0 ms=0.000 tick=0.000
+[ghpc/song] #120 this=0x016b12d0 ms=983.301 tick=737.085
+[ghpc/game] #1 this=0x00ad2980 realtime=0 startGate88=0 unk84=1 unk36c=1 tempo=0.000 offset78=0.000 secs7c=0.000 beat80=0.000 uiSecs=0.0000 countIn=0.0000
+[ghpc/game] #2 this=0x00ad2980 realtime=1 startGate88=0 unk84=0 unk36c=1 tempo=640.339 offset78=-10.000 secs7c=-10.000 beat80=-15.617 uiSecs=0.0450 countIn=-9.9550
+[ghpc/game] #1385 this=0x00ad2980 realtime=0 startGate88=1 unk84=0 unk36c=1 tempo=640.339 offset78=-10.000 secs7c=-10.000 beat80=-15.617 uiSecs=11.5653 countIn=1.5653

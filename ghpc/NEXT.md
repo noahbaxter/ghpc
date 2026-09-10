@@ -44,8 +44,8 @@ supersede earlier ones and topic notes supersede both.
 | held for | 60s |
 | streamEE state | `2` |
 | probes | none, stock build |
-| rounds since gain | 3 of 6 |
-| rounds total | 4 of 14 |
+| rounds since gain | 5 of 6 |
+| rounds total | 6 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -166,38 +166,33 @@ this next starts from a true statement rather than a half-finished round.
 
 ## Current target
 
-See `ghpc/BACKLOG.md`. **Rung 9 is the floor**, held 300s on a stock build with
-`env: {}`. The song load is finished.
+See `ghpc/BACKLOG.md`. **The stated goal is met.** A stock build with no probes
+reaches `game_screen`, holds it, and the chart advances: `song_tick` 0.000 ->
+737.085, `song_tick_advanced: yes`, zero asserts and zero guest exits across a
+7200s run. Evidence in `notes/evidence/2026-09-10-chart-advances.json`.
 
-**The chart is blocked by throughput, not by a flag.** Measured 2026-09-10:
-realtime mode is the count-in and `GamePanel::Enter` sets it by design, both
-`StartGame` gates are open, and the ten second count-in advances correctly at
-**0.0019 guest seconds per real second**. `StartGame` is about 84 minutes of
-wall clock away. Nothing is stuck; the guest runs about 0.16 fps at
-`game_screen` against 8.4 on menus.
+**It is not playable.** `StartGame` arrives about 85 minutes after the song is
+chosen, because guest time advances at roughly 0.0019 seconds per real second.
+The chart is correct and about 500x too slow. The **`Rnd` seam** is now the only
+thing between here and a playable build, and the cost is VU1 interpretation
+rather than the GS rasteriser, confirmed by volume and by profile.
 
-That makes the **`Rnd` seam the critical path**, not a later nicety. An earlier
-round recorded that the frame rate was not the chart blocker. That was wrong: a
-running chart would advance at any frame rate, but the chart never starts
-because what starts it is measured in guest time.
+**Before sizing that work, measure a release build.** Every throughput figure in
+these notes is `build-debug`, and the profile shows the diagnostics themselves
+taking a real slice.
 
-**But do not size that work off the numbers here yet.** Every frame rate figure
-recorded, the 525x included, is a `build-debug` number, and a live profile shows
-`fwrite` plus iostream formatting taking a large slice of host CPU. Measure a
-release build first. The cost itself is VU1 interpretation, confirmed by volume
-(1,905,500 VU1 stores per game frame against 4,289 per menu frame) and by
-profile; `GSCpuBackend::WritePixel` is well below that, so the rasteriser alone
-was never the target.
-
-**Do not chase `GamePanel+0x70`, `+0x88`, `SetRealtime` or the count-in.** All
-measured correct, all on the ruled-out list.
+**And fix the measurement hole.** `song_tick_advanced` is only observable in a
+multi-hour run, so a 300s scoring round cannot check the goal and the recorded
+mark carries no `song_tick`. The stop condition in this file depends on a value
+the standard measurement cannot produce. That needs resolving before the next
+unattended loop, or a regression here will be invisible.
 
 `GHPC_STREAM_READY` is retired and removed from the path. Do not reach for it.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
-a drop-in**. Check it for a function's name and shape before disassembling. It
-named `mUnk70` as `SetRealtime`'s argument, which is what unlocked this round.
-Do not build a sync mechanism.
+a drop-in**. It named `mUnk70` as `SetRealtime`'s argument, which is what turned
+the last blocker from a mystery word into an understood count-in. Do not build a
+sync mechanism.
 
 ## Known gaps
 
