@@ -1623,6 +1623,89 @@ void PS2Runtime::noteLoaderCall(uint8_t *rdram, R5900Context *ctx, uint32_t targ
                      path, (unsigned)getRegU32(ctx, 31));
     }
 }
+// GHPCBLK: where the ARK read chain stops.
+//
+// ArkFile::ReadDone returns (this+0x14 == 0) and is the only caller of
+// BlockMgr::Poll on the load path, so a loader that never finishes means
+// +0x14 never drains. Either the read was never queued (AddTask never runs)
+// or it was queued and Poll cannot retire it. Counting all four points and
+// watching +0x14 separates those without guessing.
+namespace
+{
+    constexpr uint32_t kArkReadAsync = 0x002F7DE8u;  // ArkFile::ReadAsync
+    constexpr uint32_t kBlockAddTask = 0x002F92D0u;  // BlockMgr::AddTask
+    constexpr uint32_t kBlockPoll = 0x002F9848u;     // BlockMgr::Poll
+    constexpr uint32_t kArkReadDone = 0x002F8128u;   // ArkFile::ReadDone
+    constexpr uint32_t kTheBlockMgr = 0x00524B50u;   // TheBlockMgr, 48 bytes
+
+    std::atomic<unsigned long long> g_readAsync{0ull};
+    std::atomic<unsigned long long> g_addTask{0ull};
+    std::atomic<unsigned long long> g_blockPoll{0ull};
+    std::atomic<unsigned long long> g_readDone{0ull};
+}
+
+void PS2Runtime::noteBlockCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    if (targetPc == kBlockPoll)
+    {
+        g_blockPoll.fetch_add(1ull);
+        return;
+    }
+    if (targetPc == kArkReadAsync)
+    {
+        const unsigned long long n = g_readAsync.fetch_add(1ull) + 1ull;
+        if (n <= 20ull)
+        {
+            std::fprintf(stderr, "[ghpc/blk] ReadAsync #%llu ark=0x%08x buf=0x%08x bytes=%d\n",
+                         n, getRegU32(ctx, 4), getRegU32(ctx, 5), (int)getRegU32(ctx, 6));
+        }
+        return;
+    }
+    if (targetPc == kBlockAddTask)
+    {
+        const unsigned long long n = g_addTask.fetch_add(1ull) + 1ull;
+        if (n <= 20ull)
+        {
+            std::fprintf(stderr, "[ghpc/blk] AddTask #%llu mgr=0x%08x task=0x%08x\n",
+                         n, getRegU32(ctx, 4), getRegU32(ctx, 5));
+        }
+        return;
+    }
+
+    // ReadDone: the pending count is the number that has to reach zero.
+    const unsigned long long n = g_readDone.fetch_add(1ull) + 1ull;
+    const uint32_t ark = getRegU32(ctx, 4);
+    uint32_t pending = 0u;
+    uint32_t got = 0u;
+    guestRead32(rdram, ark + 0x14u, pending);
+    guestRead32(rdram, ark + 0x18u, got);
+
+    static uint32_t s_lastArk = 0xFFFFFFFFu;
+    static uint32_t s_lastPending = 0xFFFFFFFFu;
+    const bool changed = (ark != s_lastArk || pending != s_lastPending);
+    if (!changed && (n % 2000ull) != 0ull)
+    {
+        return;
+    }
+    s_lastArk = ark;
+    s_lastPending = pending;
+
+    char mgr[128];
+    int at = 0;
+    for (uint32_t off = 0u; off < 48u && at < (int)sizeof(mgr) - 10; off += 4u)
+    {
+        uint32_t word = 0u;
+        guestRead32(rdram, kTheBlockMgr + off, word);
+        at += std::snprintf(mgr + at, sizeof(mgr) - at, "%s%x", off ? " " : "", word);
+    }
+    std::fprintf(stderr,
+                 "[ghpc/blk] ReadDone #%llu ark=0x%08x pending=%u got=%u | "
+                 "readAsync=%llu addTask=%llu poll=%llu\n"
+                 "[ghpc/blk]   TheBlockMgr: %s\n",
+                 n, ark, pending, got, g_readAsync.load(), g_addTask.load(),
+                 g_blockPoll.load(), mgr);
+}
+
 #endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
@@ -1916,6 +1999,13 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                    targetPc == 0x0031E2D8u))
     {
         noteLoaderCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCBLK: read issued, queued, polled, retired.
+    if (isCall && (targetPc == 0x002F7DE8u || targetPc == 0x002F92D0u ||
+                   targetPc == 0x002F9848u || targetPc == 0x002F8128u))
+    {
+        noteBlockCall(rdram, ctx, targetPc);
     }
 
     // GHPCASSERT: name the guest assert at the call, not after the fact.

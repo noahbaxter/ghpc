@@ -423,6 +423,9 @@ public:
 
     // GHPCLOAD: name the file a stalled song load is waiting on.
     void noteLoaderCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+
+    // GHPCBLK: where the ARK read chain stops.
+    void noteBlockCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
 #endif
     bool dispatchGuestBranch(uint8_t *rdram,
                              R5900Context *ctx,
