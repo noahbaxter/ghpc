@@ -6,6 +6,15 @@ menus fine and dies loading a song.
 
 ## How to reproduce it
 
+**Check `ghpc/scripts/bootskip.py --status` first.** When it is `on` the game
+boots straight to `main_screen`, skipping `bootup_load`, the intro video and both
+logo screens. That halves the time to `loading_screen` (t=41.6 vs t=86.3) and is
+why it is usually left on, but it means anything `bootup_load` initialises is
+skipped. The stall below is in the audio chain, which is exactly the sort of
+thing `bootup_load` might have set up, so **re-run under `--off` before trusting
+any new finding here.** Nothing has been attributed to it yet; it is a suspect.
+
+
 The harness drives the game off live UI state, so this is one command:
 
     ./ghpc/scripts/build.sh --from=build
