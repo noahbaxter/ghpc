@@ -16,7 +16,8 @@ The harness drives the game off live UI state, so this is one command:
 so the run reads as a path rather than a guess. Use `build-debug`, not
 `build-calls`: the call histogram slows it enough to matter over minutes.
 
-Expect this, then a crash roughly 6 minutes into `loading_screen`:
+Expect this. Before the 128MB fix it then crashed about 6 minutes into
+`loading_screen`; now it reaches `loading_screen` and loops there forever:
 
     [drive] bootup_load -> cut_scene_screen after 37 presses (t=32)
     [drive] cut_scene_screen -> guitar_help_screen after 0 presses
@@ -50,7 +51,10 @@ prints that exact string and calls `exit(YY_EXIT_FAILURE)`, which is 2.
 **This is the `fix/real-newlib-allocator` branch's problem**, arrived at from
 the other end.
 
-## It is not a hang and not a loop, which took proving
+## The crash phase was not a hang and not a loop, which took proving
+
+This section is about the **crash** phase, before the 128MB fix. The stall that
+replaced it *is* a loop, see "Where it stops now" below.
 
 Three things were ruled out with evidence. Do not re-chase them.
 
@@ -103,20 +107,110 @@ The `[libc] guest FILE*` line is **not** a lead. 0x448d8c is inside
 
 ## Where it stops now
 
-Past the crash, the song still does not load. The main thread renders the
-loading screen forever (`App::Run` -> `RndTransformable::WorldXfm` ->
-`RndGroup::DrawShowing` -> `PsRnd::VSync`, 21 of 25 stall samples pinned at
-0x43f8b4) and the heap goes silent for 35+ minutes.
+Past the crash, the song still does not load. It sits in `loading_screen`
+indefinitely, with no fatal and no `game_screen`.
 
-Two dead ends already ruled out, so do not re-chase them:
+### Settled: it is a loop, not slow progress
 
-- **Semaphore 16 is not a deadlock.** Thread 2 is the async file worker
-  (`gThreadSema` 0x445044, ring of 5 at 0x523ec0). `curCall == freeCall` with
-  `curFunc=0x0` is an empty queue, which is what that thread does when idle.
-- **`LoadMgr::AddLoader` (0x31d7f0) does fire during `loading_screen`**,
-  repeatedly, so loading is being requested. `GHPC_PROBE=0x31d7f0,0x31da48`
-  reproduces that with no rebuild. Whether `LoadMgr::Poll` advances them is
-  the open question.
+Two runs on `build-calls` with `GHPC_SAMPLE_MS=20000`. `call_hist_dump` already
+prints a delta vector and resets its baseline, so every `[ghpc/calls]` line is
+one 20 second window of work rather than a running total. Metric fixed before
+the run: a loop repeats its delta vector, progress does not.
+
+Baseline run: **15 of 15 consecutive sample pairs at cosine 1.0000 and Jaccard
+1.0000**, with `active` pinned at exactly 199 functions for about five minutes.
+The threshold was cosine >= 0.98 across three or more pairs. It is a loop.
+
+Every count in the load phase is an exact multiple of the window's frame count
+(278), so the whole steady state is per-frame polling.
+
+### The read path is idle, not slow
+
+| function | boot and menus | load phase |
+|---|---:|---:|
+| `ArkFile::ReadAsync` | 341652 | 0 |
+| `BlockMgr::Poll` | 683121 | 0 |
+| `BinStream::Read` | 3685292 | 0 |
+| `BlockMgr::AddTask`, `ArkFile::ReadDone`, `Block::Matches` | live | 0 |
+
+Nothing is queued and nothing is in flight. The storage stack is not the
+problem here.
+
+**Two claims in the previous version of this note were wrong**, both from
+sampling the transition instead of the steady state:
+
+- "It is doing real work the whole time, `BlockMgr::AddTask` climbed 216 -> 398"
+- "`LoadMgr::AddLoader` does fire during `loading_screen`"
+
+`AddLoader` is absent from all 20 steady-state samples. Both observations were
+the transition into the screen, not the stall.
+
+### The loader subsystem believes it already finished
+
+`LoadMgr::Poll` (0x31da48) runs once per frame. Its loop body's first act is a
+virtual call to vtable +0x1c, `Loader::PollLoading`:
+
+    lw   $5, 0x8($2)     # loader out of the list node
+    lw   $3, 0x14($5)    # vptr
+    lw   $2, 0x1c($3)    # vtable +0x1c = PollLoading
+    jalr $2              # unconditional, before IsLoaded
+
+No `PollLoading` variant fires anywhere in either run, though all three
+(`FileLoader`, `DirLoader`, `CharsysPanel::CacheModel`) are generated and
+instrumented. So the loop body never runs and LoadMgr's list is empty.
+
+`PollUntilLoaded` (0x31d928) is `while (!loader->IsLoaded()) loader->PollLoading()`,
+with the test at 0x31da0c branching to the body on `beqz`. It is entered once
+per frame and never reaches the body, so `IsLoaded` is returning **true**.
+
+`FileLoader::IsLoaded` (0x31e2c8) is three instructions: `return *(this+0x18) == 0`.
+`FileLoader::PollLoading` (0x31e2d8) bails on that same word being null and
+otherwise drives vtable +0x6c (`ArkFile::ReadDone`).
+
+Read together: the file loaders report loaded, LoadMgr has nothing queued, and
+the stall is downstream of loading. Do not chase the loader path again.
+
+Vtable layout for reference, 8 byte entries of (delta, pointer):
+`_vt$10FileLoader` 0x45a578, `_vt$9DirLoader` 0x459f28, `_vt$6Loader` 0x45a5a0.
+Slot +0x14 is `IsLoaded`, slot +0x1c is `PollLoading`.
+
+### The SPU handshake is not the blocker either
+
+`SPUSendBusy` and `SynthPoll` spin at exactly 66 per frame inside a once-per-frame
+`SPUSendPoll`, which made the SPU look like the obvious suspect.
+
+`GHPC_SYNTH_ACK=1` re-run, compared name-for-name against the baseline active set:
+
+- gone: `SPUSendBusy`, `SynthPoll` (199 -> 197 functions)
+- new: nothing
+- the other 197 are identical, and it is still a loop (7 of 7 pairs at cosine 1.0000)
+
+So the acknowledgement does clear the spin, and the game stays stuck in exactly
+the same place. This retests the earlier `ui-draw-hang.md` conclusion against the
+post-128MB stall rather than against the crash, and it still holds: the SPU stall
+is real, unfixed, and not what blocks the song load.
+
+### What is left
+
+The remaining per-frame predicates, all still polling in both runs:
+
+    IsReady__11MasterAudio      IsBankLoaded__5Synth     IsReady__C8StreamEE
+    IsReady__9BeatMatch         IsReady__11BeatMatcher   IsReady__14BeatMatchAudio
+    IsReady__13PlayerMatcher    Poll__17VAGFileReader_New
+    ScanData__17VAGFileReader_New
+    ArePanelsLoaded__8UIScreen  PicsAreLoaded__9GamePanel
+
+These are called, which is not the same as returning false. The next step is to
+capture the **return value** of the top-level ones and find which predicate never
+flips, rather than assuming it is the audio chain because audio is loudest.
+
+Useful reference facts found the hard way:
+
+- `String` keeps its text buffer pointer at **+0x10** (`__as__6StringPCc` at
+  0x325a40 does `strcpy(this + 0x10, src)`). `FilePath` derives from it.
+- The ARK stream class is `ArkFile`, vtable `_vt$7ArkFile` at 0x459a88.
+- Every 1, 2 and 4 byte read goes through `ReadAsync` plus a `ReadDone` spin.
+  ~341k of each during boot and menus alone. Normal for this engine, wasteful.
 
 ## Instrumentation this needed
 
@@ -131,3 +225,17 @@ Uncommitted at time of writing, all diagnostic:
   of the screen is its name Symbol.
 - `[ghpc/spu]` prints the SPU send handshake globals.
 - `GHPC_SYNTH_ACK` stands in for the missing SYNTH_R module. A probe, not a fix.
+
+Two defects in the diagnostics themselves, found while using them:
+
+- **`call_hist_dump` corrupts its own output.** It streams field by field with
+  `<<` from a detached host thread, so guest stderr splices into the middle of a
+  line. 7 of 27 samples in one run were hit, and one produced a fabricated
+  function named `[vif1] opcode histogram after 3184400: 0x0` with 1.79M hits,
+  which is enough to swing a cosine comparison. Until it formats into one buffer
+  and emits a single write, drop any `[ghpc/calls]` line containing more than one
+  `[`. The analysis script in `.planning/histdelta.py` does this and refuses to
+  give a verdict on fewer than 5 clean samples.
+- **`EeScheduler.cpp:102,109,146,185` still mask guest addresses with
+  `0x01FFFFFFu`**, which is 25 bits, so 32MB. Same bug class as the heap census
+  truncation fixed in 350741d, and now wrong under the 128MB map.
