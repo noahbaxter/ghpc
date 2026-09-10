@@ -29,6 +29,18 @@ disassembly plus a probe. Full gate chain and evidence in
 
 ## Next
 
+**Progress oracle.** The foundational item, because it is what lets work run
+unattended. `gh2-decomp` reaches 43% unattended because it has a binary verifier;
+ghpc has none, so every session ends with a human judging whether progress
+happened. Most of it already exists: `GHPC_PAD_DRIVE` emits an ordinal screen
+ladder every run, and `checkrun.sh` already retries to tell a hang from a
+regression. Missing: a tracked high-water mark to diff against instead of a fixed
+target, a sub-rung state vector for when the screen does not move, and a
+re-measured boot success rate. `checkrun.sh` records boot hanging roughly 2 in 3
+runs when it was written; three runs on 2026-09-09 all reached `loading_screen`,
+which is not a measurement. An agent loop on a 2-in-3 oracle will thrash.
+Design in `.planning/2026-09-09-work-spine-design.md` section 2.
+
 **Override layer.** No hand-written function body can survive a build today:
 staging does `rsync --delete` from generated output into a gitignored
 `ps2xRuntime/src/runner/`. This is very likely what produced the `DataArray`
