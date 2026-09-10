@@ -18,34 +18,19 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Fix the `CharBonesSamples.cpp:114` assert, then make the synth service default
-on.** The song load is solved. `ps2xIOP/src/modules/synth.cpp` answers the CTL
-link and, on a stock build with no probes, the `[IOP/RPC trace:unhandled]` line
-for 0x190 is gone and `[ghpc/strm]` reaches state 3 with no STAND-IN line. The
-game reaches `game_screen` on its own. It then dies:
+**Find out why the beatmatch chain never runs at a `game_screen` that holds.**
+Rung 9 is the floor as of 2026-09-10: held 300s, stock build, `env: {}`, no
+bounce, recorded. The song load is done. But `song_tick` has never fired in any
+run, so nothing reads a `SongPos` and no chart advances.
 
-    [assert] Fail depth=0 latch=0 from=0x1b7b60
-             msg="File: CharBonesSamples.cpp Line: 114 Error: *frac >= 0?"
-    [guest] exit(1) called from ra=0x002ebf74
+Round two measured `PlayerMatcher::Poll` (0x117dd0), `Player::Poll` (0x112fb0),
+`BeatMatch::Poll` (0x1259c0) and `BeatMatcher::Poll` (0x2727c0) at **zero** calls
+with `GamePanel::Poll` at two. **Re-measure before building on that**: it
+predates both the synth service and the CVT.W.S fix, and the screen is now
+reached legitimately rather than through a forged state word. `GHPC_PROBE` with
+`GHPC_PROBE_EVERY=25` answers it without a rebuild.
 
-A negative interpolation fraction in character bone animation sampling, at about
-94s. Always there, previously unreachable because nothing ever animated a
-character. Absent from the control arm.
-
-Measured on held rung that is 8 -> 0, since a run that exits cannot hold a screen
-for the 60s window, so the service ships **opt-in behind `GHPC_SYNTH_IOP=1`**
-until the assert is fixed. Flipping it back to default on is part of finishing
-that work, not a separate task. Protocol, sids, the reply jump table and the
-control-arm table are in `notes/song-load-crash.md`.
-
-**`GHPC_STREAM_READY` is retired.** The real answer makes it unnecessary, and it
-was never a shortcut: it produced a deader guest than leaving the gate shut.
-
-**Then: does the chart advance?** Still unmeasured. `progress.py` carries the
-`song_tick` sub-rung from `PlayerMatcher::Poll` (0x117dd0) and it has never once
-fired, in any run, with or without probes. Reaching `game_screen` is not the
-same as the song playing, and the assert lands before that question can be
-asked.
+**Then: does audio exist?** Still unmeasured, and there is no rung for it.
 
 ## Next
 

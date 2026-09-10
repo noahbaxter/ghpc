@@ -529,6 +529,61 @@ off by default until the assert is fixed, then the switch flips and it gets
 scored properly. The floor was re-measured after flipping the switch: rung 8,
 held 300s, no probes, `SAME`.
 
+## Done: CVT.W.S was rounding, not truncating
+
+`ps2_runtime_macros.h` had:
+
+    #define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
+
+`nearbyintf` rounds to nearest. The R5900 rounds CVT.W.S toward zero, so every
+`(int)someFloat` in all 12,664 recompiled functions was rounding instead of
+truncating. Now `((int32_t)(float)(a))`.
+
+**Three independent reasons it was wrong, none of them "it felt off".**
+
+1. The R5900 rounds CVT.W.S toward zero.
+2. The game proves it. `FracToSample`'s other path adds 0.5 (the `0x3f00`
+   literal at 0x1b7ab4) before its `cvt.w.s` to get round-to-nearest. That idiom
+   is only correct against a conversion that truncates; against a rounding one
+   it double-rounds.
+3. `FPU_CVT_L_S` in the same table was already `((int64_t)(float)(a))`, a
+   truncation. Two members of one instruction family disagreeing is the tell.
+
+**How it surfaced.** `CharBonesSamples::FracToSample` (0x1b7a28) clamps `*frac`
+to [0,1] at 0x1b7a60, multiplies by `n-1`, truncates to get the sample index,
+then subtracts: `f = frac*(n-1) - (int)(frac*(n-1))`. That remainder is
+non-negative by construction and the function asserts it
+(`CharBonesSamples.cpp:114 "*frac >= 0?"`). With a rounding conversion, 2.7
+becomes 3 and the remainder is -0.3, so the assert fires and `Debug::Fail` calls
+`exit(1)`. It only ever fired once the synth service let the game reach a screen
+that animates a character.
+
+## Rung 9, stock build, no probes
+
+2026-09-10. Three arms, all on the same build, 300s cap, 60s hold:
+
+| arm | verdict | held rung | assert | guest exit | song_tick |
+|---|---|---|---|---|---|
+| synth on, rounding fixed | PROGRESSED | 9 `game_screen` | none | none | never fires |
+| synth off, rounding fixed | SAME | 8 `loading_screen` | none | none | never fires |
+| stock, synth now default on | PROGRESSED | **9 `game_screen`** | none | none | never fires |
+
+The stock arm is the one that counts: `env: {}`, no `GHPC_*` at all, rung 9 held
+for the full 300s with no bounce, recorded as the mark. Mechanism checks both
+pass: **zero** `[IOP/RPC trace:unhandled]` lines and **zero** `STAND-IN` lines,
+with `[ghpc/strm]` reaching `state=3 ready=1` on its own.
+
+The middle arm is the control that matters for the rounding change, because that
+macro is used by every float-to-int conversion in the binary. The floor is
+undisturbed with the service off, so the blast radius did not cost anything
+visible.
+
+**This is not the goal.** `song_tick` has never fired in any run of this
+session, with or without probes, before or after these fixes.
+`PlayerMatcher::Poll` (0x117dd0) is not called even at a `game_screen` that
+holds for 300 seconds. A held screen is still not a chart advancing, which is
+the whole reason that sub-rung exists.
+
 ## Ruled out, with evidence. Do not re-chase these.
 
 - **Not a loop, in the crash phase.** Two call-histogram samples across the load
@@ -593,6 +648,11 @@ held 300s, no probes, `SAME`.
 - **The IOP cannot answer this link through a reply buffer.** `CtlClientPoll`
   calls with no receive buffer at all, so there is nothing to write into.
 
+- **Not a game bug: `CharBonesSamples.cpp:114`.** It was the runtime's CVT.W.S
+  rounding mode, above. The assert was correct and the guest code was correct.
+- **Not the synth service's blast radius.** With the rounding fixed and the
+  service off, the same build still holds rung 8 for 300s.
+
 - **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
   jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it
   at 0x26d040 is the `state != 2` assert, not something the success path walks
@@ -635,6 +695,12 @@ Uncommitted at time of writing, all diagnostic:
   `song_tick_from` and `song_tick_advanced`, because "polled once and never
   again" and "polled 4000 times at a standstill" are the same verdict but
   different bugs.
+
+One more macro in the same table looks wrong and was deliberately left alone,
+because a round changes one thing: `FPU_ROUND_L_S` uses `roundf` (half away from
+zero) while `FPU_ROUND_W_S` uses `nearbyintf` (half to even). MIPS ROUND.x.S is
+half-to-even, so the 64 bit one is the odd one out. Nothing is known to depend
+on it yet.
 
 Two defects in the diagnostics themselves, found while using them:
 

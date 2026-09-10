@@ -1,10 +1,13 @@
 {
-  "rung": 8,
-  "screen": "loading_screen",
+  "rung": 9,
+  "screen": "game_screen",
   "detail": {
     "streamEE_state": "2"
   },
-  "recorded": "2026-09-09 23:46:48",
+  "env": {},
+  "build": "build-debug",
+  "hold_secs": 60,
   "rounds_since_gain": 0,
-  "rounds_total": 0
+  "rounds_total": 1,
+  "recorded": "2026-09-10 03:00:01"
 }

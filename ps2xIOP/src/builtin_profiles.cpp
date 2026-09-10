@@ -118,23 +118,14 @@ namespace ps2x::iop::detail
                 ServiceList services;
                 services.emplace_back(createFileioService(host));
                 services.emplace_back(createUsbKbService(host));
-                // Opt-in, and the switch is this way round deliberately.
-                // The service is correct: it answers CTL 0x190 and drives
-                // StreamEE 2 -> 3 on a stock build with no probes, which is
-                // what the queue asked for. But it lands the game on a
-                // CharBonesSamples assert that calls exit(1) at about 94s,
-                // where the unserviced build sat at loading_screen forever, so
-                // measured on held rung it is a regression from 8 to 0.
-                //
-                // Default-on would hand every later round a floor that dies
-                // before it can hold anything, and the floor is what stops an
-                // unattended loop from wandering. So it stays off until the
-                // assert is fixed, and then this flips back and gets scored
-                // properly. Evidence in notes/song-load-crash.md.
-                if (std::getenv("GHPC_SYNTH_IOP") != nullptr)
-                {
-                    services.emplace_back(createSynthService(host));
-                }
+                // Answers the synth CTL link on sid 0x75433178, which is what
+                // lets StreamEE reach state 3 and the song load finish. It was
+                // opt-in for one round because the game then hit a
+                // CharBonesSamples assert and exited at 94s; that was a wrong
+                // CVT.W.S rounding mode, fixed in ps2_runtime_macros.h, and
+                // this is on by default now that a stock build holds
+                // game_screen for the full run.
+                services.emplace_back(createSynthService(host));
                 return services;
             },
         });

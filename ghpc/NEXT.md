@@ -37,13 +37,15 @@ supersede earlier ones and topic notes supersede both.
 
 | | value |
 |---|---|
-| furthest screen | `loading_screen` |
-| rung | 8 of 9 |
-| recorded | 2026-09-09 23:46:48 |
+| furthest screen | `game_screen` |
+| rung | 9 of 9 |
+| recorded | 2026-09-10 03:00:01 |
+| build | `build-debug` |
+| held for | 60s |
 | streamEE state | `2` |
 | probes | none, stock build |
 | rounds since gain | 0 of 6 |
-| rounds total | 0 of 14 |
+| rounds total | 1 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -60,9 +62,17 @@ one number.
 
 Stop when any of these is true:
 
-- **The win.** The rung went up and held, with `probes: none, stock build`.
-  Record it, render, and stop; do not start another round on a win you have not
-  written down.
+- **The win, which is not just a rung.** The rung went up and held with
+  `probes: none, stock build` **and** `song_tick_advanced` is `yes`. Record it,
+  render, and stop.
+
+  This bullet used to say a held rung gain alone was the win. That was wrong and
+  it nearly ended the loop early: on 2026-09-10 rung 9 `game_screen` held for
+  300s on a stock build with `song_tick` never firing once. A screen named
+  `game_screen` is the exact thing this project keeps mistaking for gameplay,
+  and the top of a saturating ladder is where that mistake is easiest. The
+  ladder cannot express the goal on its own, so the sub-rung is part of the
+  stop condition, not decoration.
 - **`--round-done` exits 3.** That is `rounds_since_gain` reaching
   `STOP_ROUNDS_SINCE_GAIN`, or `rounds_total` reaching `STOP_ROUNDS_TOTAL`.
   Both live in `scripts/progress.py`. Raising either is a decision to make
@@ -156,21 +166,22 @@ this next starts from a true statement rather than a half-finished round.
 
 ## Current target
 
-See `ghpc/BACKLOG.md`. The song load is **solved**: `ps2xIOP/src/modules/synth.cpp`
-services the CTL link on sid 0x75433178 and answers by dispatching into the EE's
-own `CtlDispatch__7SynthEE` (0x268760) through `RpcResult::guestFunction`. Reply
-2 drives `StreamEE` 2 -> 3, reply 14 releases `SynthEE::Terminate`. Measured on a
-stock build with no probes: zero unhandled 0x190, `[ghpc/strm]` at state 3 with
-no STAND-IN line, `game_screen` reached.
+See `ghpc/BACKLOG.md`. **The song load is finished and rung 9 is the floor**, held
+for 300s on a stock build with `env: {}`. Two fixes got there: the IOP synth
+service (`ps2xIOP/src/modules/synth.cpp`, now default on) answering the CTL link
+on sid 0x75433178, and `FPU_CVT_W_S` truncating instead of rounding, which is
+what the `CharBonesSamples.cpp:114` assert was really about.
 
-The blocker is now a different bug entirely, `CharBonesSamples.cpp:114`
-`*frac >= 0?`, which calls `exit(1)` at about 94s. Because that ends the run, the
-held rung is 0 and the service is **opt-in behind `GHPC_SYNTH_IOP=1`** so the
-rung 8 floor survives for the next round. Fix the assert, then flip the switch
-and score it.
+**The chart still does not advance.** `song_tick` has never fired in any run of
+any configuration. `Poll__13PlayerMatcherfRC7SongPos` (0x117dd0) is not called
+even at a `game_screen` that holds for the full 300 seconds, and neither are
+`Player::Poll`, `BeatMatch::Poll` or `BeatMatcher::Poll`. That is the target: a
+held screen with a dead beatmatch chain. Round two established the chain is
+silent under the old stand-in; confirm whether it is still silent now that the
+screen is reached legitimately, since that measurement predates both fixes and
+should not be trusted across them.
 
-`GHPC_STREAM_READY` is retired. Do not reach for it: the real answer makes it
-unnecessary and it produced a deader guest than the unserviced gate.
+`GHPC_STREAM_READY` is retired and removed from the path. Do not reach for it.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
 a drop-in**. Check it for a function's name and shape before disassembling. It
