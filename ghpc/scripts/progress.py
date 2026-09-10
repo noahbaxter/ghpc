@@ -105,6 +105,20 @@ def measure(build, secs, hold, verbose):
     binary = os.path.join(ROOT, build, "ps2xRuntime", "ps2EntryRunner")
     if not os.path.exists(binary):
         return None, "binary missing: %s" % binary
+    # A stray runner from an earlier session is not a harmless background
+    # process. Every rung here is scored on wall clock (a --secs cap and a
+    # --hold window) against a guest already running at about 39% of realtime,
+    # so a second runner eating a core changes what "held for 60s" means. One
+    # was found on 2026-09-10 at 117% CPU after 103 minutes, orphaned to PID 1.
+    # This is MEASUREMENT_FAILED rather than a warning on purpose: a contended
+    # run tells you nothing, and the whole point of the third verdict is to stop
+    # that being mistaken for "no change".
+    stray = subprocess.run(["pgrep", "-f", "ps2xRuntime/ps2EntryRunner"],
+                           capture_output=True, text=True).stdout.split()
+    if stray:
+        return None, ("another ps2EntryRunner is already running (pid %s). Kill "
+                      "it before measuring; a contended run is not comparable."
+                      % ", ".join(stray))
     if hold >= secs:
         return None, "hold (%ds) must be shorter than the cap (%ds)" % (hold, secs)
     env = dict(os.environ, GHPC_HIDE_WINDOW="1", GHPC_PAD_DRIVE="cross")

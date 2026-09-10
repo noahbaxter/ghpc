@@ -127,6 +127,14 @@ this next starts from a true statement rather than a half-finished round.
 - **A mark carries its probes.** Any `GHPC_*` set for a run is stored with the
   mark and rendered above. A floor set with a probe on is not a floor for a stock
   build, and a run whose probes differ from the mark's prints `ENV MISMATCH`.
+- **A stray runner invalidates the run, and the oracle now refuses it.** Every
+  rung is scored on wall clock against a guest at about 39% of realtime, so a
+  second `ps2EntryRunner` eating a core changes what "held for 60s" means. One
+  was found on 2026-09-10 orphaned to PID 1 at 117% CPU after 103 minutes,
+  launched by hand rather than by either script. `progress.py` now scores that
+  `MEASUREMENT_FAILED` instead of returning a number, so it cannot be mistaken
+  for "no change". This is a candidate confound for the unmeasured boot
+  reliability below, not a proven cause of it.
 - **Check `python3 ghpc/scripts/bootskip.py --status` before trusting a repro.**
   When it is `on`, boot skips `bootup_load`, the intro video and both logo
   screens, halving time to `loading_screen`. It is usually left on for speed. It
