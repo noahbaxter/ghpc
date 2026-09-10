@@ -1244,10 +1244,22 @@ void PS2Runtime::noteProbeEntry(R5900Context *ctx, uint32_t targetPc,
     static unsigned s_count = 0u;
     static uint32_t s_lo = 0xFFFFFFFFu, s_hi = 0u;
     static unsigned long long s_hits[16] = {0};
+    // After the first 40 the watch prints every Nth call. The default of 1000
+    // is too coarse for the question this probe is most often asked, which is
+    // not "is it called" but "did it stop being called": at 1000 a function
+    // that ran a few hundred times and then died looks the same as one that ran
+    // a few hundred times and kept going. GHPC_PROBE_EVERY=50 turns the same
+    // watch into a timeline without a rebuild.
+    static unsigned long long s_every = 1000ull;
     static bool s_init = false;
     if (!s_init)
     {
         s_init = true;
+        if (const char *e = std::getenv("GHPC_PROBE_EVERY"))
+        {
+            const unsigned long long v = std::strtoull(e, nullptr, 0);
+            if (v > 0ull) s_every = v;
+        }
         if (const char *env = std::getenv("GHPC_PROBE"))
         {
             const char *p = env;
@@ -1275,7 +1287,7 @@ void PS2Runtime::noteProbeEntry(R5900Context *ctx, uint32_t targetPc,
     {
         if (s_watch[i] != targetPc) continue;
         const unsigned long long n = ++s_hits[i];
-        if (n <= 40ull || (n % 1000ull) == 0ull)
+        if (n <= 40ull || (n % s_every) == 0ull)
         {
             std::fprintf(stderr,
                          "[probe] 0x%x #%llu via=%s a0=0x%x a1=0x%x a2=0x%x a3=0x%x ra=0x%x from=0x%x\n",

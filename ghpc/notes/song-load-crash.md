@@ -357,8 +357,8 @@ the stand-in, at `game_screen`, for 300 seconds:
 
 The entire beatmatch and player chain never runs. Nothing reads a `SongPos`,
 so no chart exists to advance. `GamePanel::Poll` firing twice and then never
-again is the next thread to pull: the panel is constructed and entered, and its
-per-frame poll does not continue.
+again is answered two sections down: the main EE thread dies in
+`SynthEE::Terminate` right after the game screen's first frame.
 
 The state word does not stick either. Same run, one object, three lines apart:
 
@@ -376,6 +376,82 @@ which the hook's single pinned-object tracker was not written for.
 **This is a probe, not a fix, and it is now clear it could never have been one.**
 The real work is an IOP-side synth stream module that answers CTL 0x190 with CTL
 command 2.
+
+## What actually stops rung 9: SynthEE::Terminate spins forever
+
+Measured 2026-09-10, `build-debug`, `GHPC_STREAM_READY=1`, `bootskip.py --on`,
+300s, `GHPC_PROBE_EVERY=25`. The sequence at the top of the ladder, read off one
+log by line number:
+
+    22336  [probe] 0x24abd8 #600   UIScreen::Poll, still running normally
+    25275  [drive] loading_screen -> game_screen (t=66.7)
+    25278  [probe] 0x107140 #2     GamePanel::Poll, the game screen's one frame
+    25305  [ee/stall] thread id=1 pc=0x268458 ra=0x268458 status=running
+    ...    the same census 23 more times, count still climbing, for ~230s
+
+`0x268458` is `Terminate__7SynthEE + 0x40`. The main EE thread enters
+`SynthEE::Terminate` right after the game screen's first frame and never comes
+out, which is why `GamePanel::Poll` runs exactly twice and the whole UI poll
+stops: `UIManager::Poll` (0x24c5c0, the caller at 0x24c710) never returns.
+
+The loop is a bare wait on a word the IOP is supposed to write:
+
+    268430  jal  CtlClientCall(1)          ; ask the IOP for CTL command 1
+    268438  lw   $2, 0x4130($18)           ; SynthEE+0x4130, the done flag
+    26843c  bnez $2, 0x268464              ; already done, skip the wait
+    268448  jal  CtlClientPoll()
+    268450  jal  Timer::Sleep(10)
+    268458  lw   $2, 0x4130($18)
+    26845c  beqz $2, 0x268448              ; spin until the IOP sets it
+
+Confirmed from two directions in the same censuses: `pc` alternates between
+0x268458 (the flag reload) and 0x2f2cf8 (`Timer::Sleep + 0x50`) while `ra` stays
+0x268458 throughout, so it is one loop and not a coincidence of sampling.
+
+**This is the same missing-module class as CTL 0x190, but a different command
+and a worse failure.** 0x190 leaves the state word pinned and the game polling;
+`Terminate`'s CTL command 1 takes the main thread out entirely. Servicing 0x190
+alone would not have fixed this, because the game only reaches `Terminate` after
+the screen it was waiting for.
+
+`SynthEE+0x4130` is the flag to satisfy, `CtlClientCall` is 0x269b38 and
+`CtlClientPoll` is 0x269bd0.
+
+**Control arm, same build, same probe set, stand-in off.** `SynthEE::Terminate`
+is entered **zero** times, the thread is never pinned at 0x268458, and
+`UIScreen::Poll` reaches **#4375** against #600 in the stand-in arm. The control
+run emits 118,972 log lines to the stand-in run's 26,709. So the spin is not a
+pre-existing condition that the stand-in merely reveals: the forged state word
+is what leads the game into `Terminate`.
+
+That inverts how `GHPC_STREAM_READY` should be read. It does not just fail to be
+a fix. Rung 9 under the probe is a **worse** guest state than rung 8 without it:
+one screen frame, then a dead main thread, against a game that is still polling
+its UI seven times as much. Any future round tempted to leave the probe on for
+convenience should read that line twice.
+
+## Answered: GamePanel::Poll runs twice because the thread dies, not because the panel is paused
+
+`UIScreen::Poll` (0x24abd8) walks its panel list at 0x24ad28 and skips any panel
+whose word at **+0x0c** is nonzero:
+
+    24ad2c  lw    $5, 0x8($2)      ; panel = node->data
+    24ad30  lw    $3, 0xc($5)      ; mPaused
+    24ad34  bnezl $3, 0x24ad58     ; nonzero, skip the Poll
+    24ad3c  lw    $2, 0x38($5)     ; vptr, slot +0x30 pair
+    24ad48  jalr  $3               ; panel->Poll()
+
++0x0c is `mPaused`, from the decomp's `UIPanel` layout, and the only writers in
+the whole `.text` are `UIPanel`'s constructor (0x245708, writes 0) and
+`GamePanel::SetPaused` (0x108090). Both `SetPaused` overrides are reachable only
+through vtable slot +0x38; there is no `jal` to either anywhere in `.text`.
+
+**Measured, and it is not the pause.** `GamePanel::SetPaused` fires exactly once
+in a 300s run, `a1=0x0`, from 0x106f78 inside `GamePanel::Enter`. It is never
+called with true. `mPaused` is 0 for the entire life of the panel, so the skip
+branch is not what stops the Poll. Ruled out before the `Terminate` spin was
+found, and worth keeping ruled out: "the panel is paused" is the obvious first
+guess and it is wrong.
 
 ## Ruled out, with evidence. Do not re-chase these.
 
@@ -424,6 +500,13 @@ command 2.
   observation was a release build with no `[drive]` or `[ghpc/ui]` tracing, so
   it never measured the screen at all. The same-build A/B above supersedes it.
 
+- **Not `mPaused`, and not the `UIScreen::Poll` panel skip.** Measured above:
+  one `SetPaused(false)` call in 300s and no `SetPaused(true)` at all.
+- **Not the GamePanel vtable.** `_vt$9GamePanel` (0x449868) slot +0x30 holds
+  `Poll__9GamePanel` (0x107140), not the `UIPanel` base version, and the
+  runtime probe confirms the call arrives with `a0` = the GamePanel. The
+  1000-plus `UIPanel::Poll` calls are other panels, not a mis-slotted GamePanel.
+
 - **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
   jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it
   at 0x26d040 is the `state != 2` assert, not something the success path walks
@@ -451,6 +534,11 @@ Uncommitted at time of writing, all diagnostic:
 - `[ghpc/spu]` prints the SPU send handshake globals.
 - `GHPC_SYNTH_ACK` stands in for the missing SYNTH_R module. A probe, not a fix.
 - `GHPC_STREAM_READY` stands in for the missing IOP CTL command 2. Also a probe.
+- `GHPC_PROBE_EVERY` sets the watch's print cadence after the first 40 hits.
+  The old fixed 1000 could not answer the question this probe is usually asked,
+  which is not "is it called" but "did it stop being called": at 1000 a function
+  that ran 600 times and died looks identical to one that ran 600 times and kept
+  going. At 25 the same watch is a timeline, and it needs no rebuild.
 - `[ghpc/song]` prints `PlayerMatcher::Poll`'s `SongPos`, which is what makes
   "the chart is advancing" measurable rather than assumed. The ABI was read off
   the prologue rather than assumed: `move $16, $4` / `mov.s $f20, $f12` /

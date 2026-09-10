@@ -125,14 +125,20 @@ CTL command 2, and the runtime's own trace shows that send going out to
 `sid=0x75433178` marked **unhandled**. No IOP synth module services it. Chain and
 addresses in `notes/song-load-crash.md`, whose ruled-out list is long.
 
-`GHPC_STREAM_READY` fakes that answer. It is now established what it does and
-what it does not do, by a same-build A/B on 2026-09-10: with the probe the run
-holds rung 9 `game_screen` for 300s, without it the same binary holds rung 8
-`loading_screen`, so the probe is genuinely what moves the screen. But at that
-screen `PlayerMatcher::Poll`, `Player::Poll`, `BeatMatch::Poll` and
-`BeatMatcher::Poll` are all called **zero** times in 300s and `GamePanel::Poll`
-twice, so nothing reads a `SongPos` and there is no chart to advance. Rung 9
-under the probe is a screen, not gameplay. Details in the topic note.
+**0x190 is not the only unserviced CTL, and it is not the one that ends the
+run.** Measured 2026-09-10 with a same-build control arm: under
+`GHPC_STREAM_READY` the game reaches `game_screen`, polls `GamePanel` for
+exactly one frame, then enters `SynthEE::Terminate` (0x268418) and spins there
+for the remaining 230s. That loop issues `CtlClientCall(1)` and waits on
+`SynthEE+0x4130` until the IOP writes it; nothing does, so the main EE thread
+never returns and the whole UI poll stops with it. With the probe off,
+`Terminate` is entered zero times and `UIScreen::Poll` reaches #4375 against
+#600. So an IOP synth module has to answer at least CTL command 1 as well as
+command 2.
+
+`GHPC_STREAM_READY` is therefore worse than useless as a shortcut: rung 9 under
+it is a **deader** guest than rung 8 without it. Do not leave it on for
+convenience. Details, addresses and the disassembled spin in the topic note.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
 a drop-in**. Check it for a function's name and shape before disassembling. It

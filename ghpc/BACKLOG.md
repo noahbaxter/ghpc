@@ -18,30 +18,31 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Find out why the gameplay poll chain never runs.** Measured 2026-09-10 on
-`build-debug` with a same-build control arm, 300s each: under
-`GHPC_STREAM_READY=1` the run holds rung 9 `game_screen` for the full 300s,
-without it the same binary holds rung 8 `loading_screen`. So the stand-in does
-cause the transition. But at `game_screen`, `PlayerMatcher::Poll` (0x117dd0),
-`Player::Poll` (0x112fb0), `BeatMatch::Poll` (0x1259c0) and `BeatMatcher::Poll`
-(0x2727c0) are called **zero** times, while `GamePanel::Poll` (0x107140) is
-called exactly twice in 300s. `StreamEE::Poll` is hot throughout. The screen is
-up and nothing is driving it. `GamePanel::Poll` firing twice and stopping is the
-thread to pull. Evidence and probe addresses in `notes/song-load-crash.md`.
+**Build the IOP synth module, and make it answer CTL command 1 as well as
+command 2.** Measured 2026-09-10 on `build-debug` with same-build control arms,
+300s each. Under `GHPC_STREAM_READY` the game reaches `game_screen`, runs
+`GamePanel::Poll` for exactly one frame, then enters `Terminate__7SynthEE`
+(0x268418) and spins for the remaining 230s: `CtlClientCall(1)` followed by a
+`Timer::Sleep(10)` loop waiting on `SynthEE+0x4130`, a word only the IOP writes.
+The main EE thread never returns, so `UIManager::Poll` and the whole UI poll die
+with it. With the probe off, `Terminate` is entered zero times and
+`UIScreen::Poll` reaches #4375 against #600.
 
-**Retire `GHPC_STREAM_READY` with a real IOP answer.** Still the underlying
-gap, and the poll-chain finding is more evidence for it: the stand-in forges the
-result of draining a type 2 `StreamOp` without the op, and the state word it
-writes reverts from 3 to 2 within three `IsReady` calls on the same object. The
-EE's state 2 handler sends `StreamInfoArg` to the IOP as CTL 0x190 and waits for
-CTL command 2 back, which `CtlDispatch_impl__7SynthEE` (0x3eb828, jump table
-0x4eb680 entry 2) turns into `StreamEE::Dispatch(id, 2, 0)`. No IOP synth module
-exists, so it never comes. Same missing-module class as the SPU handshake.
+So command 2 (the `StreamInfoArg` answer to CTL 0x190, via
+`CtlDispatch_impl__7SynthEE` at 0x3eb828, jump table 0x4eb680 entry 2) was never
+going to be enough on its own. `CtlClientCall` is 0x269b38 and `CtlClientPoll`
+is 0x269bd0. Full chain in `notes/song-load-crash.md`.
 
-**Scoring for both is in place.** `progress.py` carries a `song_tick` sub-rung
-from `[ghpc/song]`, so rung 9 no longer scores a win on its own: it reports
-`song_tick`, `song_tick_from` and `song_tick_advanced`. Rung 9 with no
-`song_tick` is the screen without the song. Audio is still unmeasured.
+**`GHPC_STREAM_READY` is now known to make things worse, not just fail to help.**
+Rung 9 under it is a deader guest than rung 8 without it: one frame, then a hung
+main thread. It stays a probe and it stays off for any scoring run.
+
+**Scoring is in place for both.** `progress.py` carries a `song_tick` sub-rung
+from `[ghpc/song]` (`PlayerMatcher::Poll`, 0x117dd0), so rung 9 no longer scores
+a win on its own: it reports `song_tick`, `song_tick_from` and
+`song_tick_advanced`. `GHPC_PROBE_EVERY` sets the entry watch's print cadence so
+"did this stop being called" is answerable without a rebuild. Audio is still
+unmeasured.
 
 ## Next
 
