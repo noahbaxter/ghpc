@@ -41,7 +41,17 @@ RUNG = {name: i + 1 for i, name in enumerate(LADDER)}
 
 DRIVE = re.compile(r"^\[drive\] (?:enter (\w+)|(\w+) -> (\w+) after)")
 # Sub-rung probes: name -> (regex, group). Extend as blockers move.
-DETAIL = {"streamEE_state": (re.compile(r"^\[ghpc/strm\].*\bstate=(\d+)"), 1)}
+DETAIL = {
+    "streamEE_state": (re.compile(r"^\[ghpc/strm\].*\bstate=(\d+)"), 1),
+    "song_tick": (re.compile(r"^\[ghpc/song\].*\btick=(-?[\d.]+)"), 1),
+}
+
+# Sub-rungs whose whole meaning is whether the number moved. `game_screen` is
+# the top of LADDER, so once the song load lands the rung cannot say anything
+# more; the chart advancing is the only thing left that separates "a screen
+# appeared" from "the song is playing". For these keys the first and last value
+# are both kept and the span is reported.
+ADVANCE = ["song_tick"]
 
 
 def probe_env():
@@ -94,7 +104,7 @@ def measure(build, secs, hold, verbose):
     p = subprocess.Popen([binary, "GH2_debug.elf"], cwd=WORK, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          text=True, errors="replace", preexec_fn=os.setsid)
-    timeline, detail = [], {}
+    timeline, detail, first = [], {}, {}
     deadline = started + secs
 
     # A silent guest must not outlive the cap. The read loop below only notices
@@ -123,6 +133,7 @@ def measure(build, secs, hold, verbose):
                 d = rx.match(line)
                 if d:
                     detail[key] = d.group(g)
+                    first.setdefault(key, d.group(g))
             if time.time() > deadline:
                 break
     finally:
@@ -135,6 +146,19 @@ def measure(build, secs, hold, verbose):
     end = time.time() - started
     if not timeline:
         return None, "no [drive] lines: run produced no screen data"
+
+    for key in ADVANCE:
+        if key not in detail:
+            continue
+        try:
+            span = float(detail[key]) - float(first[key])
+        except ValueError:
+            continue
+        # Named rather than folded into a bool: "polled once and never again"
+        # and "polled 4000 times at the same tick" are the same verdict here but
+        # different bugs, and the span plus the first value keeps them apart.
+        detail[key + "_from"] = first[key]
+        detail[key + "_advanced"] = "yes" if span > 0.0 else "no"
 
     peak = max(r for _, r, _ in timeline)
     held = confirmed_rung(timeline, end, hold)

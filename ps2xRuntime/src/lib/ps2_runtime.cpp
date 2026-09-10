@@ -1807,6 +1807,55 @@ void PS2Runtime::noteStreamCall(uint8_t *rdram, R5900Context *ctx, uint32_t targ
                  n, self, state, (state - 3u) < 3u ? 1 : 0,
                  changed ? " CHANGED" : "");
 }
+
+// GHPCSONG: is the chart actually advancing, or is game_screen just a screen?
+//
+// The ladder in scripts/progress.py tops out at game_screen, so reaching it
+// scores a win whether or not a single note ever moves. PlayerMatcher::Poll
+// (0x117dd0) is called once per player per frame with the current SongPos,
+// which is the value the whole chart is drawn from, so its leading float
+// advancing over a run is the difference between "a screen appeared" and
+// "the song is playing".
+//
+// ABI, read off the prologue rather than assumed: `move $16, $4` takes this,
+// `move $17, $5` takes the SongPos reference and `mov.s $f20, $f12` takes the
+// float, so it is Poll(this=$a0, ms=$f12, pos=$a1) with the float in an FPR
+// and the pointer keeping its integer slot.
+//
+// SongPos is 0x14 bytes and only its leading float is ever read back
+// (BeatMatcher::GetTick, InSoloNow), so that word is the position.
+namespace
+{
+    std::atomic<unsigned long long> g_songCalls{0ull};
+}
+
+void PS2Runtime::noteSongCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    (void)targetPc;
+    const unsigned long long n = g_songCalls.fetch_add(1ull) + 1ull;
+    const uint32_t self = getRegU32(ctx, 4);
+    const uint32_t posPtr = getRegU32(ctx, 5);
+    const float ms = ctx->f[12];
+
+    uint32_t raw = 0u;
+    if (!guestRead32(rdram, posPtr, raw))
+    {
+        return;
+    }
+    float tick = 0.0f;
+    std::memcpy(&tick, &raw, sizeof(tick));
+
+    // Print the first call, then on a heartbeat. A stuck chart and a chart that
+    // never got polled at all are different failures, and only the heartbeat
+    // tells them apart: the line keeps arriving with the number standing still.
+    if (n != 1ull && (n % 120ull) != 0ull)
+    {
+        return;
+    }
+    std::fprintf(stderr,
+                 "[ghpc/song] #%llu this=0x%08x ms=%.3f tick=%.3f\n",
+                 n, self, (double)ms, (double)tick);
+}
 #endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
@@ -2113,6 +2162,12 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     if (isCall && targetPc == 0x0026BA28u)
     {
         noteStreamCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCSONG: PlayerMatcher::Poll, the per-frame song position.
+    if (isCall && targetPc == 0x00117DD0u)
+    {
+        noteSongCall(rdram, ctx, targetPc);
     }
 
     // GHPCASSERT: name the guest assert at the call, not after the fact.

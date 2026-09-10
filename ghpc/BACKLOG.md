@@ -18,19 +18,30 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Retire `GHPC_STREAM_READY` with a real IOP answer.** `game_screen` is reached
-(`progress.json` rung 9, 2026-09-10) but only because a host probe writes the
-`StreamEE` state word. The real gap: the EE's state 2 handler sends
-`StreamInfoArg` to the IOP as CTL 0x190 and waits for CTL command 2 back, which
-`CtlDispatch_impl__7SynthEE` (0x3eb828, jump table 0x4eb680) turns into
-`StreamEE::Dispatch(id, 2, 0)`. No IOP synth module exists, so it never comes.
-Same missing-module class as the SPU handshake. Chain and addresses in
-`notes/song-load-crash.md`.
+**Find out why the gameplay poll chain never runs.** Measured 2026-09-10 on
+`build-debug` with a same-build control arm, 300s each: under
+`GHPC_STREAM_READY=1` the run holds rung 9 `game_screen` for the full 300s,
+without it the same binary holds rung 8 `loading_screen`. So the stand-in does
+cause the transition. But at `game_screen`, `PlayerMatcher::Poll` (0x117dd0),
+`Player::Poll` (0x112fb0), `BeatMatch::Poll` (0x1259c0) and `BeatMatcher::Poll`
+(0x2727c0) are called **zero** times, while `GamePanel::Poll` (0x107140) is
+called exactly twice in 300s. `StreamEE::Poll` is hot throughout. The screen is
+up and nothing is driving it. `GamePanel::Poll` firing twice and stopping is the
+thread to pull. Evidence and probe addresses in `notes/song-load-crash.md`.
 
-**Then: find out what `game_screen` actually does.** The oracle's ladder tops out
-at rung 9, so it cannot score anything past the screen appearing. Whether notes
-scroll, whether the chart plays, whether audio exists at all: all unmeasured.
-Extending the ladder past `game_screen` is what makes the next stretch loopable.
+**Retire `GHPC_STREAM_READY` with a real IOP answer.** Still the underlying
+gap, and the poll-chain finding is more evidence for it: the stand-in forges the
+result of draining a type 2 `StreamOp` without the op, and the state word it
+writes reverts from 3 to 2 within three `IsReady` calls on the same object. The
+EE's state 2 handler sends `StreamInfoArg` to the IOP as CTL 0x190 and waits for
+CTL command 2 back, which `CtlDispatch_impl__7SynthEE` (0x3eb828, jump table
+0x4eb680 entry 2) turns into `StreamEE::Dispatch(id, 2, 0)`. No IOP synth module
+exists, so it never comes. Same missing-module class as the SPU handshake.
+
+**Scoring for both is in place.** `progress.py` carries a `song_tick` sub-rung
+from `[ghpc/song]`, so rung 9 no longer scores a win on its own: it reports
+`song_tick`, `song_tick_from` and `song_tick_advanced`. Rung 9 with no
+`song_tick` is the screen without the song. Audio is still unmeasured.
 
 ## Next
 

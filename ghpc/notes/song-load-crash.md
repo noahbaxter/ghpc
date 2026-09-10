@@ -321,7 +321,7 @@ no IOP synth module, so the answer never comes and the state word sits at 2
 forever. This is the same missing-module class as the SPU handshake, not a
 separate bug.
 
-## CONTESTED: standing in for that callback, result not established
+## Settled: the stand-in causes the transition, and the transition is not gameplay
 
 `GHPC_STREAM_READY=1` (`ps2_runtime.cpp`, in the `GHPCSTRM` hook, labelled a
 probe like `GHPC_SYNTH_ACK`) writes 3 to `+0x4c` after the word has been pinned
@@ -329,37 +329,53 @@ at 2 for 120 consecutive `IsReady` calls on the same object. The delay is there
 so state 2's own one-shot send runs first. It writes the word rather than
 pushing the op because that is the op's only observable effect.
 
-**Read the caveats below before using this.** The oracle scored `PROGRESSED`,
-rung 8 -> 9, three times. That verdict is close to worthless on its own:
-`progress.py` breaks out of its read loop the instant it sees the top rung, so
-all three runs were killed on the transition line and observed zero frames
-afterwards. The run below is **`bootskip.py --off`**, the full boot:
+**This section used to say the result was contested and that no control had ever
+been run. Both are now closed.** 2026-09-10, `build-debug`, same binary, same
+`bootskip.py --on`, 300s cap, 60s hold, one attempt each, `GHPC_PROBE` set
+identically on both arms so the only variable is the stand-in:
 
-    [ghpc/strm] #309 this=0x00b926c0 state=1 ready=0 CHANGED
-    [ghpc/strm] #310 this=0x00b926c0 state=2 ready=0 CHANGED
-    [ghpc/strm] #429 this=0x00b926c0 STAND-IN wrote state=3 (IOP CTL cmd 2 never arrived)
-    [ghpc/strm] #429 this=0x00b926c0 state=3 ready=1 CHANGED
-    [drive] loading_screen -> game_screen after 0 presses (t=107.9)
+| arm | verdict | held rung | `GamePanel::Poll` calls | `PlayerMatcher::Poll` calls |
+|---|---|---|---|---|
+| `GHPC_STREAM_READY=1` | PROGRESSED | 9 `game_screen`, no bounce | 2 | 0 |
+| probe off (control) | SAME | 8 `loading_screen`, no bounce | 0 | 0 |
 
-A later uncapped run on `build-debug` (330s, probe on) does hold the screen:
-reached at t=73.6, then `cur=0xad4b00 next=0x0 xition=0 name="game_screen"` for
-the remaining ~256s, frames still advancing (contentFrame 1097 -> 1234, presents
-4200), zero `Debug::Fail`, zero exits.
+So the causal claim holds: the stand-in is what moves rung 8 to rung 9, and the
+screen sticks for the full 300s rather than bouncing. The earlier
+`./ghpc/scripts/run.sh` contradiction is not evidence against it; that was a
+release build with no `[drive]` tracing, so it was never a measurement of the
+same thing.
 
-**Open contradiction, do not treat this as settled.** Running vanilla
-`./ghpc/scripts/run.sh` (release, where `GHPC_STREAM_READY` is compiled out:
-`strings` finds it in `build-debug` and not in `build`) alternates forever
-between the loading screen and a mostly dark frame. Either the screen is
-reachable without the probe, which would break the causal claim entirely, or
-what alternates is the present path rather than a UI transition. Release carries
-no `[ghpc/ui]` or `[drive]` tracing, so this is unresolved.
+**But rung 9 is not gameplay, and now there is a number that says so.** Under
+the stand-in, at `game_screen`, for 300 seconds:
 
-**No control was ever run.** There is no same-build A/B with the probe off. The
-`PROGRESSED` verdicts compare against a mark recorded from an earlier build, not
-against a control arm.
+- `Poll__13PlayerMatcherfRC7SongPos` (0x117dd0): **0 calls**
+- `Poll__6PlayerfRC7SongPos` (0x112fb0): **0 calls**
+- `Poll__9BeatMatch` (0x1259c0): **0 calls**
+- `Poll__11BeatMatcherf` (0x2727c0): **0 calls**
+- `Poll__9GamePanel` (0x107140): **2 calls in 300s**
+- `Poll__8StreamEE` (0x26cf58): hot, the probe's 40 line cap reached
 
-**This is a probe, not a fix.** The real work is an IOP-side synth stream module
-that answers CTL 0x190 with CTL command 2.
+The entire beatmatch and player chain never runs. Nothing reads a `SongPos`,
+so no chart exists to advance. `GamePanel::Poll` firing twice and then never
+again is the next thread to pull: the panel is constructed and entered, and its
+per-frame poll does not continue.
+
+The state word does not stick either. Same run, one object, three lines apart:
+
+    [ghpc/strm] #309 this=0x00b80540 STAND-IN wrote state=3 (IOP CTL cmd 2 never arrived)
+    [ghpc/strm] #309 this=0x00b80540 state=3 ready=1 CHANGED
+    [ghpc/strm] #311 this=0x00b80540 state=2 ready=0 CHANGED
+
+`ready=1` lasts long enough for `GamePanel::IsLoaded` to pass once, then the
+game puts the word back to 2. That is consistent with the op never having been
+pushed: the stand-in forges the op's result and not the op, so whatever else
+draining a type 2 `StreamOp` sets up never happens. There are also several live
+`StreamEE` objects in one run (0x00e88c70, 0x00ec1900, 0x00b80540, 0x00fa31e0),
+which the hook's single pinned-object tracker was not written for.
+
+**This is a probe, not a fix, and it is now clear it could never have been one.**
+The real work is an IOP-side synth stream module that answers CTL 0x190 with CTL
+command 2.
 
 ## Ruled out, with evidence. Do not re-chase these.
 
@@ -396,6 +412,18 @@ that answers CTL 0x190 with CTL command 2.
   per frame, so the chain reaches the last gate every frame.
 - **Not anything outside `Poll__8StreamEE` writing `+0x4c`.** Whole-`.text` scan,
   above.
+- **Not a measurement gap in the ladder any more, and not gameplay.** The
+  oracle now carries a `song_tick` sub-rung from `PlayerMatcher::Poll`
+  (0x117dd0), so `game_screen` no longer scores a win by itself. Measured
+  2026-09-10: the hook is wired correctly and the function is simply never
+  called. Proven by a control that does not touch the new code at all,
+  `GHPC_PROBE=0x117dd0,0x26ba28` in the same run: 0x26ba28 (`StreamEE::IsReady`)
+  hit its 40 line cap while 0x117dd0 logged zero. "The probe is broken" and "the
+  chart never polls" are different claims and this separates them.
+- **Not the release/debug contradiction.** The `run.sh` alternating-frames
+  observation was a release build with no `[drive]` or `[ghpc/ui]` tracing, so
+  it never measured the screen at all. The same-build A/B above supersedes it.
+
 - **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
   jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it
   at 0x26d040 is the `state != 2` assert, not something the success path walks
@@ -423,6 +451,16 @@ Uncommitted at time of writing, all diagnostic:
 - `[ghpc/spu]` prints the SPU send handshake globals.
 - `GHPC_SYNTH_ACK` stands in for the missing SYNTH_R module. A probe, not a fix.
 - `GHPC_STREAM_READY` stands in for the missing IOP CTL command 2. Also a probe.
+- `[ghpc/song]` prints `PlayerMatcher::Poll`'s `SongPos`, which is what makes
+  "the chart is advancing" measurable rather than assumed. The ABI was read off
+  the prologue rather than assumed: `move $16, $4` / `mov.s $f20, $f12` /
+  `move $17, $5` gives `Poll(this=$a0, ms=$f12, pos=$a1)`, the float in an FPR
+  with the pointer keeping its integer slot. `SongPos` is 0x14 bytes and only
+  its leading float is read back, so that word is the position.
+  `scripts/progress.py` turns it into three sub-rung fields, `song_tick`,
+  `song_tick_from` and `song_tick_advanced`, because "polled once and never
+  again" and "polled 4000 times at a standstill" are the same verdict but
+  different bugs.
 
 Two defects in the diagnostics themselves, found while using them:
 

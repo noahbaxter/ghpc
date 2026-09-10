@@ -125,11 +125,14 @@ CTL command 2, and the runtime's own trace shows that send going out to
 `sid=0x75433178` marked **unhandled**. No IOP synth module services it. Chain and
 addresses in `notes/song-load-crash.md`, whose ruled-out list is long.
 
-`GHPC_STREAM_READY` fakes that answer. **It is not established that it works.**
-It holds `game_screen` for 256s on `build-debug`, but stock `run.sh` alternates
-between the loading screen and a dark frame forever with the probe compiled out,
-and that is unexplained. No control arm was ever run. See the `CONTESTED` section
-of the topic note before building on it.
+`GHPC_STREAM_READY` fakes that answer. It is now established what it does and
+what it does not do, by a same-build A/B on 2026-09-10: with the probe the run
+holds rung 9 `game_screen` for 300s, without it the same binary holds rung 8
+`loading_screen`, so the probe is genuinely what moves the screen. But at that
+screen `PlayerMatcher::Poll`, `Player::Poll`, `BeatMatch::Poll` and
+`BeatMatcher::Poll` are all called **zero** times in 300s and `GamePanel::Poll`
+twice, so nothing reads a `SongPos` and there is no chart to advance. Rung 9
+under the probe is a screen, not gameplay. Details in the topic note.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
 a drop-in**. Check it for a function's name and shape before disassembling. It
@@ -138,13 +141,17 @@ function. Do not build a sync mechanism.
 
 ## Known gaps
 
-- **The ladder saturates at `game_screen`.** Rung 9 is the top, so once the song
-  load lands the oracle cannot score another round. Nothing past the screen
-  appearing is measurable: whether notes scroll, whether the chart plays, whether
-  audio exists. Extending `LADDER` is a prerequisite for the next loop, not
-  cleanup. Do not set a stop condition at the top of a saturating ladder; it
-  guarantees the loop ends after one success with no second round to catch an
-  error in the first.
+- **The ladder still saturates at `game_screen`, but no longer scores it as a
+  win on its own.** `progress.py` now carries a `song_tick` sub-rung read from
+  `PlayerMatcher::Poll` (0x117dd0) via the `[ghpc/song]` hook, reporting
+  `song_tick`, `song_tick_from` and `song_tick_advanced`. Rung 9 with
+  `song_tick_advanced=no`, or with no `song_tick` at all, is the screen without
+  the song. Extending `LADDER` past rung 9 is still open; the sub-rung buys the
+  next few rounds, not the ones after. Do not set a stop condition at the top of
+  a saturating ladder; it guarantees the loop ends after one success with no
+  second round to catch an error in the first.
+- **Audio is still unmeasured.** Nothing scores whether a sample ever reaches
+  the SPU. `song_tick` says the chart is running, not that it is audible.
 - **Boot reliability is not established.** `BACKLOG.md` cites 6 of 6 runs
   reaching `loading_screen` on 2026-09-09. A run on 2026-09-10 stalled before
   `main_screen` and the runtime's thread census killed it. `progress.py` scores
