@@ -2282,48 +2282,6 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         noteGameCall(rdram, ctx, targetPc);
     }
 
-    // GHPCSTART: latch the one instant the count-in ends.
-    if (isCall && targetPc == 0x001070F8u && !g_ghpcGameStarted.exchange(true))
-    {
-        std::fprintf(stderr, "[ghpc/start] StartGame entered, count-in over\n");
-    }
-
-    // GHPCCOUNTIN: shorten the count-in at its source, not at the gate.
-    //
-    // StartIntro (0x1074e8) works out how long the intro camera shot runs
-    //   1078f8  div.s $f20, $f0, $f1     $f1 = 41f00000 = 30.0, frames -> seconds
-    // and hands it straight to SetStartTime
-    //   10799c  jal 0x107e88             SetStartTime(this, $f20)
-    // which is the only writer of the clock the StartGame gate reads: it calls
-    // SetSecondsBeat(TheTaskMgr, $f12, $f12 * 1000 / GetTempo()) and then
-    // SetRealtime(true), whose SetTimeOffset is what fills mUnk78. So every
-    // derived value, the beat included, comes out of this one float.
-    //
-    // That is why the clamp goes here and not on mUnk78. Poking mUnk78 later
-    // moves the gate while leaving TaskMgr's seconds and the beat where the
-    // ten second shot put them, which is a guest in two minds about what time
-    // it is. Clamping the argument leaves the game to compute all of it, and
-    // it is the same lever the game pulls itself: mFastIntro (+0x68) takes the
-    // branch at 0x1077fc that skips FindCameraShot, which is to say it feeds
-    // SetStartTime a smaller number by exactly this route.
-    //
-    // A probe, not a fix. The count-in is real and the camera shot is real;
-    // this is a harness for looking at what comes after them, and it stays out
-    // of any run that touches the recorded mark.
-    if (isCall && targetPc == 0x00107E88u)
-    {
-        static const float floorSecs = []() -> float {
-            const char *e = std::getenv("GHPC_COUNTIN");
-            return e ? (float)std::atof(e) : 0.0f;
-        }();
-        if (floorSecs > 0.0f && ctx->f[12] < -floorSecs)
-        {
-            std::fprintf(stderr, "[ghpc/countin] %.3f -> %.3f\n",
-                         (double)ctx->f[12], (double)-floorSecs);
-            ctx->f[12] = -floorSecs;
-        }
-    }
-
     // GHPCASSERT: name the guest assert at the call, not after the fact.
     // EeScheduler::dumpStackStrings scavenges the stalled stack for printable
     // runs, which is why the text has been arriving as a fragment ("Data (").
@@ -2373,6 +2331,66 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                      depth, latch, sourcePc, text);
     }
 #endif
+
+    // GHPCCOUNTIN and GHPCSTART live OUTSIDE the diagnostics block on purpose.
+    //
+    // Every throughput number this project has on record comes from
+    // build-debug, and the run that produced the last one wrote 140,350 lines
+    // of formatted stderr in 600 seconds. Sizing the Rnd seam against that is
+    // sizing it against the logging. Measuring a release build instead needs
+    // exactly one thing the release build did not have: a way to reach
+    // gameplay without waiting out the ten second count-in. GHPC_PAD_DRIVE and
+    // the [drive], [fps] and [eerate] reporters were already unconditional, so
+    // this is the last piece.
+    //
+    // The cost when the knob is unset is one load and test of a cached bool
+    // that never changes, which the branch predictor will not miss twice.
+    // Calling getenv here instead would put a lock on the hottest path in the
+    // runtime.
+    //
+    // GHPCCOUNTIN shortens the count-in at its source rather than at the gate.
+    // StartIntro (0x1074e8) works out how long the intro camera shot runs
+    //   1078f8  div.s $f20, $f0, $f1     $f1 = 41f00000 = 30.0, frames -> secs
+    // and hands it straight to SetStartTime
+    //   10799c  jal 0x107e88             SetStartTime(this, $f20)
+    // which is the only writer of the clock the StartGame gate reads: it calls
+    // SetSecondsBeat(TheTaskMgr, $f12, $f12 * 1000 / GetTempo()) and then
+    // SetRealtime(true), whose SetTimeOffset is what fills mUnk78. So every
+    // derived value, the beat included, comes out of this one float.
+    //
+    // That is why the clamp goes here and not on mUnk78. Poking mUnk78 later
+    // moves the gate while leaving TaskMgr's seconds and the beat where the ten
+    // second shot put them, which is a guest in two minds about what time it
+    // is. Clamping the argument leaves the game to compute all of it, and it is
+    // the same lever the game pulls itself: mFastIntro (+0x68) takes the branch
+    // at 0x1077fc that skips FindCameraShot, which is to say it feeds
+    // SetStartTime a smaller number by exactly this route.
+    //
+    // A probe, not a fix. The count-in is real and the camera shot is real;
+    // this is a harness for looking at what comes after them, and it stays out
+    // of any run that touches the recorded mark.
+    {
+        static const float s_countInFloor = []() -> float {
+            const char *e = std::getenv("GHPC_COUNTIN");
+            return e ? (float)std::atof(e) : 0.0f;
+        }();
+        static const bool s_countInOn = (s_countInFloor > 0.0f);
+        if (s_countInOn && isCall)
+        {
+            // GHPCSTART: latch the one instant the count-in ends, so the frame
+            // dumper can spend its budget on gameplay instead of on boot.
+            if (targetPc == 0x001070F8u && !g_ghpcGameStarted.exchange(true))
+            {
+                std::fprintf(stderr, "[ghpc/start] StartGame entered, count-in over\n");
+            }
+            if (targetPc == 0x00107E88u && ctx->f[12] < -s_countInFloor)
+            {
+                std::fprintf(stderr, "[ghpc/countin] %.3f -> %.3f\n",
+                             (double)ctx->f[12], (double)-s_countInFloor);
+                ctx->f[12] = -s_countInFloor;
+            }
+        }
+    }
 
     // Every inter-function transfer is also a deterministic EE safe point.
     // Backward edges inside generated functions use eeCheckpointDue(), while
