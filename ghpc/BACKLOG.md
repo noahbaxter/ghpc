@@ -36,10 +36,10 @@ happened. Most of it already exists: `GHPC_PAD_DRIVE` emits an ordinal screen
 ladder every run, and `checkrun.sh` already retries to tell a hang from a
 regression. Missing: a tracked high-water mark to diff against instead of a fixed
 target, a sub-rung state vector for when the screen does not move, and a
-re-measured boot success rate. `checkrun.sh` records boot hanging roughly 2 in 3
-runs when it was written; three runs on 2026-09-09 all reached `loading_screen`,
-which is not a measurement. An agent loop on a 2-in-3 oracle will thrash.
-Design in `.planning/2026-09-09-work-spine-design.md` section 2.
+a sub-rung state vector for when the screen does not move. Boot reliability is
+**measured and fine**: 6 of 6 runs on 2026-09-09 reached `loading_screen`, so the
+"roughly 2 in 3 hang" in `checkrun.sh`'s header is stale and an agent loop will
+not thrash on it. Design in `.planning/2026-09-09-work-spine-design.md` section 2.
 
 **Override layer.** No hand-written function body can survive a build today:
 staging does `rsync --delete` from generated output into a gitignored
@@ -57,10 +57,8 @@ layer also makes VIF1, VU1, GIF, MFIFO and the GS rasterizer dead code. Do not
 
 ## Later
 
-- **Boot intro skip.** Unverified hypothesis: the sequence is DTA-driven and
-  skippable as a data-layer change. One cheap check with `scripts/dtb.py`. Would
-  also dodge the video seam, since `PsMovie`/`Video` drive the IPU outside `Rnd`.
-- **Video seam.** Only if the intro is not skippable.
+- **Video seam.** Deprioritised: `scripts/bootskip.py --on` skips the intro
+  video entirely, so the IPU seam is not on the path to gameplay.
 - **M8 input.** HID guitar, calibration, latency against a tuned PCSX2.
 - **GH1 and 80s.** Symbolized debug builds in `work/elf-debug/`. GH1 has 8,433
   symbols against GH2's 12,663, suggesting an earlier prototype. Verify before
@@ -68,6 +66,14 @@ layer also makes VIF1, VU1, GIF, MFIFO and the GS rasterizer dead code. Do not
 - **SPU handshake stall.** Real and unfixed, but proven not to block the song
   load: `GHPC_SYNTH_ACK=1` removes exactly `SPUSendBusy` and `SynthPoll` from the
   working set and changes nothing else.
+
+**Boot skip is available and doubles iteration speed.**
+`ghpc/scripts/bootskip.py --on` flips one 11 byte symbol in `ui/gen/init.dtb` so
+boot goes straight to `main_screen`. Measured: `main_screen` at t=6.3 instead of
+t=38.8, `loading_screen` at t=41.6 instead of t=86.3, menu fully navigable.
+Reversible (`--off` restores byte-identical) and idempotent. **Caveat:** it skips
+whatever `bootup_load` initialises, so confirm any song-load or audio repro under
+`--off` before trusting it.
 
 ## Deferred
 
