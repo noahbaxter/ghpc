@@ -41,6 +41,7 @@ supersede earlier ones and topic notes supersede both.
 | rung | 8 of 9 |
 | recorded | 2026-09-09 23:46:48 |
 | streamEE state | `2` |
+| probes | none, stock build |
 
 <!-- PROGRESS:END -->
 
@@ -53,8 +54,20 @@ That rung is the floor. A round that lowers it has broken something.
    what result means pass, what means fail, and what you will do in each case.
    This is not ceremony. Three build-and-run cycles were lost in one session to
    runs that ended in "it did not finish, I do not know why".
+
+   **The metric must not be downstream of the change.** If you traced a gate and
+   then wrote the value that gate compares against, measuring the gate proves
+   nothing: you have measured your own edit. A round lost to exactly this on
+   2026-09-10, in detail in `notes/song-load-crash.md`. Before you build, say
+   out loud which outcome the change makes impossible. If the answer is "the
+   failing one", the metric is wrong, not the hypothesis.
 3. **Change one thing.** One hypothesis, one variable.
-4. **Measure.** `python3 ghpc/scripts/progress.py`
+4. **Measure, with a control.** `python3 ghpc/scripts/progress.py`
+
+   Run it **both ways on the same build**, with the change active and inactive.
+   A verdict against the stored mark is not a control: the mark came from a
+   different build at a different time. Without the off arm you cannot tell your
+   change from anything else that moved in between.
 5. **Act on the verdict**, which is one of exactly four:
 
        PROGRESSED          rung went up. Record it, update the queue, pick the next target.
@@ -76,6 +89,14 @@ That rung is the floor. A round that lowers it has broken something.
 - **Three outcomes, never two.** Never let "no change" and "the run told me
   nothing" collapse into one bucket. That distinction is why the oracle has a
   separate exit code for it.
+- **A screen only counts if it holds.** `progress.py --hold` (default 60s) scores
+  the highest rung the run stayed on, not the highest it touched. Touch-and-fall
+  prints `BOUNCED` and is refused for `--record`. The oracle used to stop reading
+  the moment it saw the top rung, so it observed zero frames afterwards and
+  scored a bounce as a win. It now always runs to `--secs`.
+- **A mark carries its probes.** Any `GHPC_*` set for a run is stored with the
+  mark and rendered above. A floor set with a probe on is not a floor for a stock
+  build, and a run whose probes differ from the mark's prints `ENV MISMATCH`.
 - **Check `python3 ghpc/scripts/bootskip.py --status` before trusting a repro.**
   When it is `on`, boot skips `bootup_load`, the intro video and both logo
   screens, halving time to `loading_screen`. It is usually left on for speed. It
@@ -97,12 +118,36 @@ That rung is the floor. A round that lowers it has broken something.
 
 ## Current target
 
-See `ghpc/BACKLOG.md`. As of this writing it is the song load: `StreamEE::mState`
-is pinned at 2 and needs 3, 4 or 5. The full gate chain is traced in
-`notes/song-load-crash.md` with each link proven by control flow. Open: what
-advances 2 to 3, and whether anything outside `Poll__8StreamEE` writes `+0x4c`.
+See `ghpc/BACKLOG.md`. As of this writing it is the song load. What the state
+word waits on is now known and confirmed from two directions: the EE's state 2
+handler sends `StreamInfoArg` as CTL 0x190 and blocks until the IOP answers with
+CTL command 2, and the runtime's own trace shows that send going out to
+`sid=0x75433178` marked **unhandled**. No IOP synth module services it. Chain and
+addresses in `notes/song-load-crash.md`, whose ruled-out list is long.
+
+`GHPC_STREAM_READY` fakes that answer. **It is not established that it works.**
+It holds `game_screen` for 256s on `build-debug`, but stock `run.sh` alternates
+between the loading screen and a dark frame forever with the probe compiled out,
+and that is unexplained. No control arm was ever run. See the `CONTESTED` section
+of the topic note before building on it.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
 a drop-in**. Check it for a function's name and shape before disassembling. It
 supplied `mState` at `0x4c` and the state enum, and did not have the blocking
 function. Do not build a sync mechanism.
+
+## Known gaps
+
+- **The ladder saturates at `game_screen`.** Rung 9 is the top, so once the song
+  load lands the oracle cannot score another round. Nothing past the screen
+  appearing is measurable: whether notes scroll, whether the chart plays, whether
+  audio exists. Extending `LADDER` is a prerequisite for the next loop, not
+  cleanup. Do not set a stop condition at the top of a saturating ladder; it
+  guarantees the loop ends after one success with no second round to catch an
+  error in the first.
+- **Boot reliability is not established.** `BACKLOG.md` cites 6 of 6 runs
+  reaching `loading_screen` on 2026-09-09. A run on 2026-09-10 stalled before
+  `main_screen` and the runtime's thread census killed it. `progress.py` scores
+  that `MEASUREMENT_FAILED` and retries up to `--attempts`, so it is invisible in
+  the verdict unless every attempt fails. Failed attempts now print, but the
+  underlying rate is unmeasured.

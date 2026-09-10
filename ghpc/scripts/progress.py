@@ -44,17 +44,58 @@ DRIVE = re.compile(r"^\[drive\] (?:enter (\w+)|(\w+) -> (\w+) after)")
 DETAIL = {"streamEE_state": (re.compile(r"^\[ghpc/strm\].*\bstate=(\d+)"), 1)}
 
 
-def measure(build, secs, verbose):
-    """One run. Returns (rung, screen, detail, reason_if_failed)."""
+def probe_env():
+    """The GHPC_* knobs this run inherited, minus the two we always set.
+
+    A mark recorded with a probe enabled is not comparable to one without, and
+    the file used to have no way to say so. A rung 9 recorded under
+    GHPC_STREAM_READY once became the floor for every later round.
+    """
+    always = {"GHPC_HIDE_WINDOW", "GHPC_PAD_DRIVE"}
+    return {k: v for k, v in sorted(os.environ.items())
+            if k.startswith("GHPC_") and k not in always}
+
+
+def confirmed_rung(timeline, end, hold):
+    """Highest rung the run actually stayed on.
+
+    `timeline` is [(elapsed, rung, name)] in order. A rung counts only if,
+    after it was first reached, no lower rung was ever reported again AND it
+    survived `hold` seconds. Reaching a screen and falling out of it is not
+    progress, and the previous version of this file could not tell the two
+    apart: it broke out of the read loop the moment the top rung appeared, so
+    it observed zero frames afterwards and scored a bounce as a win.
+    """
+    best = 0
+    for i, (t, rung, name) in enumerate(timeline):
+        if any(later_rung < rung for _, later_rung, _ in timeline[i + 1:]):
+            continue  # fell out of it later, so it was never really reached
+        if (end - t) < hold:
+            continue  # not observed long enough to call it held
+        if rung > best:
+            best = rung
+    return best
+
+
+def measure(build, secs, hold, verbose):
+    """One run. Returns (result_dict, reason_if_failed).
+
+    Always runs to the cap. It must never stop early on reaching the top rung:
+    the single most important question about a new best is whether it stays,
+    and halting on arrival makes that question unanswerable.
+    """
     binary = os.path.join(ROOT, build, "ps2xRuntime", "ps2EntryRunner")
     if not os.path.exists(binary):
-        return None, None, {}, "binary missing: %s" % binary
+        return None, "binary missing: %s" % binary
+    if hold >= secs:
+        return None, "hold (%ds) must be shorter than the cap (%ds)" % (hold, secs)
     env = dict(os.environ, GHPC_HIDE_WINDOW="1", GHPC_PAD_DRIVE="cross")
+    started = time.time()
     p = subprocess.Popen([binary, "GH2_debug.elf"], cwd=WORK, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          text=True, errors="replace", preexec_fn=os.setsid)
-    best, screen, detail, seen_any = 0, None, {}, False
-    deadline = time.time() + secs
+    timeline, detail = [], {}
+    deadline = started + secs
 
     # A silent guest must not outlive the cap. The read loop below only notices
     # the deadline when a line arrives, so the kill is armed independently.
@@ -77,14 +118,12 @@ def measure(build, secs, verbose):
                     raise SystemExit(
                         "unknown screen %r. Add it to LADDER in progress.py "
                         "rather than letting it score zero." % name)
-                seen_any = True
-                if RUNG[name] > best:
-                    best, screen = RUNG[name], name
+                timeline.append((time.time() - started, RUNG[name], name))
             for key, (rx, g) in DETAIL.items():
                 d = rx.match(line)
                 if d:
                     detail[key] = d.group(g)
-            if best >= len(LADDER) or time.time() > deadline:
+            if time.time() > deadline:
                 break
     finally:
         timer.cancel()
@@ -93,9 +132,28 @@ def measure(build, secs, verbose):
         except Exception:
             pass
         p.wait()
-    if not seen_any:
-        return None, None, {}, "no [drive] lines: run produced no screen data"
-    return best, screen, detail, None
+    end = time.time() - started
+    if not timeline:
+        return None, "no [drive] lines: run produced no screen data"
+
+    peak = max(r for _, r, _ in timeline)
+    held = confirmed_rung(timeline, end, hold)
+    final = timeline[-1][1]
+    return {
+        "rung": held,
+        "screen": LADDER[held - 1] if held else None,
+        "peak_rung": peak,
+        "peak_screen": LADDER[peak - 1],
+        "final_screen": timeline[-1][2],
+        # peak above held means it got somewhere and did not stay. That is the
+        # exact shape a metric-satisfying poke produces, so it is named rather
+        # than averaged away.
+        "bounced": peak > held,
+        "ran_secs": round(end, 1),
+        "hold_secs": hold,
+        "detail": detail,
+        "env": probe_env(),
+    }, None
 
 
 def load_mark():
@@ -111,8 +169,19 @@ def _rendered_text(text, m):
             "| furthest screen | `%s` |" % m["screen"],
             "| rung | %d of %d |" % (m["rung"], len(LADDER)),
             "| recorded | %s |" % m["recorded"]]
+    if m.get("build"):
+        body.append("| build | `%s` |" % m["build"])
+    if m.get("hold_secs"):
+        body.append("| held for | %ss |" % m["hold_secs"])
     for k, v in sorted(m.get("detail", {}).items()):
         body.append("| %s | `%s` |" % (k.replace("_", " "), v))
+    # A floor set with a probe on is not a floor for a default build. Naming the
+    # probes here is what stops the next round inheriting a number it cannot
+    # reproduce.
+    env = m.get("env", {})
+    body.append("| probes | %s |" % (
+        "  ".join("`%s=%s`" % kv for kv in sorted(env.items())) if env
+        else "none, stock build"))
     block = "%s\n<!-- generated by scripts/progress.py --render, do not edit -->\n\n%s\n\n%s" % (
         BEGIN, "\n".join(body), END)
     if BEGIN not in text or END not in text:
@@ -148,7 +217,9 @@ def main():
     ap.add_argument("--render", action="store_true",
                     help="rewrite the generated block in NEXT.md from the stored mark")
     ap.add_argument("--build", default="build-debug")
-    ap.add_argument("--secs", type=int, default=180, help="cap per attempt")
+    ap.add_argument("--secs", type=int, default=300, help="cap per attempt")
+    ap.add_argument("--hold", type=int, default=60,
+                    help="seconds a screen must survive before it counts")
     ap.add_argument("--attempts", type=int, default=3)
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
@@ -173,38 +244,55 @@ def main():
         print(json.dumps(m, indent=2) if m else "no mark recorded")
         return 0
 
-    rung = screen = None
-    detail, reasons = {}, []
+    run, reasons = None, []
     for i in range(a.attempts):
-        rung, screen, detail, why = measure(a.build, a.secs, a.verbose)
+        run, why = measure(a.build, a.secs, a.hold, a.verbose)
         if why is None:
             break
         reasons.append("attempt %d: %s" % (i + 1, why))
         sys.stderr.write("attempt %d failed to measure (%s), retrying\n" % (i + 1, why))
 
-    if rung is None:
+    if run is None:
         out = {"verdict": "MEASUREMENT_FAILED", "reasons": reasons}
         print(json.dumps(out) if a.json else
               "MEASUREMENT_FAILED after %d attempts. Do not conclude anything.\n  %s"
               % (a.attempts, "\n  ".join(reasons)))
         return 2
 
+    rung, screen, detail = run["rung"], run["screen"], run["detail"]
     mark = load_mark()
     prev = mark["rung"] if mark else 0
     verdict = "PROGRESSED" if rung > prev else ("SAME" if rung == prev else "REGRESSED")
     if mark is None:
         verdict = "PROGRESSED"
 
-    result = {"verdict": verdict, "rung": rung, "screen": screen,
-              "previous_rung": prev, "previous_screen": mark["screen"] if mark else None,
-              "detail": detail, "ladder_size": len(LADDER)}
+    result = dict(run, verdict=verdict, previous_rung=prev,
+                  previous_screen=mark["screen"] if mark else None,
+                  ladder_size=len(LADDER), build=a.build,
+                  failed_attempts=reasons)
+
+    # A mark set under a probe is not a floor the next round can be judged
+    # against. Comparing across different GHPC_* knobs is a category error, so
+    # it is refused rather than reported as a number.
+    prev_env = mark.get("env", {}) if mark else {}
+    if verdict != "SAME" and prev_env != run["env"]:
+        result["env_mismatch"] = {"mark": prev_env, "run": run["env"]}
 
     if a.record and verdict != "REGRESSED":
-        with open(MARK, "w") as f:
-            json.dump({"rung": rung, "screen": screen, "detail": detail,
-                       "recorded": time.strftime("%Y-%m-%d %H:%M:%S")}, f, indent=2)
-            f.write("\n")
-        result["recorded"] = True
+        if run["bounced"]:
+            sys.stderr.write(
+                "refusing to record: reached %s but fell out of it. A rung that "
+                "does not hold is not a floor.\n" % run["peak_screen"])
+            result["recorded"] = False
+        else:
+            with open(MARK, "w") as f:
+                json.dump({"rung": rung, "screen": screen, "detail": detail,
+                           "env": run["env"], "build": a.build,
+                           "hold_secs": run["hold_secs"],
+                           "recorded": time.strftime("%Y-%m-%d %H:%M:%S")},
+                          f, indent=2)
+                f.write("\n")
+            result["recorded"] = True
         # Recording without re-rendering is how the handoff goes stale, so the
         # two are the same action rather than two things to remember. A render
         # failure must not exit 1 here: exit 1 means REGRESSED to the caller, and
@@ -221,8 +309,24 @@ def main():
     else:
         print("%s  rung %d/%d (%s), was %d (%s)"
               % (verdict, rung, len(LADDER), screen, prev, result["previous_screen"]))
+        print("  ran %ss, a screen counts after %ss held; ended on %s"
+              % (run["ran_secs"], run["hold_secs"], run["final_screen"]))
+        if run["bounced"]:
+            print("  BOUNCED: touched %s (rung %d) and fell out of it. Not scored."
+                  % (run["peak_screen"], run["peak_rung"]))
+        if run["env"]:
+            print("  probes active: "
+                  + "  ".join("%s=%s" % kv for kv in sorted(run["env"].items())))
+        if "env_mismatch" in result:
+            print("  ENV MISMATCH: the mark was set under %s, this run under %s. "
+                  "Not comparable."
+                  % (result["env_mismatch"]["mark"] or "no probes",
+                     result["env_mismatch"]["run"] or "no probes"))
         if detail:
             print("  detail: " + "  ".join("%s=%s" % kv for kv in sorted(detail.items())))
+        if reasons:
+            print("  %d attempt(s) failed to measure first: %s"
+                  % (len(reasons), "; ".join(reasons)))
     return 1 if verdict == "REGRESSED" else 0
 
 
