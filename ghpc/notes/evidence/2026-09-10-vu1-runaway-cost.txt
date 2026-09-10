@@ -1,0 +1,48 @@
+VU1 runaway: cost attribution, 2026-09-10, build-debug
+
+Instructions counted per termination reason. An earlier version of this
+census recorded only a per-program total and the cut-off cost was then
+DERIVED as (budget runs x maxCycles). That is wrong: maxCycles is a
+cycle budget and a stalled run burns cycles without retiring
+instructions. It produced a confidently wrong '89% of VU1 time'.
+The numbers below are measured, not derived.
+
+GHPC_VU1_BUDGET=1000000, 420s run (this run did NOT reach StartGame):
+[vu1/census] total=15000 pc0xcd8{ebit=13558/31M budget=1277/364M offend=0 stop=117 avgEbit=2296 avgBudget=285786 maxInstr=1000000} pc0x30b0{ebit=27/0M budget=21/21M offend=0 stop=0 avgEbit=8216 avgBudget=1000000 maxInstr=1000000}
+
+  healthy (ebit) invocation   2296 instructions
+  cut-off (budget) invocation 285786 instructions, 124x
+  8.6% of runs consume 92% of all VU1 instructions
+  pc0x30b0 cut-off runs average exactly 1000000: unbounded at any cap
+
+GHPC_VU1_BUDGET=65536 (default), 600s run that DID reach gameplay:
+[vu1/census] total=100000 pc0xcd8{ebit=65893 budget=30961 offend=0 stop=2283 avgInstr=22982 maxInstr=65536} pc0x2e60{ebit=87 budget=0 offend=0 stop=0 avgInstr=112 maxInstr=167} pc0x30b0{ebit=749 budget=27 offend=0 stop=0 avgInstr=2869 maxInstr=65536}
+
+CONFOUND, stated rather than buried: the two runs are not the same
+regime. At budget=1000000 the guest never got through the count-in in
+420s, so its census describes menus and loading. Do not read the
+31% -> 20% change in cut-off rate as truncation being cured; the
+populations differ.
+
+That slowdown is itself the evidence: handing the programs 15x more
+rope made the guest slower and delivered no extra progress. Honest work
+being truncated would complete; a runaway just runs longer.
+
+Loop addresses, from the pc-visit histogram of cut-off runs:
+[vu1/loop] mscal cut off at startPc=0xcd8 instrs=62928 distinctPcs=385
+[vu1/loop]   backedge 0x0bd0 -> 0x0b10 taken=2606
+[vu1/loop]   backedge 0x0d10 -> 0x0000 taken=1
+[vu1/loop] mscal cut off at startPc=0x30b0 instrs=65536 distinctPcs=195
+[vu1/loop]   backedge 0x34d0 -> 0x32b0 taken=937
+[vu1/loop]   backedge 0x3710 -> 0x3448 taken=95
+[vu1/loop]   backedge 0x3658 -> 0x3380 taken=85
+[vu1/loop]   backedge 0x3700 -> 0x33c0 taken=70
+[vu1/loop] mscal cut off at startPc=0x30b0 instrs=65536 distinctPcs=195
+[vu1/loop]   backedge 0x34d0 -> 0x32b0 taken=934
+[vu1/loop]   backedge 0x3710 -> 0x3448 taken=124
+[vu1/loop]   backedge 0x3720 -> 0x32d0 taken=103
+
+Different runaways stall in DIFFERENT loops (0x0b10, 0x32b0, 0x0e98,
+0x15c0), so this is not one mis-decoded branch. offend=0 everywhere:
+the pc never leaves code memory. 0x0b10 is also where the [projw] probe
+reports the projection matrix going corrupt.

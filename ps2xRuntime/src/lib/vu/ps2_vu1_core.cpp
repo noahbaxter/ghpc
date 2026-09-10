@@ -11,6 +11,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <vector>
 #include <utility>
 #include <cstdlib>
 #include <cstring>
@@ -2184,11 +2185,49 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     // different responses and a sampled probe cannot tell them apart.
     uint64_t ghpcInstrs = 0ull;
     const bool ghpcCensus = (m_unit == Unit::VU1);
+
+    // GHPCVULOOP: make the runaway name itself.
+    //
+    // The census says a third of these programs burn the whole budget with
+    // offend=0, which means the pc never leaves code memory: it is a loop that
+    // does not exit, not a jump into garbage. Counting visits per pc turns that
+    // into an address. The tight cycle shows up as a handful of slots with tens
+    // of thousands of hits each while the rest of the program has one or two,
+    // and the branch sitting at the bottom of that cycle is the instruction
+    // that was supposed to end it.
+    //
+    // Micro memory is 16KB of 8 byte instruction pairs, so 2048 slots. The
+    // buffer is a member rather than a local so it is not reallocated per
+    // MSCAL, and the whole thing is off unless GHPC_VU1_LOOP is set, because
+    // this counter sits in the hottest loop in the interpreter.
+    static const int ghpcLoopDumps = []() {
+        const char *e = std::getenv("GHPC_VU1_LOOP");
+        return e ? std::atoi(e) : 0;
+    }();
+    static int ghpcLoopDumped = 0;
+    const bool ghpcLoopProbe = (ghpcLoopDumps > 0 && m_unit == Unit::VU1 &&
+                                ghpcLoopDumped < ghpcLoopDumps);
+    if (ghpcLoopProbe)
+    {
+        m_ghpcPcHits.assign(PS2_VU1_CODE_SIZE / 8u, 0u);
+    }
+    // Back edges taken during this MSCAL, keyed (fromPc << 16) | toPc. Read off
+    // the interpreter's own branch resolution rather than decoded by hand: the
+    // tree has no VU disassembler, and a hand rolled opcode reading is exactly
+    // the kind of guess that produces a confident wrong answer. Whatever the
+    // interpreter actually jumped on is what the loop actually is.
+    std::map<uint32_t, uint32_t> ghpcBackEdges;
 #endif
     while (m_cycle < budgetEnd && !m_stopRequested)
     {
 #if GHPC_DIAG
         ++ghpcInstrs;
+        if (ghpcLoopProbe)
+        {
+            const uint32_t slot = m_state.pc >> 3;
+            if (slot < m_ghpcPcHits.size())
+                ++m_ghpcPcHits[slot];
+        }
 #endif
         commitReadyPipelines();
 #if GHPC_DIAG
@@ -2509,8 +2548,13 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         {
             if (m_state.branchDelay == 0u)
             {
+                const uint32_t ghpcFrom = m_state.pc;
                 m_state.pc = m_state.branchTarget & microAddressMask();
                 m_state.branchPending = false;
+#if GHPC_DIAG
+                if (ghpcLoopProbe && m_state.pc < ghpcFrom)
+                    ++ghpcBackEdges[((ghpcFrom & 0xFFFFu) << 16) | (m_state.pc & 0xFFFFu)];
+#endif
             }
             else
             {
@@ -2572,14 +2616,91 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         else if (m_state.pc + 8u > codeSize) why = kOffEnd;
         else                       why = kBudget;
 
-        struct Bucket { uint64_t n[4]; uint64_t instrs; uint64_t maxInstrs; };
+        // Instructions are counted PER TERMINATION REASON, not just per
+        // program. The first version of this census recorded only a total, and
+        // the cost of the cut-off runs was then derived as
+        // (budget runs x maxCycles), which is wrong: maxCycles is a CYCLE
+        // budget and a stalled run burns cycles without retiring instructions.
+        // That produced a confidently wrong "89% of VU1 time" figure. Splitting
+        // the tally is the only way the attribution is a measurement rather
+        // than an assumption.
+        struct Bucket { uint64_t n[4]; uint64_t instrsBy[4]; uint64_t instrs; uint64_t maxInstrs; };
         static std::map<uint32_t, Bucket> byPc;
         static uint64_t total = 0ull;
         Bucket &b = byPc[m_ghpcStartPc];
         ++b.n[why];
+        b.instrsBy[why] += ghpcInstrs;
         b.instrs += ghpcInstrs;
         if (ghpcInstrs > b.maxInstrs) b.maxInstrs = ghpcInstrs;
         ++total;
+
+        // Dump the visit histogram of a run that was cut off, plus the raw
+        // instruction words at the hot addresses so the branch can be decoded
+        // without needing a second run to fetch them.
+        if (ghpcLoopProbe && why == kBudget && ghpcLoopDumped < ghpcLoopDumps)
+        {
+            ++ghpcLoopDumped;
+            std::vector<std::pair<uint32_t, uint32_t>> hot;  // (hits, slot)
+            for (uint32_t i = 0u; i < m_ghpcPcHits.size(); ++i)
+                if (m_ghpcPcHits[i] != 0u)
+                    hot.emplace_back(m_ghpcPcHits[i], i);
+            std::sort(hot.begin(), hot.end(),
+                      [](const std::pair<uint32_t, uint32_t> &a,
+                         const std::pair<uint32_t, uint32_t> &b) { return a.first > b.first; });
+
+            std::string line = "[vu1/loop] mscal cut off at startPc=0x" ;
+            char hdr[128];
+            std::snprintf(hdr, sizeof(hdr), "%x instrs=%llu distinctPcs=%zu\n",
+                          m_ghpcStartPc, (unsigned long long)ghpcInstrs, hot.size());
+            line += hdr;
+            for (size_t i = 0u; i < hot.size() && i < 12u; ++i)
+            {
+                const uint32_t off = hot[i].second * 8u;
+                uint32_t lo = 0u, hi = 0u;
+                if (off + 8u <= codeSize)
+                {
+                    std::memcpy(&lo, vuCode + off, 4);
+                    std::memcpy(&hi, vuCode + off + 4, 4);
+                }
+                char row[160];
+                std::snprintf(row, sizeof(row),
+                              "[vu1/loop]   pc=0x%04x hits=%u lo=0x%08x hi=0x%08x\n",
+                              off, hot[i].first, lo, hi);
+                line += row;
+            }
+
+            // The back edge with the most repeats is the loop. Its target is
+            // the top of the body and its source is the branch that was
+            // supposed to fall through and did not.
+            std::vector<std::pair<uint32_t, uint32_t>> edges;  // (count, key)
+            for (const auto &kv : ghpcBackEdges)
+                edges.emplace_back(kv.second, kv.first);
+            std::sort(edges.begin(), edges.end(),
+                      [](const std::pair<uint32_t, uint32_t> &a,
+                         const std::pair<uint32_t, uint32_t> &b) { return a.first > b.first; });
+            for (size_t i = 0u; i < edges.size() && i < 4u; ++i)
+            {
+                char row[128];
+                std::snprintf(row, sizeof(row),
+                              "[vu1/loop]   backedge 0x%04x -> 0x%04x taken=%u\n",
+                              (edges[i].second >> 16) & 0xFFFFu,
+                              edges[i].second & 0xFFFFu, edges[i].first);
+                line += row;
+            }
+
+            // Every VI register at the moment it was cut off. The loop counter
+            // is one of these, and whether it is stuck, negative, or absurd is
+            // the difference between a wrong compare and a wrong load.
+            line += "[vu1/loop]   vi:";
+            for (int r = 0; r < 16; ++r)
+            {
+                char row[24];
+                std::snprintf(row, sizeof(row), " %d=%d", r, (int)(int16_t)m_state.vi[r]);
+                line += row;
+            }
+            line += "\n";
+            std::fwrite(line.data(), 1, line.size(), stderr);
+        }
 
         static const uint64_t every = []() -> uint64_t {
             const char *e = std::getenv("GHPC_VU1_CENSUS");
@@ -2597,13 +2718,18 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                 const uint64_t runs = v.n[0] + v.n[1] + v.n[2] + v.n[3];
                 char buf[224];
                 std::snprintf(buf, sizeof(buf),
-                              " pc0x%x{ebit=%llu budget=%llu offend=%llu stop=%llu"
-                              " avgInstr=%llu maxInstr=%llu}",
+                              " pc0x%x{ebit=%llu/%lluM budget=%llu/%lluM offend=%llu"
+                              " stop=%llu avgEbit=%llu avgBudget=%llu maxInstr=%llu}",
                               kv.first,
-                              (unsigned long long)v.n[0], (unsigned long long)v.n[1],
+                              (unsigned long long)v.n[0],
+                              (unsigned long long)(v.instrsBy[0] / 1000000ull),
+                              (unsigned long long)v.n[1],
+                              (unsigned long long)(v.instrsBy[1] / 1000000ull),
                               (unsigned long long)v.n[2], (unsigned long long)v.n[3],
-                              (unsigned long long)(runs ? v.instrs / runs : 0ull),
+                              (unsigned long long)(v.n[0] ? v.instrsBy[0] / v.n[0] : 0ull),
+                              (unsigned long long)(v.n[1] ? v.instrsBy[1] / v.n[1] : 0ull),
                               (unsigned long long)v.maxInstrs);
+                (void)runs;
                 line += buf;
             }
             line += "\n";

@@ -799,9 +799,20 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     // The 65536 was a literal here, and the VU1
+                                     // census shows a third of GH2's microprograms
+                                     // hitting it exactly. That leaves two readings
+                                     // apart: an infinite loop, or a budget too small
+                                     // for honest work. Raising it separates them,
+                                     // because a real runaway does not start
+                                     // terminating when handed more rope.
+                                     static const uint32_t s_vu1Budget = []() -> uint32_t {
+                                         const char *e = std::getenv("GHPC_VU1_BUDGET");
+                                         return e ? (uint32_t)std::strtoul(e, nullptr, 0) : 65536u;
+                                     }();
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
-                                                   m_gs, &m_memory, startPC, top, itop, 65536);
+                                                   m_gs, &m_memory, startPC, top, itop, s_vu1Budget);
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
