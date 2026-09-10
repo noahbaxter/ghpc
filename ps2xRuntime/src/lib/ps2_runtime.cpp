@@ -1726,6 +1726,36 @@ namespace
     constexpr uint32_t kStreamState = 0x4Cu;         // StreamEE+0x4c
 
     std::atomic<unsigned long long> g_strmCalls{0ull};
+
+    bool guestWrite32(uint8_t *rdram, uint32_t addr, uint32_t value)
+    {
+        addr &= 0x1FFFFFFFu;
+        if (addr < 0x00100000u || (addr + 4u) > PS2_RAM_SIZE || (addr & 3u) != 0u)
+        {
+            return false;
+        }
+        std::memcpy(rdram + addr, &value, sizeof(value));
+        return true;
+    }
+
+    // EXPERIMENT (GHPC_STREAM_READY): stand in for the missing IOP synth module,
+    // the same way GHPC_SYNTH_ACK stands in for SYNTH_R's SPU handshake.
+    //
+    // Nothing on the EE advances the state word 2 -> 3. The only writer of 3 is
+    // Poll__8StreamEE at 0x26d054, reached only by draining a StreamOp of type 2
+    // off the vector at StreamEE+0x2c. That op is pushed by
+    // Dispatch__8StreamEEiiUi (0x26d5b8), whose only caller is
+    // CtlDispatch_impl__7SynthEE (0x3eb828) via its jump table at 0x4eb680,
+    // entry 2. That is an IOP -> EE RPC callback: the EE sends StreamInfoArg out
+    // as CTL 0x190 from the state 2 handler and waits for the IOP to answer.
+    // With no IOP synth module the answer never comes.
+    //
+    // A probe, not a fix. It writes the word rather than pushing the op, which
+    // is the op's only observable effect. The delay is there so state 2's own
+    // handler gets to run its one-shot (the 0x190 send, latched at +0x128)
+    // before the state moves on.
+    constexpr unsigned kStreamReadyDelay = 120u; // frames pinned at 2 before standing in
+    constexpr uint32_t kStreamStatePrepared = 3u;
 }
 
 void PS2Runtime::noteStreamCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
@@ -1735,6 +1765,31 @@ void PS2Runtime::noteStreamCall(uint8_t *rdram, R5900Context *ctx, uint32_t targ
     const uint32_t self = getRegU32(ctx, 4);
     uint32_t state = 0xFFFFFFFFu;
     guestRead32(rdram, self + kStreamState, state);
+
+    static const bool standIn = std::getenv("GHPC_STREAM_READY") != nullptr;
+    if (standIn)
+    {
+        static uint32_t s_pinnedSelf = 0xFFFFFFFFu;
+        static unsigned s_pinnedFor = 0u;
+        if (self == s_pinnedSelf && state == 2u)
+        {
+            ++s_pinnedFor;
+        }
+        else
+        {
+            s_pinnedSelf = self;
+            s_pinnedFor = (state == 2u) ? 1u : 0u;
+        }
+        if (s_pinnedFor == kStreamReadyDelay &&
+            guestWrite32(rdram, self + kStreamState, kStreamStatePrepared))
+        {
+            state = kStreamStatePrepared;
+            std::fprintf(stderr,
+                         "[ghpc/strm] #%llu this=0x%08x STAND-IN wrote state=3 "
+                         "(IOP CTL cmd 2 never arrived)\n",
+                         n, self);
+        }
+    }
 
     // Print on change so a stuck value costs one line, and on a slow heartbeat
     // so "still stuck" is distinguishable from "probe stopped firing".

@@ -18,28 +18,21 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Song load: `StreamEE::mState` is pinned at 2.** Ready requires 3, 4 or 5.
-Measured over 3600 probe calls, three objects, each walking 1 -> 2 and freezing.
-This is the only thing between the current build and `game_screen`.
-
-Open: what advances 2 -> 3, and whether anything outside `Poll__8StreamEE` writes
-`+0x4c`. `gh2-decomp` has the field and enum but not `Poll`, so this is
-disassembly plus a probe. Full gate chain and evidence in
+**Retire `GHPC_STREAM_READY` with a real IOP answer.** `game_screen` is reached
+(`progress.json` rung 9, 2026-09-10) but only because a host probe writes the
+`StreamEE` state word. The real gap: the EE's state 2 handler sends
+`StreamInfoArg` to the IOP as CTL 0x190 and waits for CTL command 2 back, which
+`CtlDispatch_impl__7SynthEE` (0x3eb828, jump table 0x4eb680) turns into
+`StreamEE::Dispatch(id, 2, 0)`. No IOP synth module exists, so it never comes.
+Same missing-module class as the SPU handshake. Chain and addresses in
 `notes/song-load-crash.md`.
 
-## Next
+**Then: find out what `game_screen` actually does.** The oracle's ladder tops out
+at rung 9, so it cannot score anything past the screen appearing. Whether notes
+scroll, whether the chart plays, whether audio exists at all: all unmeasured.
+Extending the ladder past `game_screen` is what makes the next stretch loopable.
 
-**Progress oracle.** The foundational item, because it is what lets work run
-unattended. `gh2-decomp` reaches 43% unattended because it has a binary verifier;
-ghpc has none, so every session ends with a human judging whether progress
-happened. Most of it already exists: `GHPC_PAD_DRIVE` emits an ordinal screen
-ladder every run, and `checkrun.sh` already retries to tell a hang from a
-regression. Missing: a tracked high-water mark to diff against instead of a fixed
-target, a sub-rung state vector for when the screen does not move, and a
-a sub-rung state vector for when the screen does not move. Boot reliability is
-**measured and fine**: 6 of 6 runs on 2026-09-09 reached `loading_screen`, so the
-"roughly 2 in 3 hang" in `checkrun.sh`'s header is stale and an agent loop will
-not thrash on it. Design in `.planning/2026-09-09-work-spine-design.md` section 2.
+## Next
 
 **Override layer.** No hand-written function body can survive a build today:
 staging does `rsync --delete` from generated output into a gitignored

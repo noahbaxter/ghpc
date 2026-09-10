@@ -255,33 +255,151 @@ with the object in `$a0`, and reads `+0x4c` out of guest memory. It prints on
 change and on a 600 call heartbeat, so a stuck value costs one line and "still
 stuck" stays distinguishable from "probe stopped firing".
 
-    [ghpc/strm] #1    this=0x00e88c70 state=1 ready=0 CHANGED
-    [ghpc/strm] #2    this=0x00e88c70 state=2 ready=0 CHANGED
-    [ghpc/strm] #252  this=0x00b86460 state=1 ready=0 CHANGED
-    [ghpc/strm] #253  this=0x00b86460 state=2 ready=0 CHANGED
-    [ghpc/strm] #583  this=0x00b926c0 state=1 ready=0 CHANGED
-    [ghpc/strm] #584  this=0x00b926c0 state=2 ready=0 CHANGED
-    [ghpc/strm] #600  this=0x00b926c0 state=2 ready=0
-    ... identical through #3600
+Three `StreamEE` objects are built over one run. Every one went 1 -> 2 and froze
+there, the live one holding state 2 across 3600 calls and six heartbeats while
+the screen never advanced. That matches the `0x26d400` store, which writes 2
+after `VAGFileReader::SetBuffer`.
 
-Three `StreamEE` objects are built over one run. **Every one goes 1 -> 2 and
-freezes there.** The live object held state 2 across 3600 calls and six
-heartbeats while the screen never advanced. State 2 is not in the ready set
-{3, 4, 5}, so this is the exact stall.
+## Answered: nothing on the EE advances 2 -> 3, it is an IOP callback
 
-That matches the `0x26d400` store, which writes 2 after
-`VAGFileReader::SetBuffer`. Nothing ever performs the 2 -> 3 step.
+Traced 2026-09-10 by disassembly, each link proven by control flow rather than
+inferred.
 
-Still open, do not assume either way:
+**Only StreamEE writes `StreamEE+0x4c`.** A whole-`.text` scan for `sw $r, 0x4c($r)`
+resolved against symbol boundaries gives 162 functions, of which exactly six are
+StreamEE: `Init`, `Prepare(float)`, `Destroy`, `Play`, `Stop`, `Poll`. Every other
+hit is a different class's own `+0x4c`. That closes the "does anything outside
+`Poll__8StreamEE` write it" question: no.
 
-- what is supposed to advance 2 -> 3. The only `+0x4c` store of 3 found so far is
-  0x26d054, and it sits immediately after a `Debug::Fail` call, so it may be an
-  error path rather than the success path. Whether `Debug::Fail` returns there
-  matters.
-- whether anything outside `Poll__8StreamEE` writes `+0x4c`. Only that function's
-  range was searched.
-- `Poll__8StreamEE` does not switch on `+0x4c` at entry, it iterates a list at
-  `this+0x2c` vs `this+0x30` first, so the state machine is further in.
+**The state enum, read off the writers:**
+
+    0  idle          Poll, op type 1
+    1  preparing     Prepare(float) 0x26b7fc
+    2  buffered      Poll 0x26d400, after VAGFileReader::SetBuffer
+    3  ready         Poll 0x26d054, op type 2 ONLY
+    4  playing       Play 0x26bb54
+    5  stopped       Stop 0x26bb0
+
+`IsReady` is `(unsigned)(state - 3) < 3`, so {3, 4, 5}. `Play` refuses to move
+2 -> 4: it early-exits on 4 and only runs its channel update loop on 3.
+
+**`Poll__8StreamEE` is two stages.** First it drains a `StreamOp` vector at
+`this+0x2c` (8 byte elements, type at `+0x0`); then it dispatches on the state
+word through a jump table at **0x4b1060**:
+
+    0 -> 0x26d54c  fall through to the tail
+    1 -> 0x26d1ac  VAGReaderFactory::IsReady, GetReader, allocate StreamingBuffers,
+                   SetBuffer, then write 2
+    2 -> 0x26d404  send StreamInfoArg out as CTL 0x190, latch this+0x128, return
+    3 -> 0x26d54c
+    4 -> 0x26d508  start the VarTimer
+    5 -> 0x26d54c
+
+**State 2's own handler never writes `+0x4c`.** It sends and waits. The 2 -> 3
+step lives in the op drain: op type 2 at 0x26d020 checks `state == 2` (and
+`Debug::Fail`s otherwise) then writes 3 at 0x26d054.
+
+**The op comes from the IOP.** The only pusher is `Dispatch__8StreamEEiiUi`
+(0x26d5b8): it resolves a stream id to a `StreamEE*` through the global list at
+0x51a860, returns early on op type 3 (that one just stores the position to
+`+0x170`), and otherwise pushes `StreamOp{op, arg}`. Its only caller is
+`CtlDispatch_impl__7SynthEE` (0x3eb828), whose jump table at **0x4eb680** maps
+CTL command -> handler, and entries 1 and 2 both land on 0x3eb888:
+
+    $4 = data[0]      the stream id
+    $5 = cmd          still live from the dispatcher, so the CTL command number
+                      IS the StreamEE op type
+    $6 = 0
+
+`CtlDispatch__7SynthEE` is registered as the EE-side RPC server handler
+(`CtlServerInit`, handler slot 0x444d74) and reached from the packed
+`{cmd, len, data}` record walker at 0x269c58.
+
+So the shape is: **the EE's state 2 handler sends `StreamInfoArg` to the IOP as
+CTL 0x190 and blocks until the IOP answers with CTL command 2.** The runtime has
+no IOP synth module, so the answer never comes and the state word sits at 2
+forever. This is the same missing-module class as the SPU handshake, not a
+separate bug.
+
+## CONTESTED: standing in for that callback, result not established
+
+`GHPC_STREAM_READY=1` (`ps2_runtime.cpp`, in the `GHPCSTRM` hook, labelled a
+probe like `GHPC_SYNTH_ACK`) writes 3 to `+0x4c` after the word has been pinned
+at 2 for 120 consecutive `IsReady` calls on the same object. The delay is there
+so state 2's own one-shot send runs first. It writes the word rather than
+pushing the op because that is the op's only observable effect.
+
+**Read the caveats below before using this.** The oracle scored `PROGRESSED`,
+rung 8 -> 9, three times. That verdict is close to worthless on its own:
+`progress.py` breaks out of its read loop the instant it sees the top rung, so
+all three runs were killed on the transition line and observed zero frames
+afterwards. The run below is **`bootskip.py --off`**, the full boot:
+
+    [ghpc/strm] #309 this=0x00b926c0 state=1 ready=0 CHANGED
+    [ghpc/strm] #310 this=0x00b926c0 state=2 ready=0 CHANGED
+    [ghpc/strm] #429 this=0x00b926c0 STAND-IN wrote state=3 (IOP CTL cmd 2 never arrived)
+    [ghpc/strm] #429 this=0x00b926c0 state=3 ready=1 CHANGED
+    [drive] loading_screen -> game_screen after 0 presses (t=107.9)
+
+A later uncapped run on `build-debug` (330s, probe on) does hold the screen:
+reached at t=73.6, then `cur=0xad4b00 next=0x0 xition=0 name="game_screen"` for
+the remaining ~256s, frames still advancing (contentFrame 1097 -> 1234, presents
+4200), zero `Debug::Fail`, zero exits.
+
+**Open contradiction, do not treat this as settled.** Running vanilla
+`./ghpc/scripts/run.sh` (release, where `GHPC_STREAM_READY` is compiled out:
+`strings` finds it in `build-debug` and not in `build`) alternates forever
+between the loading screen and a mostly dark frame. Either the screen is
+reachable without the probe, which would break the causal claim entirely, or
+what alternates is the present path rather than a UI transition. Release carries
+no `[ghpc/ui]` or `[drive]` tracing, so this is unresolved.
+
+**No control was ever run.** There is no same-build A/B with the probe off. The
+`PROGRESSED` verdicts compare against a mark recorded from an earlier build, not
+against a control arm.
+
+**This is a probe, not a fix.** The real work is an IOP-side synth stream module
+that answers CTL 0x190 with CTL command 2.
+
+## Ruled out, with evidence. Do not re-chase these.
+
+- **Not a loop, in the crash phase.** Two call-histogram samples across the load
+  differ in character rather than repeating: `BinStream::Read` 256785 ->
+  1129591 while `Heap::InsertFreeBlock` falls 39891 -> 3704.
+- **Not slow.** A 20 minute `build-debug` run with no histogram died at about 7
+  minutes rather than finishing.
+- **Not the heap, since 128MB.** `PS2_RAM_SIZE` at 128MB (commit `6babe38`)
+  retired `out of dynamic memory in yy_create_buffer()`. The census proved the
+  shortfall was real and about 20KB wide, not an allocator giving up early.
+- **Not the `[libc] guest FILE*` line.** 0x448d8c is inside `impure_data`
+  (0x448af8, 748 bytes), so it is newlib's `_sf` stderr, printed by
+  `yy_fatal_error`'s own `fprintf` one call before the message it carries.
+- **Not the SPU handshake.** `GHPC_SYNTH_ACK=1` removes exactly `SPUSendBusy`
+  and `SynthPoll` from the 199 function working set, adds nothing, leaves the
+  other 197 identical, and the stall stayed byte for byte where it was. Real and
+  unfixed, but it blocks neither the menus nor the song load.
+- **Not the read path.** In the stall `ArkFile::ReadAsync`, `BlockMgr::Poll`,
+  `BinStream::Read`, `BlockMgr::AddTask`, `ArkFile::ReadDone` and
+  `Block::Matches` are all at **0** per window. Nothing queued, nothing in
+  flight.
+- **Not the loader subsystem.** No `PollLoading` variant fires in any
+  steady-state sample though all three are generated and instrumented, so
+  `LoadMgr`'s list is empty and `FileLoader::IsLoaded` is returning true.
+  Vtable slots for reference, 8 byte (delta, pointer) entries: `_vt$10FileLoader`
+  0x45a578, `_vt$9DirLoader` 0x459f28, `_vt$6Loader` 0x45a5a0, `+0x14` is
+  `IsLoaded` and `+0x1c` is `PollLoading`.
+- **Not a UI decision.** All 203 `[ghpc/ui]` samples in the stall are byte
+  identical at `xition=1 name="loading_screen" nextName="game_screen"`, so
+  `game_screen` was already the committed target.
+- **Not gates 1 to 4 of `GamePanel::IsLoaded`.** `IsLoaded__10BankLoader`,
+  `PicsAreLoaded__9GamePanel` and `IsReady__9BeatMatch` all sit at exactly one
+  per frame, so the chain reaches the last gate every frame.
+- **Not anything outside `Poll__8StreamEE` writing `+0x4c`.** Whole-`.text` scan,
+  above.
+- **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
+  jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it
+  at 0x26d040 is the `state != 2` assert, not something the success path walks
+  through. This was listed as open and it is now closed.
 
 Useful reference facts found the hard way:
 
@@ -304,6 +422,7 @@ Uncommitted at time of writing, all diagnostic:
   of the screen is its name Symbol.
 - `[ghpc/spu]` prints the SPU send handshake globals.
 - `GHPC_SYNTH_ACK` stands in for the missing SYNTH_R module. A probe, not a fix.
+- `GHPC_STREAM_READY` stands in for the missing IOP CTL command 2. Also a probe.
 
 Two defects in the diagnostics themselves, found while using them:
 
