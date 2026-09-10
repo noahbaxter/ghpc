@@ -584,6 +584,71 @@ session, with or without probes, before or after these fixes.
 holds for 300 seconds. A held screen is still not a chart advancing, which is
 the whole reason that sub-rung exists.
 
+## The chart is gated by GamePanel+0x70, and round two was measuring the wrong world
+
+Measured 2026-09-10 on the rung 9 build with `GHPC_PROBE` and
+`GHPC_PROBE_EVERY=25`, so no rebuild and the binary is exactly the one that
+recorded the mark.
+
+**Round two's poll census does not transfer and is now superseded.** It found
+`GamePanel::Poll` at 2 calls and concluded the panel was barely polled. That was
+under `GHPC_STREAM_READY`, where the main thread died in `SynthEE::Terminate`
+seconds after the transition. Reaching `game_screen` legitimately gives a
+completely different picture:
+
+    GamePanel::Poll        31
+    GetGameExcitement      31
+    SetExcitementLevel     31
+    BeatMatch::Poll         0
+
+All three at exactly 31, one per `GamePanel::Poll`, every call arriving from
+0x24ad48 (the `UIScreen::Poll` panel loop). The panel is polled once per frame
+and takes the normal path. `mPaused` was never the gate.
+
+**The gate is `GamePanel+0x70`.**
+
+    1071ac  lw   $16, 0x58($17)     ; the BeatMatch
+    1071b0  lw   $2,  0x70($17)
+    1071b8  beqz $2, 0x1071fc       ; zero -> BeatMatch::Poll, the chart runs
+    1071c0  ...                     ; non-zero -> a TaskMgr::UISeconds block
+    1071f4  b    0x107220           ; ...which branches PAST BeatMatch::Poll
+    1071fc  jal  Poll__9BeatMatch
+
+So `+0x70` is non-zero and the chart is skipped every single frame. Past
+0x107220 there are two more gates before the game can start: `+0x88` must be
+zero (`bnezl` at 0x107224 skips ahead) and the accumulated time in `$f20` must
+exceed the `0xbccccccd` threshold at 0x10723c, at which point `StartGame`
+(0x1070f8) runs and `BeatMatch::Poll` is called at 0x107254. Neither happens.
+`StartGame` is never called, which is independently consistent with
+`BeatMatch::Poll` sitting at zero.
+
+**A hypothesis this round killed by measuring it.** The obvious read of the top
+of `GamePanel::Poll` is that `+0x84` being non-zero makes it call `StartIntro`
+and return early every frame, which would explain everything. It does not:
+`StartIntro` (0x1074e8) fires **exactly once** in a 240s run. The early return is
+not the path, and the disassembly alone would have sent the next round after the
+wrong flag.
+
+## The frame rate collapses about 50x on entering game_screen
+
+Same runs, counting the runtime's own `[frame]` lines against the `[drive]`
+transition at t=58.9:
+
+    before game_screen   493 frames in  58.9s   ~8.4/s
+    after  game_screen    39 frames in 241.1s   ~0.16/s
+
+`UIScreen::Poll`, `GamePanel::Poll` and `StreamEE::Poll` all track that rate, so
+it is the whole guest slowing down rather than one subsystem stopping. The
+`[vif1]` histogram reaches 1.66M opcodes and `[vu1] exec 0x1160` reaches 193k,
+so the cost is the venue and characters actually being drawn through the
+software rasteriser. `[drive] STUCK on game_screen, 12 presses had no effect` is
+the pad driver noticing the same thing.
+
+This is the `Rnd` seam already in `BACKLOG.md` under Next, and it is much worse
+here than the 39% of realtime measured on menus. It is not what stops the chart:
+even at 0.16 fps a running chart would move `song_tick`. But it means "playable"
+needs the seam regardless of the gate.
+
 ## Ruled out, with evidence. Do not re-chase these.
 
 - **Not a loop, in the crash phase.** Two call-histogram samples across the load
@@ -652,6 +717,15 @@ the whole reason that sub-rung exists.
   rounding mode, above. The assert was correct and the guest code was correct.
 - **Not the synth service's blast radius.** With the rounding fixed and the
   service off, the same build still holds rung 8 for 300s.
+
+- **Not `mPaused`, and not the panel being unpolled.** Superseded measurement:
+  `GamePanel::Poll` runs once per frame at a legitimate `game_screen`, 31 calls
+  against 31 `GetGameExcitement` and 31 `SetExcitementLevel`.
+- **Not `GamePanel::Poll` returning early into `StartIntro`.** `StartIntro`
+  fires exactly once in 240s. Measured, not reasoned.
+- **Not the frame rate, for the chart specifically.** The guest drops to about
+  0.16 fps at `game_screen`, which makes it unplayable but would not hold
+  `song_tick` at zero; a running chart advances at any frame rate.
 
 - **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
   jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it

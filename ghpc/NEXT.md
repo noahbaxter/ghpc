@@ -44,8 +44,8 @@ supersede earlier ones and topic notes supersede both.
 | held for | 60s |
 | streamEE state | `2` |
 | probes | none, stock build |
-| rounds since gain | 0 of 6 |
-| rounds total | 1 of 14 |
+| rounds since gain | 1 of 6 |
+| rounds total | 2 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -166,20 +166,26 @@ this next starts from a true statement rather than a half-finished round.
 
 ## Current target
 
-See `ghpc/BACKLOG.md`. **The song load is finished and rung 9 is the floor**, held
-for 300s on a stock build with `env: {}`. Two fixes got there: the IOP synth
-service (`ps2xIOP/src/modules/synth.cpp`, now default on) answering the CTL link
-on sid 0x75433178, and `FPU_CVT_W_S` truncating instead of rounding, which is
-what the `CharBonesSamples.cpp:114` assert was really about.
+See `ghpc/BACKLOG.md`. **Rung 9 is the floor**, held 300s on a stock build with
+`env: {}`. The song load is finished: the IOP synth service answers the CTL link
+and `FPU_CVT_W_S` truncates as the R5900 does.
 
-**The chart still does not advance.** `song_tick` has never fired in any run of
-any configuration. `Poll__13PlayerMatcherfRC7SongPos` (0x117dd0) is not called
-even at a `game_screen` that holds for the full 300 seconds, and neither are
-`Player::Poll`, `BeatMatch::Poll` or `BeatMatcher::Poll`. That is the target: a
-held screen with a dead beatmatch chain. Round two established the chain is
-silent under the old stand-in; confirm whether it is still silent now that the
-screen is reached legitimately, since that measurement predates both fixes and
-should not be trusted across them.
+**The chart is gated by one word, `GamePanel+0x70`.** The panel is polled once
+per frame (31 calls against 31 `GetGameExcitement`, 31 `SetExcitementLevel`),
+but `+0x70` is non-zero, so 0x1071b8 routes past `BeatMatch::Poll` into a
+`TaskMgr::UISeconds` block that branches to 0x107220 and skips the chart.
+`StartGame` (0x1070f8) is never reached and `song_tick` has never fired in any
+run of this session. Find the writers of `+0x70`.
+
+**Round two's poll census is superseded, do not re-run it.** It measured
+`GamePanel::Poll` at 2 calls and suspected `mPaused`; that was an artifact of
+`GHPC_STREAM_READY` killing the main thread in `SynthEE::Terminate` seconds
+after the transition. `mPaused` is not the gate.
+
+**The guest runs at about 0.16 fps at `game_screen`**, down from 8.4 on menus,
+because the venue and characters are being rasterised in software. That is the
+`Rnd` seam under Next. It makes the game unplayable but it is not what holds
+`song_tick` at zero: a running chart advances at any frame rate.
 
 `GHPC_STREAM_READY` is retired and removed from the path. Do not reach for it.
 

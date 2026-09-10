@@ -18,19 +18,24 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Find out why the beatmatch chain never runs at a `game_screen` that holds.**
-Rung 9 is the floor as of 2026-09-10: held 300s, stock build, `env: {}`, no
-bounce, recorded. The song load is done. But `song_tick` has never fired in any
-run, so nothing reads a `SongPos` and no chart advances.
+**Find out why `GamePanel+0x70` is non-zero.** That word is what stops the
+chart. Measured 2026-09-10 on the rung 9 build: `GamePanel::Poll` runs once per
+frame (31 calls, matched by 31 `GetGameExcitement` and 31 `SetExcitementLevel`),
+but `+0x70` is non-zero, so 0x1071b8 routes past `BeatMatch::Poll` into a
+`TaskMgr::UISeconds` block that branches to 0x107220 and skips the chart
+entirely. `StartGame` (0x1070f8) is never reached.
 
-Round two measured `PlayerMatcher::Poll` (0x117dd0), `Player::Poll` (0x112fb0),
-`BeatMatch::Poll` (0x1259c0) and `BeatMatcher::Poll` (0x2727c0) at **zero** calls
-with `GamePanel::Poll` at two. **Re-measure before building on that**: it
-predates both the synth service and the CVT.W.S fix, and the screen is now
-reached legitimately rather than through a forged state word. `GHPC_PROBE` with
-`GHPC_PROBE_EVERY=25` answers it without a rebuild.
+Two further gates sit past 0x107220 and both need checking once `+0x70` is
+understood: `+0x88` must be zero (`bnezl` at 0x107224) and the accumulated time
+in `$f20` must pass the `0xbccccccd` threshold at 0x10723c.
 
-**Then: does audio exist?** Still unmeasured, and there is no rung for it.
+Find the writers of `+0x70` the way the `+0x4c` and `+0x4130` writers were
+found, with a whole-`.text` store scan resolved against symbol boundaries.
+Details and the disassembled gate in `notes/song-load-crash.md`.
+
+**Do not re-run round two's poll census.** It is superseded and its conclusion
+(`GamePanel::Poll` barely called, panel possibly paused) was an artifact of
+`GHPC_STREAM_READY` killing the main thread.
 
 ## Next
 
