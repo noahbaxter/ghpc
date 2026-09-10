@@ -239,14 +239,40 @@ Two stores to `+0x4c` inside `Poll__8StreamEE` (0x26cf58, 1632 bytes):
   0x26d040 whose message is built by `MakeString`. Worth knowing whether that
   path is actually taken and whether `Debug::Fail` returns here.
 
-Not yet established, do not assume either way:
+### Measured: the state word is pinned at 2
 
-- the actual runtime value of `StreamEE+0x4c` during the stall
-- whether anything outside `Poll__8StreamEE` also writes `+0x4c`
+`GHPCSTRM` hooks `StreamEE::IsReady` (0x26ba28), which is called once per frame
+with the object in `$a0`, and reads `+0x4c` out of guest memory. It prints on
+change and on a 600 call heartbeat, so a stuck value costs one line and "still
+stuck" stays distinguishable from "probe stopped firing".
 
-Next step is to read that word at runtime rather than infer it. `MasterAudio`
-reaches the object through `this+0xc`, so the address is recoverable from the
-existing per-frame call into `IsReady__11MasterAudio`.
+    [ghpc/strm] #1    this=0x00e88c70 state=1 ready=0 CHANGED
+    [ghpc/strm] #2    this=0x00e88c70 state=2 ready=0 CHANGED
+    [ghpc/strm] #252  this=0x00b86460 state=1 ready=0 CHANGED
+    [ghpc/strm] #253  this=0x00b86460 state=2 ready=0 CHANGED
+    [ghpc/strm] #583  this=0x00b926c0 state=1 ready=0 CHANGED
+    [ghpc/strm] #584  this=0x00b926c0 state=2 ready=0 CHANGED
+    [ghpc/strm] #600  this=0x00b926c0 state=2 ready=0
+    ... identical through #3600
+
+Three `StreamEE` objects are built over one run. **Every one goes 1 -> 2 and
+freezes there.** The live object held state 2 across 3600 calls and six
+heartbeats while the screen never advanced. State 2 is not in the ready set
+{3, 4, 5}, so this is the exact stall.
+
+That matches the `0x26d400` store, which writes 2 after
+`VAGFileReader::SetBuffer`. Nothing ever performs the 2 -> 3 step.
+
+Still open, do not assume either way:
+
+- what is supposed to advance 2 -> 3. The only `+0x4c` store of 3 found so far is
+  0x26d054, and it sits immediately after a `Debug::Fail` call, so it may be an
+  error path rather than the success path. Whether `Debug::Fail` returns there
+  matters.
+- whether anything outside `Poll__8StreamEE` writes `+0x4c`. Only that function's
+  range was searched.
+- `Poll__8StreamEE` does not switch on `+0x4c` at entry, it iterates a list at
+  `this+0x2c` vs `this+0x30` first, so the state machine is further in.
 
 Useful reference facts found the hard way:
 

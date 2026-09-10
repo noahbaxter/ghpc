@@ -1706,6 +1706,52 @@ void PS2Runtime::noteBlockCall(uint8_t *rdram, R5900Context *ctx, uint32_t targe
                  g_blockPoll.load(), mgr);
 }
 
+// GHPCSTRM: the one word the song load waits on.
+//
+// GamePanel::IsLoaded gates the loading_screen -> game_screen transition and
+// its last gate resolves, through BeatMatch and MasterAudio, to
+// StreamEE::IsReady (0x26ba28), which is:
+//
+//     lw $2, 0x4c($4); addiu $2, $2, -3; sltiu $2, $2, 3
+//
+// so "ready" means the state word at StreamEE+0x4c is 3, 4 or 5. The stall
+// leaves it outside that range forever. IsReady is called once per frame with
+// the object in $a0, so hooking it names both the object and the state without
+// having to find TheStreamEE.
+//
+// Addresses are GH2 PS2 Final Debug specific, like the probes above.
+namespace
+{
+    constexpr uint32_t kStreamIsReady = 0x0026BA28u; // StreamEE::IsReady
+    constexpr uint32_t kStreamState = 0x4Cu;         // StreamEE+0x4c
+
+    std::atomic<unsigned long long> g_strmCalls{0ull};
+}
+
+void PS2Runtime::noteStreamCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    (void)targetPc;
+    const unsigned long long n = g_strmCalls.fetch_add(1ull) + 1ull;
+    const uint32_t self = getRegU32(ctx, 4);
+    uint32_t state = 0xFFFFFFFFu;
+    guestRead32(rdram, self + kStreamState, state);
+
+    // Print on change so a stuck value costs one line, and on a slow heartbeat
+    // so "still stuck" is distinguishable from "probe stopped firing".
+    static uint32_t s_lastSelf = 0xFFFFFFFFu;
+    static uint32_t s_lastState = 0xFFFFFFFEu;
+    const bool changed = (self != s_lastSelf || state != s_lastState);
+    if (!changed && (n % 600ull) != 0ull)
+    {
+        return;
+    }
+    s_lastSelf = self;
+    s_lastState = state;
+    std::fprintf(stderr,
+                 "[ghpc/strm] #%llu this=0x%08x state=%u ready=%d%s\n",
+                 n, self, state, (state - 3u) < 3u ? 1 : 0,
+                 changed ? " CHANGED" : "");
+}
 #endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
@@ -2006,6 +2052,12 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                    targetPc == 0x002F9848u || targetPc == 0x002F8128u))
     {
         noteBlockCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCSTRM: the StreamEE state word that gates the song load.
+    if (isCall && targetPc == 0x0026BA28u)
+    {
+        noteStreamCall(rdram, ctx, targetPc);
     }
 
     // GHPCASSERT: name the guest assert at the call, not after the fact.

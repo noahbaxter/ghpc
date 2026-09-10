@@ -426,6 +426,9 @@ public:
 
     // GHPCBLK: where the ARK read chain stops.
     void noteBlockCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+
+    // GHPCSTRM: the StreamEE state word the song load waits on.
+    void noteStreamCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
 #endif
     bool dispatchGuestBranch(uint8_t *rdram,
                              R5900Context *ctx,
