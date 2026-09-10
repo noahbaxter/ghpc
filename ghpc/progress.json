@@ -4,5 +4,7 @@
   "detail": {
     "streamEE_state": "2"
   },
-  "recorded": "2026-09-09 23:46:48"
+  "recorded": "2026-09-09 23:46:48",
+  "rounds_since_gain": 0,
+  "rounds_total": 0
 }

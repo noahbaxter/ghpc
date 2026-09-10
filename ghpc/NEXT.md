@@ -42,10 +42,36 @@ supersede earlier ones and topic notes supersede both.
 | recorded | 2026-09-09 23:46:48 |
 | streamEE state | `2` |
 | probes | none, stock build |
+| rounds since gain | 0 of 6 |
+| rounds total | 0 of 14 |
 
 <!-- PROGRESS:END -->
 
 That rung is the floor. A round that lowers it has broken something.
+
+## When to stop
+
+An unattended loop needs an ending that is not a person noticing. These are
+checked by a command, not remembered: `progress.py --round-done` at the end of
+every round advances the counters rendered above and **exits 3 when the loop
+should stop**. Exit 3 is deliberately distinct from the verdict codes, because
+"this round did not advance" and "stop running rounds" must never collapse into
+one number.
+
+Stop when any of these is true:
+
+- **The win.** The rung went up and held, with `probes: none, stock build`.
+  Record it, render, and stop; do not start another round on a win you have not
+  written down.
+- **`--round-done` exits 3.** That is `rounds_since_gain` reaching
+  `STOP_ROUNDS_SINCE_GAIN`, or `rounds_total` reaching `STOP_ROUNDS_TOTAL`.
+  Both live in `scripts/progress.py`. Raising either is a decision to make
+  awake, not mid-loop.
+- **Three failed fixes on one hypothesis.** Already a rule below. It is an
+  architecture problem, not a fourth attempt.
+
+On any stop, leave the tree committed and the queue rewritten, so whoever reads
+this next starts from a true statement rather than a half-finished round.
 
 ## What one round is
 
@@ -80,6 +106,10 @@ That rung is the floor. A round that lowers it has broken something.
    `Now` section of `BACKLOG.md`, and add findings to the topic note. Rewrite
    those files; never append to them. `BACKLOG.md` rotted once by being appended
    to until a stale header sat on 1570 lines of findings.
+7. **Close the round.** Commit, then run `progress.py --round-done`. It counts
+   the round and tells you whether to stop. Run it exactly once per round, after
+   the commit, whatever the verdict was: it counts rounds, not measurements, and
+   a round has several measurements in it because of the control arm.
 
 ## Rules that hold every round
 
