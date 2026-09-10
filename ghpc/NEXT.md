@@ -70,9 +70,17 @@ Stop when any of these is true:
   it nearly ended the loop early: on 2026-09-10 rung 9 `game_screen` held for
   300s on a stock build with `song_tick` never firing once. A screen named
   `game_screen` is the exact thing this project keeps mistaking for gameplay,
-  and the top of a saturating ladder is where that mistake is easiest. The
-  ladder cannot express the goal on its own, so the sub-rung is part of the
-  stop condition, not decoration.
+  and the top of a saturating ladder is where that mistake is easiest.
+
+  **This condition is currently unreachable, and that is the top priority to
+  fix, not a footnote.** `song_tick` cannot fire inside a 300s run: the count-in
+  is ten guest seconds and guest time advances at 0.0019 sec per real second at
+  `game_screen`, so gameplay is about 85 minutes of wall clock away. The one run
+  that ever saw the chart advance took 7200s. So the standard measurement cannot
+  check the stop condition, which means **no round can currently win, and no
+  round can detect a regression in the thing the project is trying to do.**
+  Until a round can reach gameplay in minutes, every result here is unverifiable
+  and the loop is running blind. See Current target.
 - **`--round-done` exits 3.** That is `rounds_since_gain` reaching
   `STOP_ROUNDS_SINCE_GAIN`, or `rounds_total` reaching `STOP_ROUNDS_TOTAL`.
   Both live in `scripts/progress.py`. Raising either is a decision to make
@@ -163,36 +171,71 @@ this next starts from a true statement rather than a half-finished round.
   out, then move to a different target rather than attempting a fourth.
 - **Never claim done without evidence.** A render, a log line, a verdict. Not an
   argument that it should work.
+- **A result nobody can look at is half a result, and a result that took two
+  hours to see is worse.** 2026-09-10 ended with two real fixes, a rung, and no
+  picture of the game: the frame dumper had spent all 20 of its dumps during
+  boot, and reaching gameplay cost 85 minutes, so nothing downstream of it could
+  be checked at all. The chart advancing rests on **one run and two sample
+  points**. Prefer the round that makes the next ten rounds cheap over the round
+  that adds one more finding to the notes.
+- **Reaching a state faster is the most dangerous kind of shortcut here.**
+  `GHPC_STREAM_READY` reached `game_screen` sooner and produced a *deader* guest
+  than leaving the gate shut, and it poisoned three rounds before a control arm
+  caught it. Anything that shortens a wait must be proven not to change anything
+  else: same-build control, and confirm the gameplay chain still runs
+  (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll` 0x117dd0) rather than just
+  that a screen appeared.
 
 ## Current target
 
-See `ghpc/BACKLOG.md`. **The stated goal is met.** A stock build with no probes
-reaches `game_screen`, holds it, and the chart advances: `song_tick` 0.000 ->
-737.085, `song_tick_advanced: yes`, zero asserts and zero guest exits across a
-7200s run. Evidence in `notes/evidence/2026-09-10-chart-advances.json`.
+**Make gameplay reachable in minutes. Nothing else until that is done.**
 
-**It is not playable.** `StartGame` arrives about 85 minutes after the song is
-chosen, because guest time advances at roughly 0.0019 seconds per real second.
-The chart is correct and about 500x too slow. The **`Rnd` seam** is now the only
-thing between here and a playable build, and the cost is VU1 interpretation
-rather than the GS rasteriser, confirmed by volume and by profile.
+The song load is finished and rung 9 is the floor, held 300s on a stock build
+with `env: {}`. But the project is now in a state where its own goal cannot be
+measured: gameplay is 85 minutes of wall clock away, so no 300s round can see
+the chart, take a picture of it, hear it, or catch it regressing. Every question
+worth asking is stuck behind that wall. Knock the wall down first.
 
-**Before sizing that work, measure a release build.** Every throughput figure in
-these notes is `build-debug`, and the profile shows the diagnostics themselves
-taking a real slice.
+1. **Shorten the count-in.** It is ten guest seconds (`offset78 = -10.0`) and
+   the threshold is at 0x10723c, with `StartGame` at 0x1070f8. `GamePanel` has
+   `mSkipIntro` at +0x60, `mStartPaused` at +0x64 and `mFastIntro` at +0x68, and
+   `fast_intro` is one of the properties `SyncProperty` (0x10a038) can **set**,
+   not only get. Find out whether any of those legitimately shortens it. This
+   is a test harness, so a `GHPC_*` knob is expected and fine here; it is a
+   probe, so it stays out of any run that touches the recorded mark. Read the
+   shortcut rule above before starting: this is exactly the shape of change
+   that poisoned three rounds.
 
-**And fix the measurement hole.** `song_tick_advanced` is only observable in a
-multi-hour run, so a 300s scoring round cannot check the goal and the recorded
-mark carries no `song_tick`. The stop condition in this file depends on a value
-the standard measurement cannot produce. That needs resolving before the next
-unattended loop, or a regression here will be invisible.
+2. **Screenshot gameplay.** The frame dumper (`ps2_runtime.cpp`, near line 540,
+   gated by `GHPC_FRAME_MIN`, writes `/tmp/ghpc_frame_N.ppm`) caps at 20 dumps
+   and spends all of them during boot, which is why no picture of this game
+   running has ever existed. Trigger it on `game_screen` after `StartGame`
+   instead. Convert to PNG and commit it under `notes/evidence/`.
+
+3. **Reproduce the chart result densely.** `song_tick_advanced: yes` rests on
+   one run and two samples, because the `[ghpc/song]` hook prints call #1 then
+   every 120th. Lower that heartbeat and show the tick advancing across many
+   samples, on two separate runs.
+
+4. **Measure audio.** Nothing has ever checked whether one sample reaches the
+   SPU. A yes/no counter is more than exists today.
+
+Once gameplay is cheap to reach, the **`Rnd` seam** is the real work and the
+only thing between here and playable: the guest runs about 0.16 fps at
+`game_screen` and the cost is VU1 interpretation, confirmed by volume
+(1,905,500 VU1 stores per game frame against 4,289 per menu frame) and by a live
+profile. `GSCpuBackend::WritePixel` sits well below it, so the rasteriser alone
+was never the target. **Do not start it this round, and measure a release build
+before sizing it**: every throughput number here is `build-debug`, and the
+profile shows `fwrite` plus iostream formatting taking a real slice.
 
 `GHPC_STREAM_READY` is retired and removed from the path. Do not reach for it.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
-a drop-in**. It named `mUnk70` as `SetRealtime`'s argument, which is what turned
-the last blocker from a mystery word into an understood count-in. Do not build a
-sync mechanism.
+a drop-in**. It named `mUnk70` as `SetRealtime`'s argument, which turned the last
+blocker from a mystery word into an understood count-in, and it is where the
+`mSkipIntro` / `mFastIntro` offsets above come from. Do not build a sync
+mechanism.
 
 ## Known gaps
 
@@ -207,6 +250,15 @@ sync mechanism.
   second round to catch an error in the first.
 - **Audio is still unmeasured.** Nothing scores whether a sample ever reaches
   the SPU. `song_tick` says the chart is running, not that it is audible.
+- **No picture of this game in gameplay has ever been captured.** The only
+  images that exist are boot and menu screens, because the frame dumper caps at
+  20 and spends them all before `game_screen`. Rendering is known to work (the
+  setlist screen renders correctly) and 183 frames were produced after
+  `StartGame` with only 2 magenta sentinels, so something is being drawn. What
+  it looks like is unknown.
+- **The chart result is n=1.** `song_tick` 0.000 -> 737.085 comes from a single
+  7200s run sampled at exactly two points. It has never been reproduced. Treat
+  it as a promising single observation, not an established fact.
 - **Boot reliability is not established.** `BACKLOG.md` cites 6 of 6 runs
   reaching `loading_screen` on 2026-09-09. A run on 2026-09-10 stalled before
   `main_screen` and the runtime's thread census killed it. `progress.py` scores

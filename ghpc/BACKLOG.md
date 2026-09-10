@@ -18,38 +18,40 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The song load and the chart are done. The `Rnd` seam is the only thing between
-here and playable.** Measured 2026-09-10 on a stock build with no probes: rung 9
-held, `song_tick` 0.000 -> 737.085, `song_tick_advanced: yes`, zero asserts and
-zero guest exits across 7200 seconds. Evidence kept in
-`notes/evidence/2026-09-10-chart-advances.json` and `.log` rather than in
-gitignored `work/`.
+**Make gameplay reachable in minutes. Nothing else until that is done.**
 
-It is not playable and not near it. `StartGame` lands about 85 minutes after the
-song is chosen because guest time advances at roughly 0.0019 seconds per real
-second. The chart is correct and 500x too slow.
+The song load is finished and rung 9 is the floor. The problem now is that the
+project cannot measure its own goal: gameplay is about 85 minutes of wall clock
+away, so no 300s round can see the chart, photograph it, hear it, or catch it
+regressing. `progress.py` therefore cannot check the win condition in `NEXT.md`,
+which means no round can currently win and no round can detect a regression in
+the thing this project exists to do.
 
-The cost is VU1 interpretation, confirmed by volume (1,905,500 VU1 stores per
-game frame against 4,289 per menu frame) and by a live profile dominated by
-`VU1Interpreter`. `GSCpuBackend::WritePixel` sits well below it. So the native GL
-or Vulkan backend at the `Rnd` layer is the right target and it is the whole
-target.
+In order, and do not reorder:
 
-**Measure a release build before sizing that work.** Every throughput number
-here is `build-debug`, and the profile shows `fwrite` plus iostream formatting
-taking a real slice. This is still the cheapest next thing.
+1. **Shorten the count-in.** Ten guest seconds (`offset78 = -10.0`), threshold
+   at 0x10723c, `StartGame` at 0x1070f8. `GamePanel` carries `mSkipIntro` at
+   +0x60, `mStartPaused` at +0x64, `mFastIntro` at +0x68, and `fast_intro` is
+   settable through `SyncProperty` (0x10a038). A `GHPC_*` knob is fine: it is a
+   harness, so it stays out of any run that touches the mark. Prove it changes
+   nothing else, with a same-build control and a check that `BeatMatch::Poll`
+   (0x1259c0) and `PlayerMatcher::Poll` (0x117dd0) still run.
+2. **Screenshot gameplay** and commit the PNG under `notes/evidence/`. The frame
+   dumper (`ps2_runtime.cpp` near line 540) caps at 20 and burns them all in
+   boot, which is why no such picture exists.
+3. **Reproduce the chart result densely**, on two runs. It is currently n=1 with
+   two samples, because the `[ghpc/song]` heartbeat prints every 120th call.
+4. **Measure audio**, which has never been measured at all.
 
-**Fix the measurement hole first, though.** `song_tick_advanced` is only
-observable in a multi-hour run, so `progress.py` cannot score the project's own
-goal in a 300s round: the recorded mark has no `song_tick` in its detail at all.
-Either the oracle needs a way to record a long run's result, or the count-in
-needs a supported way to be shortened for tests. Without one of those, the next
-person cannot tell a regression here from a slow day.
+**Then the `Rnd` seam**, which is the only thing between here and playable, and
+which is too big to start in the same round. Measure a release build before
+sizing it: every throughput number on record is `build-debug`, and a live
+profile shows the diagnostics themselves taking a real slice. The cost is VU1
+interpretation, not the GS rasteriser.
 
-Also cheap and pending: cache three `getenv` calls in the VIF1 hot path
+Cheap and still pending: cache three `getenv` calls in the VIF1 hot path
 (`ps2_vif1_interpreter.cpp:947` per MSCAL, plus 816 and 901), 45 profile
-samples; and lower the `[ghpc/song]` heartbeat from every 120th call, which at
-this frame rate is one sample per ten minutes.
+samples.
 
 ## Next
 
