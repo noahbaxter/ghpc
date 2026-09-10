@@ -44,8 +44,8 @@ supersede earlier ones and topic notes supersede both.
 | held for | 60s |
 | streamEE state | `2` |
 | probes | none, stock build |
-| rounds since gain | 2 of 6 |
-| rounds total | 3 of 14 |
+| rounds since gain | 3 of 6 |
+| rounds total | 4 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -180,6 +180,14 @@ That makes the **`Rnd` seam the critical path**, not a later nicety. An earlier
 round recorded that the frame rate was not the chart blocker. That was wrong: a
 running chart would advance at any frame rate, but the chart never starts
 because what starts it is measured in guest time.
+
+**But do not size that work off the numbers here yet.** Every frame rate figure
+recorded, the 525x included, is a `build-debug` number, and a live profile shows
+`fwrite` plus iostream formatting taking a large slice of host CPU. Measure a
+release build first. The cost itself is VU1 interpretation, confirmed by volume
+(1,905,500 VU1 stores per game frame against 4,289 per menu frame) and by
+profile; `GSCpuBackend::WritePixel` is well below that, so the rasteriser alone
+was never the target.
 
 **Do not chase `GamePanel+0x70`, `+0x88`, `SetRealtime` or the count-in.** All
 measured correct, all on the ruled-out list.

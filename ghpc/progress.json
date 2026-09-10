@@ -7,7 +7,7 @@
   "env": {},
   "build": "build-debug",
   "hold_secs": 60,
-  "rounds_since_gain": 2,
-  "rounds_total": 3,
+  "rounds_since_gain": 3,
+  "rounds_total": 4,
   "recorded": "2026-09-10 03:00:01"
 }

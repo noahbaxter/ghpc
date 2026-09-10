@@ -18,30 +18,30 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The `Rnd` seam is the critical path to the goal.** Promoted from Next, because
-it turns out to be what stops the chart rather than only what makes the game
-unplayable.
+**Measure throughput on a release build before sizing the `Rnd` work.** Every
+frame rate number recorded so far, including the 525x, comes from
+`build-debug`, and a live `sample` shows `fwrite` plus iostream formatting
+taking a large slice of host CPU. The diagnostics are part of what is being
+measured. Until there is a release number, the size of the `Rnd` job is unknown.
 
-Measured 2026-09-10: nothing is stuck at `game_screen`. `GamePanel::Enter` sets
-realtime mode by design, both `StartGame` gates are open (`startGate88=0` on
-every poll), and the ten second count-in advances correctly. It advances at
-**0.0019 guest seconds per real second**, so `StartGame` is about **84 minutes**
-of wall clock away. The guest runs about 0.16 fps at `game_screen` against 8.4
-on menus, because the venue and characters are rasterised in software on the EE
-thread.
+**Then the `Rnd` seam**, which remains the critical path to the chart starting.
+Confirmed from two directions that VU1 interpretation is the cost: 1,905,500 VU1
+stores per game frame against 4,289 per menu frame (444x), and a live profile
+dominated by `VU1Interpreter::run`, `commitReadyPipelines`,
+`calculateFmacExactResult` and `execUpper`. `GSCpuBackend::WritePixel` is well
+below that cluster, so optimising the rasteriser alone would not have helped.
 
-So the chart is not gated by a flag. It is gated by throughput. Fixing the
-rendering seam is what makes the goal reachable, and micro-optimisation will not
-close a 525x gap: this needs the native GL or Vulkan backend at the `Rnd` layer
-that the seam item already describes, which also retires VIF1, VU1, GIF, MFIFO
-and the GS rasteriser as dead code.
+**Cheap and separate: cache three `getenv` calls.** `ps2_vif1_interpreter.cpp:947`
+reads `GHPC_ALLOW_MASKED_MSCAL` on every MSCAL, and 816/901 read
+`GHPC_FORCE_DBUF` the same way. 45 profile samples landed in `getenv` and
+`__findenv_locked`. Every other `GHPC_*` read in the runtime is a
+function-local `static`; these three are the exceptions.
 
-A 2 hour confirming run was launched to watch the count-in actually reach zero
-and `song_tick` fire. Check `work/r6long.json` and `work/r6long.log` before
-assuming anything about what it found.
-
-**Do not chase `GamePanel+0x70`, `+0x88`, `SetRealtime` or the count-in logic.**
-All measured correct. Details in `notes/song-load-crash.md`.
+**Correctness, unrelated to speed:** the VU1 FMAC path uses `long double` to
+hold an intermediate wider than `float`, but `long double` is exactly `double`
+on Apple arm64 and 80 bit on x86-64 Linux. VU1 rounding therefore differs
+between the two hosts this project builds on. Not urgent, but it should not be
+discovered later by a bug that only reproduces on one machine.
 
 ## Next
 

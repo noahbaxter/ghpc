@@ -692,6 +692,58 @@ count-in that starts it is measured in guest time and guest time is gated on the
 frame rate. **The `Rnd` seam is the chart blocker, not merely a playability
 problem.** It moves from Next to the critical path.
 
+## Where the frames actually go, by volume and by profile
+
+Two independent measurements, 2026-09-10, both on `build-debug`.
+
+**By volume**, counters split across the `game_screen` transition in one 240s
+run (471 menu frames, 40 game frames):
+
+| counter | per menu frame | per game frame | factor |
+|---|---|---|---|
+| VU1 stores | 4,289 | **1,905,500** | **444x** |
+| image upload bytes | 10,873 | 752,266 | 69x |
+| TEX0 writes | 15 | 21,032 | 1368x |
+
+The VU1 factor matches the observed slowdown almost exactly, which is the first
+reason to believe it rather than the GS rasteriser.
+
+**By profile**, `sample` on the live process while it sat at `game_screen`, so
+this is host CPU time rather than an inference from volume. The heavy entries
+are `VU1Interpreter::run`, `commitReadyPipelines`, `calculateFmacExactResult`,
+`normalizeFmacResult`, `calculatePairReadyCycle` and `execUpper`. VU1
+interpretation is confirmed as the dominant cost from both directions.
+`GSCpuBackend::WritePixel` appears but well below the VU1 cluster, so a
+GS-rasteriser-only optimisation would not have helped. The `Rnd` seam plan is
+right, and it is right for the VU1 reason rather than the rasteriser reason.
+
+**Two things in that profile are not the game's work at all.**
+
+- `fwrite` / `__swrite` / `__sfvwrite` plus `std::__pad_and_output`,
+  `__put_character_sequence` and `num_put` together are a large slice: the
+  diagnostics themselves. **Every throughput number in this file is a
+  `build-debug` number.** The 525x figure is not a property of the port, it is a
+  property of the build that was measured. A release comparison is owed before
+  anyone sizes the `Rnd` work off it.
+- `getenv` and `__findenv_locked`, 45 samples. `ps2_vif1_interpreter.cpp:947`
+  calls `getenv("GHPC_ALLOW_MASKED_MSCAL")` uncached on every MSCAL, and lines
+  816 and 901 do the same for `GHPC_FORCE_DBUF`. Every other `GHPC_*` read in
+  the runtime is a function-local `static`; these three are the exceptions.
+
+**A hypothesis killed before it was recorded.** `calculateFmacExactResult` takes
+a `long double &`, which on many hosts is software-emulated quad precision and
+would have been a spectacular and cheap win. It is not that: on this host
+`sizeof(long double)` is 8 and `LDBL_MANT_DIG` is 53, identical to `double`.
+Checked rather than assumed.
+
+That leaves a different problem worth its own line. The FMAC path uses
+`long double` specifically to hold an intermediate wider than `float` so VU1's
+overflow and rounding behaviour can be detected. On Apple arm64 it is exactly
+`double`; on x86-64 Linux it is 80 bit. **So the runtime's VU1 rounding
+behaviour is not the same on the two hosts this project builds on**, which is a
+correctness divergence rather than a performance one, and it is invisible until
+something depends on it.
+
 ## Ruled out, with evidence. Do not re-chase these.
 
 - **Not a loop, in the crash phase.** Two call-histogram samples across the load
@@ -778,6 +830,12 @@ problem.** It moves from Next to the critical path.
   seconds per real second and would reach `StartGame` in about 84 minutes. The
   cause is frame rate, not control flow. Round five said the opposite and was
   wrong; see above.
+
+- **Not the GS rasteriser, for the frame rate.** `GSCpuBackend::WritePixel`
+  sits well below the VU1 cluster in a live profile. VU1 interpretation is the
+  cost, by volume (444x per frame) and by CPU time.
+- **Not software quad precision in the VU1 FMAC path.** `long double` is 8
+  bytes with a 53 bit mantissa on this host, the same as `double`.
 
 - **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
   jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it
