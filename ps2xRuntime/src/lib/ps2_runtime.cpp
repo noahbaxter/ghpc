@@ -398,6 +398,16 @@ namespace
     }
 }
 
+// GHPCSTART: has the chart actually started, as opposed to a screen appearing.
+//
+// GamePanel::StartGame (0x1070f8) is the single instant that separates the
+// count-in from gameplay: it is what SetRealtime(false) runs from, and nothing
+// else calls it. Latching it here gives the frame dumper a gate, which is the
+// difference between twenty pictures of the boot sequence and one picture of
+// the game. The dumper caps at 20 and had always spent all of them before
+// game_screen, which is why no picture of this game in gameplay existed.
+std::atomic<bool> g_ghpcGameStarted{false};
+
 static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
 {
     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
@@ -496,7 +506,11 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
             const char *e = std::getenv("GHPC_FRAME_MIN");
             return e ? (size_t)std::strtoull(e, nullptr, 0) : 1000u;
         }();
-        if (nonBlack > frameMin)
+        // GHPC_FRAME_AFTER_START holds every dump until StartGame has run, so
+        // the budget lands on gameplay instead of on the splashes. It decides
+        // whether a file is written and touches no guest state.
+        static const bool afterStart = std::getenv("GHPC_FRAME_AFTER_START") != nullptr;
+        if (nonBlack > frameMin && (!afterStart || g_ghpcGameStarted.load(std::memory_order_relaxed)))
         {
             static int dumps = 0;
             static auto lastDump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -2266,6 +2280,48 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     if (isCall && targetPc == 0x00107140u)
     {
         noteGameCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCSTART: latch the one instant the count-in ends.
+    if (isCall && targetPc == 0x001070F8u && !g_ghpcGameStarted.exchange(true))
+    {
+        std::fprintf(stderr, "[ghpc/start] StartGame entered, count-in over\n");
+    }
+
+    // GHPCCOUNTIN: shorten the count-in at its source, not at the gate.
+    //
+    // StartIntro (0x1074e8) works out how long the intro camera shot runs
+    //   1078f8  div.s $f20, $f0, $f1     $f1 = 41f00000 = 30.0, frames -> seconds
+    // and hands it straight to SetStartTime
+    //   10799c  jal 0x107e88             SetStartTime(this, $f20)
+    // which is the only writer of the clock the StartGame gate reads: it calls
+    // SetSecondsBeat(TheTaskMgr, $f12, $f12 * 1000 / GetTempo()) and then
+    // SetRealtime(true), whose SetTimeOffset is what fills mUnk78. So every
+    // derived value, the beat included, comes out of this one float.
+    //
+    // That is why the clamp goes here and not on mUnk78. Poking mUnk78 later
+    // moves the gate while leaving TaskMgr's seconds and the beat where the
+    // ten second shot put them, which is a guest in two minds about what time
+    // it is. Clamping the argument leaves the game to compute all of it, and
+    // it is the same lever the game pulls itself: mFastIntro (+0x68) takes the
+    // branch at 0x1077fc that skips FindCameraShot, which is to say it feeds
+    // SetStartTime a smaller number by exactly this route.
+    //
+    // A probe, not a fix. The count-in is real and the camera shot is real;
+    // this is a harness for looking at what comes after them, and it stays out
+    // of any run that touches the recorded mark.
+    if (isCall && targetPc == 0x00107E88u)
+    {
+        static const float floorSecs = []() -> float {
+            const char *e = std::getenv("GHPC_COUNTIN");
+            return e ? (float)std::atof(e) : 0.0f;
+        }();
+        if (floorSecs > 0.0f && ctx->f[12] < -floorSecs)
+        {
+            std::fprintf(stderr, "[ghpc/countin] %.3f -> %.3f\n",
+                         (double)ctx->f[12], (double)-floorSecs);
+            ctx->f[12] = -floorSecs;
+        }
     }
 
     // GHPCASSERT: name the guest assert at the call, not after the fact.
