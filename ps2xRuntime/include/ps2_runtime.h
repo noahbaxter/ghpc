@@ -432,6 +432,9 @@ public:
 
     // GHPCSONG: the song position the chart is actually being polled at.
     void noteSongCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+
+    // GHPCGAME: the count-in gate that decides when the chart starts.
+    void noteGameCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
 #endif
     bool dispatchGuestBranch(uint8_t *rdram,
                              R5900Context *ctx,

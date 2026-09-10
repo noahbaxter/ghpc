@@ -44,8 +44,8 @@ supersede earlier ones and topic notes supersede both.
 | held for | 60s |
 | streamEE state | `2` |
 | probes | none, stock build |
-| rounds since gain | 1 of 6 |
-| rounds total | 2 of 14 |
+| rounds since gain | 2 of 6 |
+| rounds total | 3 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -167,32 +167,29 @@ this next starts from a true statement rather than a half-finished round.
 ## Current target
 
 See `ghpc/BACKLOG.md`. **Rung 9 is the floor**, held 300s on a stock build with
-`env: {}`. The song load is finished: the IOP synth service answers the CTL link
-and `FPU_CVT_W_S` truncates as the R5900 does.
+`env: {}`. The song load is finished.
 
-**The chart is gated by one word, `GamePanel+0x70`.** The panel is polled once
-per frame (31 calls against 31 `GetGameExcitement`, 31 `SetExcitementLevel`),
-but `+0x70` is non-zero, so 0x1071b8 routes past `BeatMatch::Poll` into a
-`TaskMgr::UISeconds` block that branches to 0x107220 and skips the chart.
-`StartGame` (0x1070f8) is never reached and `song_tick` has never fired in any
-run of this session. Find the writers of `+0x70`.
+**The chart is blocked by throughput, not by a flag.** Measured 2026-09-10:
+realtime mode is the count-in and `GamePanel::Enter` sets it by design, both
+`StartGame` gates are open, and the ten second count-in advances correctly at
+**0.0019 guest seconds per real second**. `StartGame` is about 84 minutes of
+wall clock away. Nothing is stuck; the guest runs about 0.16 fps at
+`game_screen` against 8.4 on menus.
 
-**Round two's poll census is superseded, do not re-run it.** It measured
-`GamePanel::Poll` at 2 calls and suspected `mPaused`; that was an artifact of
-`GHPC_STREAM_READY` killing the main thread in `SynthEE::Terminate` seconds
-after the transition. `mPaused` is not the gate.
+That makes the **`Rnd` seam the critical path**, not a later nicety. An earlier
+round recorded that the frame rate was not the chart blocker. That was wrong: a
+running chart would advance at any frame rate, but the chart never starts
+because what starts it is measured in guest time.
 
-**The guest runs at about 0.16 fps at `game_screen`**, down from 8.4 on menus,
-because the venue and characters are being rasterised in software. That is the
-`Rnd` seam under Next. It makes the game unplayable but it is not what holds
-`song_tick` at zero: a running chart advances at any frame rate.
+**Do not chase `GamePanel+0x70`, `+0x88`, `SetRealtime` or the count-in.** All
+measured correct, all on the ruled-out list.
 
 `GHPC_STREAM_READY` is retired and removed from the path. Do not reach for it.
 
 The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
 a drop-in**. Check it for a function's name and shape before disassembling. It
-supplied `mState` at `0x4c` and the state enum, and did not have the blocking
-function. Do not build a sync mechanism.
+named `mUnk70` as `SetRealtime`'s argument, which is what unlocked this round.
+Do not build a sync mechanism.
 
 ## Known gaps
 

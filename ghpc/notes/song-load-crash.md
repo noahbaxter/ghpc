@@ -649,6 +649,49 @@ here than the 39% of realtime measured on menus. It is not what stops the chart:
 even at 0.16 fps a running chart would move `song_tick`. But it means "playable"
 needs the seam regardless of the gate.
 
+## The count-in is not stuck, it is running about 525x too slow
+
+Measured 2026-09-10 with a read-only `[ghpc/game]` hook on `GamePanel::Poll`
+printing the gate fields and the value the `StartGame` branch actually compares.
+
+**Realtime mode is the count-in, not a bug.** `GamePanel::Enter` calls
+`SetRealtime(true)` at 0x106d04 with `$a1=1`, so `mUnk70 = 1` on entry is
+correct and intended. While it is set, `Poll` takes the `TaskMgr::UISeconds`
+branch and the `b` at 0x1071f4 skips `BeatMatch::Poll`. It ends when `StartGame`
+(0x1070f8) runs. The other `SetRealtime` call sites are `SetStartTime`
+(0x107edc, `$a1=1`), `StartGame` (0x107114) and `Handle` (0x1099f0); the only
+writers of `+0x70` are the constructor (0x105e98), `Reset` (0x106278) and
+`SetRealtime` itself (0x1083b0).
+
+**Both `StartGame` gates are open.** Measured across every `GamePanel::Poll` in
+a 240s run: `startGate88=0` always, so the `bnezl` at 0x107224 never diverts.
+The pinned fields are set once and stay put, exactly as `SetStartTime` intends:
+
+    tempo=640.339  offset78=-10.000  secs7c=-10.000  beat80=-15.617
+
+`offset78 = -10.0` is a ten second count-in.
+
+**The clock is moving, just not fast enough to matter.** `UISeconds` is
+`*(float *)(*(uint32_t *)(TheTaskMgr + 0x28) + 0x34)` with `TheTaskMgr` at
+0x5A5870, and the branch at 0x10723c compares `UISeconds() + mUnk78` against
+-0.025:
+
+    call  #2  uiSecs=0.0450  countIn=-9.9550
+    call #44  uiSecs=0.3901  countIn=-9.6099
+
+0.345 guest seconds in about 181 real seconds, or **0.0019 guest seconds per
+real second**. Reaching -0.025 needs another 9.585 guest seconds, so `StartGame`
+is roughly **84 minutes of wall clock** away. Nothing is stuck. Everything is
+correct and running at about 1/525 speed.
+
+**This corrects the previous section, which was wrong.** Round five recorded
+"the frame rate is not what holds `song_tick` at zero: a running chart advances
+at any frame rate." The first half of that sentence is false. A *running* chart
+would indeed advance at any frame rate, but the chart never starts, because the
+count-in that starts it is measured in guest time and guest time is gated on the
+frame rate. **The `Rnd` seam is the chart blocker, not merely a playability
+problem.** It moves from Next to the critical path.
+
 ## Ruled out, with evidence. Do not re-chase these.
 
 - **Not a loop, in the crash phase.** Two call-histogram samples across the load
@@ -726,6 +769,15 @@ needs the seam regardless of the gate.
 - **Not the frame rate, for the chart specifically.** The guest drops to about
   0.16 fps at `game_screen`, which makes it unplayable but would not hold
   `song_tick` at zero; a running chart advances at any frame rate.
+
+- **Not `mUnk88`, and not a shut gate.** Measured `startGate88=0` on every
+  `GamePanel::Poll` of a 240s run. Both `StartGame` gates are open.
+- **Not `SetRealtime` being called wrongly.** `GamePanel::Enter` sets it true by
+  design; realtime mode is how the count-in is implemented.
+- **Not a logic bug in the count-in at all.** It advances at 0.0019 guest
+  seconds per real second and would reach `StartGame` in about 84 minutes. The
+  cause is frame rate, not control flow. Round five said the opposite and was
+  wrong; see above.
 
 - **Not `Debug::Fail` returning into the state 3 store.** 0x26d054 is a separate
   jump target reached by the op-type-2 branch at 0x26d048; the `Fail` above it

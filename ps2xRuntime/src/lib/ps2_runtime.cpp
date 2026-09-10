@@ -1868,6 +1868,86 @@ void PS2Runtime::noteSongCall(uint8_t *rdram, R5900Context *ctx, uint32_t target
                  "[ghpc/song] #%llu this=0x%08x ms=%.3f tick=%.3f\n",
                  n, self, (double)ms, (double)tick);
 }
+
+// GHPCGAME: why the chart never starts.
+//
+// GamePanel::Enter calls SetRealtime(true) (0x106d04, $a1=1), so mUnk70 at +0x70
+// is 1 by design on entry: realtime mode IS the count-in. While it is set,
+// GamePanel::Poll takes the TaskMgr::UISeconds branch at 0x1071b8 and the `b`
+// at 0x1071f4 jumps past BeatMatch::Poll, so no chart runs. It ends when
+// StartGame (0x1070f8) flips it, and StartGame sits behind two gates:
+//
+//   107220  lw    $2, 0x88($17)      mUnk88, non-zero skips the check entirely
+//   10723c  c.olt.s $f0, $f20        -0.025 < $f20, the count-in reaching zero
+//   10724c  jal   StartGame
+//
+// $f20 is UISeconds() + mUnk78, and SetTimeOffset stores Seconds()-UISeconds()
+// into mUnk78, so $f20 reconstructs TaskMgr seconds and counts up toward 0.
+// Reading the fields is the only way to tell "the gate is shut" from "the clock
+// is stopped" from "the clock is fine but the start time is absurd"; the
+// disassembly cannot distinguish them and guessing between them is how a round
+// gets wasted.
+//
+// Offsets are the decomp's GamePanel layout. Addresses are GH2 PS2 Final Debug.
+namespace
+{
+    std::atomic<unsigned long long> g_gameCalls{0ull};
+
+    float guestFloat(const uint8_t *rdram, uint32_t base, uint32_t off)
+    {
+        uint32_t raw = 0u;
+        float value = 0.0f;
+        if (guestRead32(const_cast<uint8_t *>(rdram), base + off, raw))
+        {
+            std::memcpy(&value, &raw, sizeof(value));
+        }
+        return value;
+    }
+
+    uint32_t guestWord(const uint8_t *rdram, uint32_t base, uint32_t off)
+    {
+        uint32_t raw = 0u;
+        guestRead32(const_cast<uint8_t *>(rdram), base + off, raw);
+        return raw;
+    }
+}
+
+void PS2Runtime::noteGameCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    (void)targetPc;
+    const unsigned long long n = g_gameCalls.fetch_add(1ull) + 1ull;
+    const uint32_t self = getRegU32(ctx, 4);
+
+    // Every call is printed. GamePanel::Poll runs about 30 times in a whole run
+    // at the frame rate game_screen currently manages, so a heartbeat would
+    // throw away most of the evidence rather than save noise.
+    // UISeconds__C7TaskMgr (0x316448) is
+    //   *(float *)(*(uint32_t *)(TheTaskMgr + 0x28) + 0x34)
+    // and TheTaskMgr is 0x5A5870. countIn is the value the StartGame branch at
+    // 0x10723c actually compares: $f20 = UISeconds() + mUnk78. StartGame runs
+    // once it exceeds -0.025, so watching it move (or not) across a run is what
+    // separates a shut gate from a stopped clock from a slow one.
+    constexpr uint32_t kTheTaskMgr = 0x005A5870u;
+    const uint32_t taskState = guestWord(rdram, kTheTaskMgr, 0x28u);
+    const float uiSeconds = taskState ? guestFloat(rdram, taskState, 0x34u) : 0.0f;
+    const float offset = guestFloat(rdram, self, 0x78u);
+
+    std::fprintf(stderr,
+                 "[ghpc/game] #%llu this=0x%08x realtime=%u startGate88=%u "
+                 "unk84=%u unk36c=%u tempo=%.3f offset78=%.3f secs7c=%.3f "
+                 "beat80=%.3f uiSecs=%.4f countIn=%.4f\n",
+                 n, self,
+                 guestWord(rdram, self, 0x70u),
+                 guestWord(rdram, self, 0x88u),
+                 guestWord(rdram, self, 0x84u),
+                 guestWord(rdram, self, 0x36Cu),
+                 (double)guestFloat(rdram, self, 0x74u),
+                 (double)offset,
+                 (double)guestFloat(rdram, self, 0x7Cu),
+                 (double)guestFloat(rdram, self, 0x80u),
+                 (double)uiSeconds,
+                 (double)(uiSeconds + offset));
+}
 #endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
@@ -2180,6 +2260,12 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     if (isCall && targetPc == 0x00117DD0u)
     {
         noteSongCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCGAME: GamePanel::Poll, the count-in gate.
+    if (isCall && targetPc == 0x00107140u)
+    {
+        noteGameCall(rdram, ctx, targetPc);
     }
 
     // GHPCASSERT: name the guest assert at the call, not after the fact.

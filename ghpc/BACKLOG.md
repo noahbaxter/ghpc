@@ -18,24 +18,30 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Find out why `GamePanel+0x70` is non-zero.** That word is what stops the
-chart. Measured 2026-09-10 on the rung 9 build: `GamePanel::Poll` runs once per
-frame (31 calls, matched by 31 `GetGameExcitement` and 31 `SetExcitementLevel`),
-but `+0x70` is non-zero, so 0x1071b8 routes past `BeatMatch::Poll` into a
-`TaskMgr::UISeconds` block that branches to 0x107220 and skips the chart
-entirely. `StartGame` (0x1070f8) is never reached.
+**The `Rnd` seam is the critical path to the goal.** Promoted from Next, because
+it turns out to be what stops the chart rather than only what makes the game
+unplayable.
 
-Two further gates sit past 0x107220 and both need checking once `+0x70` is
-understood: `+0x88` must be zero (`bnezl` at 0x107224) and the accumulated time
-in `$f20` must pass the `0xbccccccd` threshold at 0x10723c.
+Measured 2026-09-10: nothing is stuck at `game_screen`. `GamePanel::Enter` sets
+realtime mode by design, both `StartGame` gates are open (`startGate88=0` on
+every poll), and the ten second count-in advances correctly. It advances at
+**0.0019 guest seconds per real second**, so `StartGame` is about **84 minutes**
+of wall clock away. The guest runs about 0.16 fps at `game_screen` against 8.4
+on menus, because the venue and characters are rasterised in software on the EE
+thread.
 
-Find the writers of `+0x70` the way the `+0x4c` and `+0x4130` writers were
-found, with a whole-`.text` store scan resolved against symbol boundaries.
-Details and the disassembled gate in `notes/song-load-crash.md`.
+So the chart is not gated by a flag. It is gated by throughput. Fixing the
+rendering seam is what makes the goal reachable, and micro-optimisation will not
+close a 525x gap: this needs the native GL or Vulkan backend at the `Rnd` layer
+that the seam item already describes, which also retires VIF1, VU1, GIF, MFIFO
+and the GS rasteriser as dead code.
 
-**Do not re-run round two's poll census.** It is superseded and its conclusion
-(`GamePanel::Poll` barely called, panel possibly paused) was an artifact of
-`GHPC_STREAM_READY` killing the main thread.
+A 2 hour confirming run was launched to watch the count-in actually reach zero
+and `song_tick` fire. Check `work/r6long.json` and `work/r6long.log` before
+assuming anything about what it found.
+
+**Do not chase `GamePanel+0x70`, `+0x88`, `SetRealtime` or the count-in logic.**
+All measured correct. Details in `notes/song-load-crash.md`.
 
 ## Next
 
