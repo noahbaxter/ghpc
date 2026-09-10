@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <map>
 #include <set>
+#include <string>
 #include <utility>
 #include <cstdlib>
 #include <cstring>
@@ -2162,8 +2163,33 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
     const uint64_t budgetEnd = m_cycle + maxCycles;
     bool programEnded = false;
+#if GHPC_DIAG
+    // GHPCVUEND: why did this microprogram stop?
+    //
+    // One MSCAL is one run() call, and the budget is 65536 cycles handed down
+    // from the callback in ps2_runtime.cpp. A program that ends on its E-bit
+    // did what it was written to do. A program that ends because the budget ran
+    // out did NOT: it was cut off mid-flight, so whatever it had half written
+    // into VU1 memory is what gets kicked to the GS, and the next MSCAL starts
+    // over from the top and does the same work again.
+    //
+    // That single distinction separates the two explanations for a 4 second
+    // frame. If these programs terminate normally, the cost is honest work and
+    // the answer is a native backend at the Rnd layer. If they are being cut
+    // off, the frame rate and the corrupted picture are one bug with one fix,
+    // and no amount of backend rewriting would have helped.
+    //
+    // Counted rather than sampled, because a runaway that happens on 1% of
+    // MSCALs and a runaway that happens on all of them need completely
+    // different responses and a sampled probe cannot tell them apart.
+    uint64_t ghpcInstrs = 0ull;
+    const bool ghpcCensus = (m_unit == Unit::VU1);
+#endif
     while (m_cycle < budgetEnd && !m_stopRequested)
     {
+#if GHPC_DIAG
+        ++ghpcInstrs;
+#endif
         commitReadyPipelines();
 #if GHPC_DIAG
         if (m_unit == Unit::VU1)
@@ -2533,6 +2559,58 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         m_pendingHaltD = false;
         m_pendingHaltT = false;
     }
+#if GHPC_DIAG
+    if (ghpcCensus)
+    {
+        // Four outcomes, kept apart. "Ran off the end of code memory" is not
+        // the same failure as "ran out of budget", and folding them together
+        // would hide which one is happening.
+        enum { kEnded = 0, kBudget = 1, kOffEnd = 2, kStopped = 3 };
+        int why = kEnded;
+        if (programEnded)          why = kEnded;
+        else if (m_stopRequested)  why = kStopped;
+        else if (m_state.pc + 8u > codeSize) why = kOffEnd;
+        else                       why = kBudget;
+
+        struct Bucket { uint64_t n[4]; uint64_t instrs; uint64_t maxInstrs; };
+        static std::map<uint32_t, Bucket> byPc;
+        static uint64_t total = 0ull;
+        Bucket &b = byPc[m_ghpcStartPc];
+        ++b.n[why];
+        b.instrs += ghpcInstrs;
+        if (ghpcInstrs > b.maxInstrs) b.maxInstrs = ghpcInstrs;
+        ++total;
+
+        static const uint64_t every = []() -> uint64_t {
+            const char *e = std::getenv("GHPC_VU1_CENSUS");
+            return e ? std::strtoull(e, nullptr, 0) : 0ull;
+        }();
+        if (every && (total % every) == 0ull)
+        {
+            // One buffer, one write. call_hist_dump splices concurrent guest
+            // stderr into its own lines because it streams field by field, and
+            // a census that cannot be parsed is not a census.
+            std::string line = "[vu1/census] total=" + std::to_string(total);
+            for (const auto &kv : byPc)
+            {
+                const Bucket &v = kv.second;
+                const uint64_t runs = v.n[0] + v.n[1] + v.n[2] + v.n[3];
+                char buf[224];
+                std::snprintf(buf, sizeof(buf),
+                              " pc0x%x{ebit=%llu budget=%llu offend=%llu stop=%llu"
+                              " avgInstr=%llu maxInstr=%llu}",
+                              kv.first,
+                              (unsigned long long)v.n[0], (unsigned long long)v.n[1],
+                              (unsigned long long)v.n[2], (unsigned long long)v.n[3],
+                              (unsigned long long)(runs ? v.instrs / runs : 0ull),
+                              (unsigned long long)v.maxInstrs);
+                line += buf;
+            }
+            line += "\n";
+            std::fwrite(line.data(), 1, line.size(), stderr);
+        }
+    }
+#endif
     m_state.cycles = m_cycle;
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);
