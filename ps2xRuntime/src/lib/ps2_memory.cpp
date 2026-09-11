@@ -1617,10 +1617,14 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                             const uint32_t ringMask = m_ioRegisters[0x1000E040u];
                             const bool ringDrain = channelBase == 0x10009000u &&
                                                    ((dctrlA >> 2) & 0x3u) == 2u && ringMask != 0u;
+                            // A cnt tag in the ring's last quadword puts its
+                            // payload at exactly ring end, which is ring base
+                            // on hardware, so the range is inclusive of the end
+                            // and the start is wrapped before the first read.
                             if (!s_noWrapLegacy && ringDrain && m_rdram &&
-                                srcAddr >= ringBase && srcAddr < ringBase + ringMask + 16u)
+                                srcAddr >= ringBase && srcAddr <= ringBase + ringMask + 16u)
                             {
-                                uint32_t a = srcAddr;
+                                uint32_t a = ringBase | (srcAddr & ringMask);
                                 for (uint32_t q = 0u; q < qwCount; ++q)
                                 {
                                     const uint32_t phys = a & PS2_RAM_MASK;

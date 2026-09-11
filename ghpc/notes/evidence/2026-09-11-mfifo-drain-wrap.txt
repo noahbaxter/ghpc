@@ -68,11 +68,30 @@ SPEED, build (release), 150s, both arms at game_screen, same binary
 
 3.6x. The debug build went 0.6% -> 3.8%. Menus unchanged (release ~93-100%).
 
-STILL OPEN
+THE SURVIVOR, SAME BUG
 
-With the fix, 13 OFFSETs with NUM != 0 remain per 130s debug run, in two
-gameplay chunks (mscal 14929 size 2992, mscal 36983 size 2256), both
-starting BASE 0->99 at pos 12 then the same packed-byte stretch. dirtyChunks
-is 0 so they trip no invalid opcode, and no runaway followed them in this run.
-A second, rarer source of the same junk. Dump them with GHPC_VIF1_DUMPCHUNK
-(the offset-num trigger) before assuming they are harmless.
+With the first fix, 13 OFFSETs with NUM != 0 remained per 130s debug run, in
+two gameplay chunks (mscal 14929 size 2992, mscal 36983 size 2256), both
+opening BASE 0->99 at pos 12 then the same packed-byte stretch. Intermittent:
+one 140s run had none, the next had one. Dumped:
+
+  tag@0xb7fff0 id=1 qwc=22   piece ee=0xb80000 len=352
+
+The cnt tag is in the ring's LAST quadword, so tag+16 is exactly 0xb80000.
+The wrap range was srcAddr < base + mask + 16, which excludes that by one
+byte, and the linear read then started past the ring. Range made inclusive
+and the start wrapped before the first read. Two debug runs after that, 220s
+and 280s, both with the dumper armed: zero dumps, zero OFFSETs past boot.
+
+THE PICTURE
+
+2026-09-11-gameplay-frame-{0,40,59}.png, build-debug with both wraps,
+GHPC_FRAME_AFTER_START=1 GHPC_FRAME_ONCHANGE=1 GHPC_FRAME_BURST=60. The Bog
+High School venue, scoreboard, hanging lamp, the fretboard with its pentagram
+and rose art, and the five gems at the bottom. Compare 2026-09-10-gameplay-
+frame-16.png from before the fix: a green sliver over noise. The corruption
+was the runaway, as predicted.
+
+The same two runs give the chart result n=2: GHPC_SONG_HEARTBEAT=10 printed
+song_tick every 10th PlayerMatcher::Poll, 0.000 -> 1174 (19 samples) and
+0.000 -> 1799 (29 samples), monotonic.
