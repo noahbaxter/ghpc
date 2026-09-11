@@ -18,25 +18,31 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The VU1 runaway, per `NEXT.md`. Same input at entry, different outcome: find
-what differs inside the run.**
+**The VU1 runaway, per `NEXT.md`. The program writes its output over its own
+input header because vf2.x is 0. Find what writes vf2.**
 
-`notes/evidence/2026-09-10-vu1-top-census.txt`: TOP is not the variable and
-qw[TOP] is always freshly unpacked. 0x30b0 cut-offs start with a header
-byte-identical to healthy runs, yet the provenance round saw its bound ILW
-(`0x31b8`) read 1042 where that header holds 18. In order:
+`notes/evidence/2026-09-10-vu1-top-clobber.txt`: 0x30b0's output store
+`SQI vf1, (vi4++)` at 0x3170 takes its pointer from `MTIR vi4, vf2.x` at
+0x3148, and vf2.x is 0, so the GIFtag lands on qw 0. That is the input header
+whenever TOP=0: 66 of 66 cut-offs, 1 of 302 ended runs. In order:
 
-1. **Watch qw[TOP] during the run.** For 0x30b0 at TOP=0, record every VU store
-   and XGKICK touching qw[TOP] between MSCAL entry and the ILW at 0x31b8, and
-   the value the ILW gets. Cut-off vs ended, same run. If a store lands first,
-   name its pc; if nothing writes and the ILW still reads something else, the
-   ILW's address or field decode is wrong.
-2. **Diff the state carried in.** VI registers at entry, and whether the run is
-   a fresh MSCAL or an MSCNT resuming a cut-off program. 18 cut-offs shared one
-   mscal at 8393, so MSCNT resumes a stuck program mid-loop and multiplies the
-   cost. Split the census by MSCAL vs MSCNT.
-3. **Dump gameplay runaways, not the first ten.** `GHPC_VU1_LOOP` dumps the
-   first N. Add a skip so dumps land on `game_screen`.
+1. **Trace vf2 at runtime.** vf2 at MSCAL entry, every write to it during the
+   run (pc, lower and upper word, value), and its value at the MTIR. Split
+   TOP=0 against TOP=330 and cut against ended. Also dump the code at
+   qw689.x*8, the second callee, which is the one place left in 0x30b0's path
+   that could set it.
+2. **If vf2 is carried in**, find the program that last wrote it before 0x30b0
+   runs. VF registers persist across MSCALs, so a program sharing vf2 as
+   scratch, or an init program that never ran or ran on bad data, would both
+   look like this.
+3. **Then 0xcd8.** It also takes its output pointer from `MTIR vi4, vf2.x`
+   (0x0da0). Its runaway loop is different (header 0, and a store riding the
+   runaway counter), so confirm whether fixing vf2 moves it before assuming.
+
+VU code is readable offline: `work/GH2_debug.elf` holds the overlays as data.
+Search for a known instruction pair from a runtime dump to get VU 0's file
+offset, then decode by hand. Two overlays found so far: 0x3352e0 (0x30b0
+program) and 0x334c08 (the 0x3e28 callee).
 
 Done this round: the VIF1 residual fix. Commands straddling two DMA chunks are
 now carried, not dropped (`GHPC_VIF1_NO_RESIDUAL=1` for the old behaviour).

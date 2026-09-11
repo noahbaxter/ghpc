@@ -193,6 +193,13 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                 comp = 3;
             uint32_t v;
             std::memcpy(&v, vuData + addr + comp * 4, 4);
+#if GHPC_DIAG
+            if (m_unit == Unit::VU1)
+            {
+                extern void ghpcNoteTopRead(uint32_t, int, uint32_t, uint32_t);
+                ghpcNoteTopRead(addr, comp, v, m_state.pc);
+            }
+#endif
             if (it != 0)
             {
 #if GHPC_DIAG
@@ -729,6 +736,13 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                         comp = 3;
                     uint32_t v;
                     std::memcpy(&v, vuData + addr + comp * 4, 4);
+#if GHPC_DIAG
+                    if (m_unit == Unit::VU1)
+                    {
+                        extern void ghpcNoteTopRead(uint32_t, int, uint32_t, uint32_t);
+                        ghpcNoteTopRead(addr, comp, v, m_state.pc);
+                    }
+#endif
                     if (viT != 0)
                     {
 #if GHPC_DIAG

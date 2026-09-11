@@ -712,6 +712,18 @@ void VU1Interpreter::queueStore(uint32_t address, const uint32_t words[4], uint8
     {
         if (!store.valid)
         {
+#if GHPC_DIAG
+            if (m_unit == Unit::VU1)
+            {
+                // At issue, m_state.pc is the storing instruction itself; by the
+                // time the store lands the pc has moved on.
+                extern void ghpcNoteTopStoreIssue(uint32_t, uint32_t, const int32_t *);
+                int32_t vi[16];
+                for (int r = 0; r < 16; ++r)
+                    vi[r] = (int32_t)m_state.vi[r];
+                ghpcNoteTopStoreIssue(address, m_state.pc, vi);
+            }
+#endif
             store.valid = true;
             store.readyCycle = m_cycle + 1u;
             store.address = address;
@@ -904,6 +916,11 @@ void VU1Interpreter::commitReadyPipelines()
                 unsigned bef[4];
                 std::memcpy(bef, m_activeVuData + store.address, sizeof(bef));
                 ghpcLogQwWrite(g_ghpcVu1Mscals, 1 + (int)(m_state.pc << 4), (unsigned)(store.address / 16u), bef, oldWords);
+                if (m_unit == Unit::VU1)
+                {
+                    extern void ghpcNoteTopStore(unsigned, unsigned, const unsigned *, const unsigned *);
+                    ghpcNoteTopStore((unsigned)(store.address / 16u), m_state.pc, bef, oldWords);
+                }
             }
 #endif
             std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
@@ -2062,6 +2079,7 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
     m_state.pc = startPC & microAddressMask();
 #if GHPC_DIAG
     m_ghpcStartPc = startPC & microAddressMask();
+    { extern int g_ghpcVu1Entry; g_ghpcVu1Entry = 0; }
     // One-shot raw microcode dump. The matrix load and compose at 0x0d30..0x0d70
     // were read off a partial trace; dumping the words lets the dest fields be
     // decoded directly instead of inferred. GHPC_VU1_DUMP=<startByte>:<count>.
@@ -2112,6 +2130,9 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
     m_state.itop = itop;
     m_state.stoppedByD = false;
     m_state.stoppedByT = false;
+#if GHPC_DIAG
+    { extern int g_ghpcVu1Entry; g_ghpcVu1Entry = 1; }
+#endif
     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
 }
 
@@ -2171,6 +2192,59 @@ void ghpcMtxWatch(const uint8_t *data, uint32_t size, const char *where, unsigne
     }
     std::memcpy(last, cur, sizeof(cur));
 }
+
+// Cut-off and ended runs of 0x30b0 start with the same header at qw[TOP], so
+// whatever separates them happens after entry. Per run: the entry value, the
+// first VU store to land on qw[TOP], the first integer load of it, and the
+// first such load that returns something other than the entry value.
+int g_ghpcVu1Entry = 0;  // 0 = MSCAL (execute), 1 = MSCNT (resume)
+struct TwStore { bool seen; uint32_t pc; uint32_t before[4], after[4]; };
+struct TwRead { bool seen; uint32_t pc; int comp; uint32_t val; bool afterStore; };
+static uint32_t g_twTop = 0u;
+static uint32_t g_twEntry[4] = {};
+static TwStore g_twStore = {};
+static TwRead g_twFirstRead = {}, g_twDiffRead = {};
+// The first store issued at qw[TOP] this run: its own pc, every VI at that
+// moment, and who wrote each VI so far this run.
+struct TwIssue { bool seen; uint32_t pc; int32_t vi[16]; ViProv prov[16]; };
+static TwIssue g_twIssue = {};
+static void ghpcTopWatchBegin(const uint8_t *vuData, uint32_t top)
+{
+    g_twTop = top & 0x3FFu;
+    std::memcpy(g_twEntry, vuData + g_twTop * 16u, sizeof(g_twEntry));
+    g_twStore = {};
+    g_twFirstRead = {};
+    g_twDiffRead = {};
+    g_twIssue = {};
+}
+void ghpcNoteTopStoreIssue(uint32_t address, uint32_t pc, const int32_t *vi)
+{
+    if (address / 16u != g_twTop || g_twIssue.seen)
+        return;
+    g_twIssue.seen = true;
+    g_twIssue.pc = pc;
+    std::memcpy(g_twIssue.vi, vi, sizeof(g_twIssue.vi));
+    std::memcpy(g_twIssue.prov, g_ghpcViProv, sizeof(g_twIssue.prov));
+}
+void ghpcNoteTopStore(unsigned qw, unsigned pc, const unsigned *before, const unsigned *after)
+{
+    if (qw != g_twTop || g_twStore.seen)
+        return;
+    g_twStore.seen = true;
+    g_twStore.pc = pc;
+    std::memcpy(g_twStore.before, before, sizeof(g_twStore.before));
+    std::memcpy(g_twStore.after, after, sizeof(g_twStore.after));
+}
+void ghpcNoteTopRead(uint32_t addr, int comp, uint32_t v, uint32_t pc)
+{
+    if (addr / 16u != g_twTop)
+        return;
+    const TwRead r{true, pc, comp, v, g_twStore.seen};
+    if (!g_twFirstRead.seen)
+        g_twFirstRead = r;
+    if (!g_twDiffRead.seen && v != g_twEntry[comp & 3])
+        g_twDiffRead = r;
+}
 #endif
 
 void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
@@ -2191,6 +2265,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
             g_ghpcViProv[r].seen = false;
             g_ghpcViProv[r].entry = m_state.vi[r];
         }
+        ghpcTopWatchBegin(vuData, m_state.top);
     }
 #endif
 
@@ -2728,6 +2803,101 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
             }
         }
 
+        // [cut][entered by MSCNT][VU store hit qw[TOP]][a header load got a
+        // value other than the entry one], per startPc.
+        struct TwBucket { uint64_t n[2][2][2][2]; };
+        static std::map<uint32_t, TwBucket> twByPc;
+        if (why == kEnded || why == kBudget)
+        {
+            const int cutI = (why == kBudget) ? 1 : 0;
+            ++twByPc[m_ghpcStartPc].n[cutI][g_ghpcVu1Entry ? 1 : 0]
+                                     [g_twStore.seen ? 1 : 0][g_twDiffRead.seen ? 1 : 0];
+            static std::map<uint32_t, int> twShown[2];
+            if ((m_ghpcStartPc == 0x30b0u || m_ghpcStartPc == 0xcd8u) &&
+                twShown[cutI][m_ghpcStartPc]++ < (cutI ? 10 : 4))
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                std::fprintf(stderr,
+                             "[vu1/topwatch] %s pc0x%x mscal=%llu by=%s top=%u entry=%08x %08x %08x %08x"
+                             " | store=%s pc=0x%x after=%08x %08x %08x %08x"
+                             " | read0=%s pc=0x%x c%d val=%u"
+                             " | diff=%s pc=0x%x c%d val=%u entryval=%u afterStore=%d\n",
+                             cutI ? "CUT " : "ebit", m_ghpcStartPc, g_ghpcVu1Mscals,
+                             g_ghpcVu1Entry ? "mscnt" : "mscal", (unsigned)g_twTop,
+                             g_twEntry[0], g_twEntry[1], g_twEntry[2], g_twEntry[3],
+                             g_twStore.seen ? "yes" : "no", (unsigned)g_twStore.pc,
+                             g_twStore.after[0], g_twStore.after[1], g_twStore.after[2], g_twStore.after[3],
+                             g_twFirstRead.seen ? "yes" : "no", (unsigned)g_twFirstRead.pc,
+                             g_twFirstRead.comp, (unsigned)g_twFirstRead.val,
+                             g_twDiffRead.seen ? "yes" : "no", (unsigned)g_twDiffRead.pc,
+                             g_twDiffRead.comp, (unsigned)g_twDiffRead.val,
+                             (unsigned)g_twEntry[g_twDiffRead.comp & 3], (int)g_twDiffRead.afterStore);
+                if (g_twIssue.seen)
+                {
+                    // Name the store and the register its address came from.
+                    // No VU disassembler exists here, so both VI fields are
+                    // reported (VIS is the base for ISW, VIT for SQ) and the
+                    // code around it is dumped raw once per program.
+                    const uint32_t ipc = g_twIssue.pc;
+                    uint32_t ilo = 0u;
+                    if (ipc + 8u <= codeSize)
+                        std::memcpy(&ilo, vuCode + ipc, 4);
+                    const unsigned fs = VIS(ilo), ft = VIT(ilo);
+                    std::string s;
+                    char b[256];
+                    std::snprintf(b, sizeof(b),
+                                  "[vu1/topwatch]   issue pc=0x%x lo=0x%08x vis=vi%u(%d) vit=vi%u(%d)\n",
+                                  ipc, ilo, fs, (int)(int16_t)g_twIssue.vi[fs],
+                                  ft, (int)(int16_t)g_twIssue.vi[ft]);
+                    s += b;
+                    const unsigned regs[2] = {fs, ft};
+                    for (unsigned r : regs)
+                    {
+                        if (r == 0u)
+                            continue;
+                        const ViProv &p = g_twIssue.prov[r];
+                        if (p.seen)
+                            std::snprintf(b, sizeof(b),
+                                          "[vu1/topwatch]   vi%u entry=%d first pc=0x%x lo=0x%08x val=%d load=%d addr=0x%x"
+                                          " | last pc=0x%x lo=0x%08x val=%d\n",
+                                          r, (int)(int16_t)p.entry, p.first.pc, p.first.lo,
+                                          (int)(int16_t)p.first.val, (int)p.first.isLoad, p.first.addr,
+                                          p.last.pc, p.last.lo, (int)(int16_t)p.last.val);
+                        else
+                            std::snprintf(b, sizeof(b),
+                                          "[vu1/topwatch]   vi%u entry=%d, not written this run before the store\n",
+                                          r, (int)(int16_t)p.entry);
+                        s += b;
+                    }
+                    static std::map<uint32_t, bool> codeDumped;
+                    if (cutI && !codeDumped[m_ghpcStartPc] && codeSize >= 8u)
+                    {
+                        codeDumped[m_ghpcStartPc] = true;
+                        uint32_t lo2 = ipc, hi2 = ipc;
+                        if (g_twDiffRead.seen)
+                        {
+                            lo2 = std::min(lo2, g_twDiffRead.pc);
+                            hi2 = std::max(hi2, g_twDiffRead.pc);
+                        }
+                        const uint32_t from = ((lo2 >= 0x40u) ? lo2 - 0x40u : 0u) & ~7u;
+                        const uint32_t to = std::min<uint32_t>(hi2 + 0x18u, codeSize - 8u);
+                        for (uint32_t a = from; a <= to && a - from < 64u * 8u; a += 8u)
+                        {
+                            uint32_t l = 0u, h = 0u;
+                            std::memcpy(&l, vuCode + a, 4);
+                            std::memcpy(&h, vuCode + a + 4, 4);
+                            std::snprintf(b, sizeof(b), "[vu1/topwatch]   code 0x%04x lo=0x%08x hi=0x%08x%s\n",
+                                          a, l, h,
+                                          a == ipc ? "  <== store"
+                                          : (g_twDiffRead.seen && a == g_twDiffRead.pc) ? "  <== diff read" : "");
+                            s += b;
+                        }
+                    }
+                    std::fwrite(s.data(), 1, s.size(), stderr);
+                }
+            }
+        }
+
         // The first cut-off run of the whole session, on the same clock as
         // [projw]. This is what orders "the data went bad" against "the loop
         // stopped ending", which is the difference between the runaway being
@@ -2936,6 +3106,23 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                               (unsigned)(kv.first >> 16), (unsigned)(kv.first & 0xFFFFu),
                               (unsigned long long)t.n[1][0], (unsigned long long)t.n[1][1],
                               (unsigned long long)t.n[0][0], (unsigned long long)t.n[0][1]);
+                line += buf;
+            }
+            // s = a VU store hit qw[TOP], d = a header load differed from entry.
+            line += "\n[vu1/topwatch] total=" + std::to_string(total);
+            for (const auto &kv : twByPc)
+            {
+                const TwBucket &t = kv.second;
+                char buf[640];
+                int w = std::snprintf(buf, sizeof(buf), " pc0x%x{", (unsigned)kv.first);
+                for (int c = 0; c < 2; ++c)
+                    for (int e = 0; e < 2; ++e)
+                        w += std::snprintf(buf + w, sizeof(buf) - (size_t)w,
+                                           "%s/%s s0d0=%llu s0d1=%llu s1d0=%llu s1d1=%llu%s",
+                                           c ? "cut" : "end", e ? "mscnt" : "mscal",
+                                           (unsigned long long)t.n[c][e][0][0], (unsigned long long)t.n[c][e][0][1],
+                                           (unsigned long long)t.n[c][e][1][0], (unsigned long long)t.n[c][e][1][1],
+                                           (c == 1 && e == 1) ? "}" : " | ");
                 line += buf;
             }
             line += "\n";

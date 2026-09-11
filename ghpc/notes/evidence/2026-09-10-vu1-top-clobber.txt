@@ -1,0 +1,129 @@
+VU1 runaway: the program's own output store overwrites its input header,
+2026-09-10, build-debug, 300s, GHPC_COUNTIN=0.5 GHPC_VU1_CENSUS=2000,
+bootskip on, game_screen at t=61.7. Includes the VIF1 residual fix.
+
+PROBE
+
+[vu1/topwatch], per VU1 run: qw[TOP] at entry, the first VU store to land on
+qw[TOP], the first integer load (ILW/ILWR) of it, the first such load that
+returns something other than the entry value, and whether the run was entered
+by MSCAL (execute) or MSCNT (resume). Buckets are
+[cut|end][mscal|mscnt] s = a store hit qw[TOP], d = a load differed.
+
+0x30b0: CLEAN SEPARATION
+
+  end/mscal   s0d0=264  s0d1=0  s1d0=37  s1d1=1
+  cut/mscal   s0d0=0    s0d1=0  s1d0=0   s1d1=66
+
+Every cut-off (66 of 66) had a store land on qw[TOP] and then a header load
+return a different value. 1 of 302 ended runs did. No 0x30b0 run came in by
+MSCNT.
+
+Every cut-off sample is at TOP=0 with the healthy header at entry
+(00000004 00000011 00000012 00000614). The store lands at pc 0x3178 (flush
+pc, so issued one slot earlier) and writes
+
+  00008000 300e4000 00000412 00000000
+
+over qw 0. That is a GIFtag, and z=0x412 is the 1042 the provenance round saw
+the bound read. The differing load is at pc 0x31b0, component y, reading
+806240256 (0x300e4000) where the entry value was 17. Healthy samples are at
+TOP=330 and no store ever touches qw 330.
+
+So the program writes its GS output at qw 0. When the input half is 0, that is
+its own input header, and the header is re-read after the write.
+
+0xcd8: SAME SIGNATURE, NOT EXCLUSIVE
+
+  end/mscal   s0d0=13858 s0d1=0 s1d0=14078 s1d1=25
+  end/mscnt   s0d0=5222  s0d1=0 s1d0=8996  s1d1=19
+  cut/mscal   s0d0=1129  s0d1=0 s1d0=422   s1d1=664
+  cut/mscnt   s0d0=2937  s0d1=0 s1d0=2000  s1d1=1574
+
+s1d1 is 664 of 2215 fresh-MSCAL cut-offs against 25 of 27961 ended ones. 0xcd8
+also stores a GIFtag to qw 0 on healthy TOP=0 runs (mscal 1: store at 0xdd8,
+00008000 302e4000 00000412), but reads its header at 0xce0 before that, so it
+survives. Other 0xcd8 cut-offs have no store and no differing read: the menu
+ones with an all-zero header (mscal 6645), and TOP=514 ones. More than one
+mechanism.
+
+MSCNT is common in healthy runs too (14237 ended), so H-MSCNT alone does not
+explain cut-offs.
+
+THE STORE, NAMED
+
+Second probe (store recorded at issue, where m_state.pc is the storing
+instruction). All 10 sampled 0x30b0 cut-offs:
+
+  issue pc=0x3170 lo=0x81e40b7d   SQI.xyzw vf1, (vi4++)   vi4 = 0
+
+vi4's writers this run: XTOP vi4 at 0x3e40 (vi4 = TOP), then MTIR vi4, vf2.x
+at 0x3148 (lo 0x800413fc), which replaces it with the low 16 bits of vf2.x,
+and that is 0. The output pointer is vf2.x, not TOP. Healthy 0xcd8 runs do the
+same through MTIR vi4, vf2.x at 0x0da0 and store at 0x0dd0.
+
+0xcd8's own runaway store is different: 0x0bc8 lo=0x03e36ffb is
+SQ vf13, -5(vi3) in the IBNE delay slot, riding the runaway counter vi3. That
+store is a consequence of the loop, not its cause.
+
+VU code is data in the ELF. work/GH2_debug.elf holds the 0x30b0 overlay with
+VU address 0 at file offset 0x3352e0; the words around 0x3170 match the runtime
+dump exactly. Decoded prologue:
+
+  0x30b0  ILW.x  vi1,  0x2b0(vi0)    qw688.x, 1989 at runtime
+  0x30b8  ILW.x  vi15, 0x2b1(vi0)    qw689.x
+  0x30d0  JALR   vi2, vi1            call 1989*8 = 0x3e28
+  0x30e0  JALR   vi2, vi15           call qw689.x*8
+  0x30f0  XTOP   vi1
+  0x30f8  ILW.z  vi14, 0(vi1)        header count
+  0x3100..0x3140  LQ vf7..vf13 from qw 695..703
+  0x3148  MTIR   vi4, vf2.x          output pointer
+  0x3170  SQI    vf1, (vi4++)        the clobber
+
+Nothing from 0x30b0 to 0x3148 writes vf2. It comes from one of the two
+subroutines reached through the jump table at qw 688/689, or is carried in
+from an earlier program. The ELF image at this base does not hold the runtime
+0x3e28 routine (its 0x3e40 is 0x10010801, the runtime's is XTOP vi4), so a
+different overlay is loaded there.
+
+That overlay is at file offset 0x334c08 for VU 0 (found by XTOP vi4 at 0x3e40
+with ILW vi3, 0(vi4) at 0x3e90, both matching the runtime). The 0x3e28 callee:
+
+  0x3e28  ILW.y  vi5, 0x2b0(vi0)     qw688.y
+  0x3e30  ILW.w  vi6, 0x2b0(vi0)     qw688.w
+  0x3e38  LQ     vf1, 0x2a9(vi0)     qw681
+  0x3e40  XTOP   vi4
+  0x3e48  IBNE   vi5, vi0, +0x1b
+  0x3e58  LQ     vf3, 0x2b2(vi0)     qw690
+  0x3e78  upper  MUL vf3, vf3, vf1
+  0x3e90  ILW.x  vi3, 0(vi4)         header x
+  0x3e98  IADDIU vi4, vi4, 1   upper MINI.w vf3, vf3, vf0
+  0x3eb8+ SQ vf3, 2/6/10(vi4) in a loop, IBGTZ vi3 at 0x3ed8
+
+It never writes vf2. So vf2 is written by the second callee (reached through
+qw689.x, unknown offline) or carried in from an earlier program: VF registers
+persist across MSCALs. Needs a runtime trace of vf2's writer.
+
+RULED OUT: THE BASE GUARD
+
+The BASE handler rejects BASE VIFcodes with NUM != 0 or high immediate bits,
+which hardware ignores. With the residual desync fixed it could have been
+eating real BASEs. badBaseRejects=0 all run. BASE is 0 because the game sends
+0 (BASE 0 -> 99 -> 0 transients aside). The remaining 75 OFFSETs follow a
+regular pattern (0->515 num=2, 515->514 num=2, 514->0 num=3) and read as real
+game codes.
+
+So TOP=0 is legitimate, and a shipped game cannot be clobbering its input every
+other batch on hardware. The suspect is the store's address: why it is qw 0.
+
+MEASUREMENT DEFECT FOUND
+
+This run's oracle reported eerate_pct=20.9. That was the last [eerate] line
+seen, printed at log line 19993 on loading_screen; the run entered game_screen
+at line 22018 and printed no [eerate] line after. The earlier debug run did
+print one in gameplay: 0.7%. progress.py now counts eerate_pct and fps only
+while on the top rung (AT_TOP), so a missing gameplay line is missing rather
+than stale. This defect could have fired the 5% win on a menu number.
+
+Runner RSS across the run: 138 to 187 MB. The earlier job killed for low
+memory was outside pressure, not this process.

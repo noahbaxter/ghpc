@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `0.6` |
 | fps | `0.25` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 2 of 6 |
-| rounds total | 8 of 14 |
+| rounds since gain | 3 of 6 |
+| rounds total | 9 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -138,11 +138,19 @@ gameplay's runaways are the same mechanism is not shown.
 283 times and is cut off 114. Every cut-off in 66,000 runs had a qw[TOP] freshly
 unpacked since the previous MSCAL, zero stale. The 0x30b0 cut-offs start with
 a header byte-identical to healthy runs (`4, 0x11, 0x12, 0x614`). **Same input
-at entry, different outcome.** So the difference arises inside the run: either
-qw[TOP] is overwritten before the bound ILW reads it (the provenance round saw
-1042 read where the entry header holds 18), or state carried in from the
-previous run (VI registers, an MSCNT resuming a cut-off program mid-loop)
-differs.
+at entry, different outcome.**
+
+**The program overwrites its own input header.** Measured in
+`notes/evidence/2026-09-10-vu1-top-clobber.txt`. In all 66 cut-off 0x30b0 runs
+a VU store lands on qw[TOP] and a later header load returns a changed value;
+1 of 302 ended runs shows that. The store is `SQI vf1, (vi4++)` at 0x3170,
+writing a GIFtag (`00008000 300e4000 00000412`, z = the 1042) to qw 0. Its
+pointer vi4 comes from `MTIR vi4, vf2.x` at 0x3148, and vf2.x is 0. So the
+output buffer sits at qw 0, which only collides when the input half is TOP=0.
+TOP=0 is legitimate (BASE really is 0, the guard rejected nothing), so on
+hardware vf2.x must point clear of both halves. **Find what writes vf2.** It is
+not the 0x30b0 prologue or its 0x3e28 callee (both decoded from the ELF); it is
+the second callee through qw689.x, or state carried in from another program.
 
 **A VIF1 desync was found and fixed, and it did not move speed.** A command
 whose payload straddled two DMA chunks was dropped, so the next chunk parsed
@@ -188,6 +196,12 @@ the mass of them at `game_screen`. Do not assume one explanation covers both.
 
 `eerate_pct` rounds to 0.1, which cannot separate gameplay arms at 0.7%. Compare
 the `Mcycles/sec` figure on the `[eerate]` line instead.
+
+**`eerate_pct` and `fps` only count lines printed on `game_screen`.** They used
+to keep the last value seen, and a gameplay run can go minutes without an
+`[eerate]` line, so one debug run reported the loading screen's 20.9% as its
+gameplay speed. That could have fired the 5% win on a menu number. A run with
+no gameplay line now has no `eerate_pct` at all.
 
 **`GHPC_COUNTIN` is a probe and every gameplay-speed mark carries it.** That is
 fine and it is the honest way round: compare like for like, always with the same

@@ -69,6 +69,13 @@ DETAIL = {
 # are both kept and the span is reported.
 ADVANCE = ["song_tick"]
 
+# Speed keys only count while the run sits on the top rung. The reporters print
+# on a clock, and at 0.7% of realtime a gameplay run can go minutes without a
+# line, so "last value seen" handed back the loading screen's 20.9% as the
+# gameplay figure on 2026-09-10. That is exactly the shape that would fire the
+# 5% win on a menu number. No gameplay line means no value, not an old one.
+AT_TOP = ["eerate_pct", "fps"]
+
 
 def probe_env():
     """The GHPC_* knobs this run inherited, minus the two we always set.
@@ -171,6 +178,8 @@ def measure(build, secs, hold, verbose):
             for key, (rx, g) in DETAIL.items():
                 d = rx.match(line)
                 if d:
+                    if key in AT_TOP and (not timeline or timeline[-1][1] != len(LADDER)):
+                        continue
                     detail[key] = d.group(g)
                     first.setdefault(key, d.group(g))
             if time.time() > deadline:
