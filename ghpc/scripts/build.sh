@@ -8,7 +8,10 @@
 #   ./scripts/build.sh --to=stage   # stop before the long compile
 #   ./scripts/build.sh --fast       # drop LTO, ~90s off every relink
 #   ./scripts/build.sh --debug      # bring-up diagnostics: thread census, GS/CD/ARK tracing
-#   ./scripts/build.sh --restore    # put PS2Recomp's stock runner back
+#   ./scripts/build.sh --restore    # put PS2Recomp's stock runner back (drops overrides too)
+#
+# Hand-written function bodies live in ghpc/override/, named like the generated
+# file they replace, and are copied over the staged runner by overlay.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,7 +35,7 @@ for a in "$@"; do case "$a" in
   --debug)    DIAG=ON ;;
   --calls)    HIST=ON; DIAG=ON ;;
   --restore)  RESTORE=1 ;;
-  -h|--help)  sed -n '2,11p' "$0"; exit 0 ;;
+  -h|--help)  sed -n '2,14p' "$0"; exit 0 ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;
 esac; done
 
@@ -129,13 +132,19 @@ if want stage; then
   [ -d "$RUNNER.stock" ] || { cp -r "$RUNNER" "$RUNNER.stock"; ok "backed up stock runner"; }
   mkdir -p "$RUNNER"
   rsync -a --delete --include='*.cpp' --include='*.h' --exclude='*' "$GEN/" "$RUNNER/"
-  ok "$(find "$RUNNER" -type f | wc -l | tr -d ' ') files staged"; stage_t
+  ok "$(find "$RUNNER" -type f | wc -l | tr -d ' ') files staged"
+  # Hand-written bodies from ghpc/override/ land after the rsync so --delete
+  # cannot wipe them. Fails hard if an override's generated target is gone.
+  "$GHPC/scripts/overlay.sh"
+  stage_t
 fi
 
 # ---------------------------------------------------------------- build
 if want build; then
   b "4/4  Building ps2EntryRunner  (unity=$UNITY, lto=$LTO, diag=$DIAG, -j$JOBS)"
   warn "this is the long one: ~12.7k generated files"
+  # Re-applied here too so --from=build picks up edits to ghpc/override/.
+  [ -d "$RUNNER" ] && "$GHPC/scripts/overlay.sh"
   cmake -S "$PS2R" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=ON \
     -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
