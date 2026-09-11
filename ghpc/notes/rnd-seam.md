@@ -105,6 +105,50 @@ Raw GS packet builders a backend deletes rather than hooks:
   pair at RndCam+0x2cc/+0x2d0. Object transforms come from
   `RndTransformable::WorldXfm 0x43f768`.
 
+## Measured at the seam
+
+`ghpc/override/DrawFaces__6PsMesh_0x43eea0.cpp` logs the RndMesh subobject on
+entry under `GHPC_MESH_LOG`. Release, 150s, 387 calls on the way to and on
+`game_screen`: **every mesh reports verts=0 faces=0** while `packetQw` is
+nonzero (19 for the first). The engine-level vectors are empty by draw time;
+GH2 keeps only the converted PS2 face packet (`mFacePacket` @+0x150). The
+body itself confirms it: `DrawFaces` reads +0x150, +0x154, +0x158/+0x15a and
++0x140 and nothing else on `this`. So a native backend cannot read geometry
+at draw time. Also: `this` in `DrawFaces` is `mOwner` (+0x138), passed by
+`DrawShowing` at 0x43f388, so instances draw through their owner's packet.
+
+Where they die, all inside `PsMesh::Sync` 0x43afa8 (read from the generated
+body; the decomp has no `PsMesh::Sync`):
+
+- 0x43afc4: return if `+0x138` (owner) is not `this`.
+- 0x43afe0: `jal UpdateFacePacket` 0x43a810, which only reads the vectors.
+- 0x43b040 / 0x43b048: `mFaces` start and finish stored as 0 (a swap with an
+  empty vector), gated on sync flags bit 0x20 and `+0x140 & 0x20` clear;
+  0x43b0e0 `MemOrPoolFree` on the old buffer.
+- 0x43b128: `VertVector::resize(this+0x100, 0)`, gated on sync flags & 0x1f
+  and `+0x140 & 0x1f == 0`. Meshes with those bits set keep their verts and
+  get `SyncDCache` instead.
+
+`RndMesh::Load` 0x43b5a0 ends with a virtual `Sync(0x3f)` or `Sync(0xbf)`
+(0x43cb5c), both carrying 0x1f and 0x20, so the Load-time Sync frees both.
+An entry hook on Sync sees the data on that call.
+`ghpc/override/Sync__6PsMeshi_0x43afa8.cpp` logs it as `[ghpc/mesh/sync-in]`.
+
+Measured, release, 150s, 67 Sync entries logged: 42 carry geometry, 25 are
+re-syncs of already converted meshes (verts=0). The first is a 320x128 UI
+quad, `Sync(0xbf)`:
+
+    v0 pos=(-160 64 0) norm=(0 0 1) uv=(0 0) color=(1 1 1 1)
+    v3 pos=(160 -64 0) norm=(0 0 1) uv=(1 1) color=(1 1 1 1)
+    f0 0 1 2   f1 3 2 1
+
+and at DrawFaces the same `this` reports verts=0 with packetQw=19. So the
+vertex contract for a backend is: capture `Vert[]` (64 B, pos/norm/color/uv)
+and `Face[]` (3 x u16) at Sync entry keyed by mesh address, and draw from
+that cache at DrawFaces with the owner's cached world transform (+0xa0).
+Meshes with `+0x140 & 0x1f` set keep their verts (mutable geometry, the
+fretboard presumably) and can be read at draw time.
+
 ## What the runtime already does
 
 - No Rnd-level hooks exist. Everything under `ps2xRuntime/src/runner/` is

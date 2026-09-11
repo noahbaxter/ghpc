@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `4.7` |
 | fps | `2.89` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 1 of 6 |
-| rounds total | 14 of 30 |
+| rounds since gain | 2 of 6 |
+| rounds total | 15 of 30 |
 
 <!-- PROGRESS:END -->
 
@@ -406,12 +406,16 @@ this next starts from a true statement rather than a half-finished round.
 
 ## Known gaps
 
-- **Audio is unmeasured.** Nothing scores whether a sample ever reaches the SPU.
 - **The picture is only known to be sane early in the song.** The frames in
   `notes/evidence/2026-09-11-gameplay-frame-*.png` are the first 60 distinct
   presents after StartGame; no scrolling notes are in them yet. The chart
   result is n=2 (`GHPC_SONG_HEARTBEAT=10`, 19 and 29 monotonic samples).
-- **Boot reliability is not established.** A run on 2026-09-10 stalled before
-  `main_screen` and the thread census killed it. `progress.py` scores that
-  `MEASUREMENT_FAILED` and retries, so it is invisible unless every attempt
-  fails. The underlying rate is unmeasured.
+- **Boot reliability, first sample.** 2026-09-11, release build: 6 of 6
+  boots with skip on reached `main_screen` at t=6.0, and 3 of 3 with skip off
+  reached it at t=23. The one stall on 2026-09-10 was a debug build and has
+  not recurred. `progress.py` still hides a stall behind its retry, so a
+  failure rate needs its own count, not this oracle.
+- **Audio.** Mapped in `notes/audio-path.md`. There is no SPU2 in the
+  runtime; one 0x5000-byte sample chunk reaches the IOP synth service per
+  run and is dropped. `[ghpc/spu2] chunks=` now counts them and `progress.py`
+  scores the span as `spu_chunks`; baseline is 1, flat.

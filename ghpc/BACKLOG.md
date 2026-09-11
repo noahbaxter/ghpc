@@ -38,10 +38,19 @@ remaining 20x is VU1 interpretation and the software GS. The map is
 bodies now survive a build through `ghpc/override/` (`scripts/overlay.sh`,
 proof override `EIntr_0x3518c8`), so the seam has somewhere to live.
 
-First seam round, small: hook `PsMesh::DrawFaces` in an override that calls
-the generated original and logs the packet it built (quadword count, the
-VIFcodes, the first vertices), so the undecompiled packet format gets read
-from the running game rather than guessed. Same-build control arm.
+Done: `PsMesh::DrawFaces` and `PsMesh::Sync` overrides log the engine-level
+mesh under `GHPC_MESH_LOG`. Geometry is empty at draw time and present at
+Sync entry; the contract and the addresses where it is freed are in the
+seam note. Rung and speed unchanged with both overrides in.
+
+Next seam round: a host-side mesh cache. At Sync entry copy `Vert[]` and
+`Face[]` keyed by mesh address (only when `+0x140 & 0x1f == 0`, since those
+are the ones that get freed); at DrawFaces look the owner up and log a hit
+or miss. Pass is every DrawFaces hitting the cache on `game_screen`. Then
+the same logging pass for `PsMat::Select` 0x43ea70 and `PsTex::Select`
+0x43f490 (what material and texture state a draw carries) and
+`PsCam::Select` 0x1c1770 (the matrices), so the backend's other three
+inputs are read from the running game the same way.
 
 Ruled out this round: VIF command sizing (PCSX2 rules agree with the runtime
 on every command before the ring end), TTE tag splicing (2 tags total), and
