@@ -242,8 +242,16 @@ this next starts from a true statement rather than a half-finished round.
   mark's prints `ENV MISMATCH`.
 - **A stray runner invalidates the run, and the oracle refuses it.** Every rung
   is scored on wall clock, so a second `ps2EntryRunner` eating a core changes
-  what "held for 60s" means. Check `pgrep -f ps2EntryRunner` before starting
+  what "held for 60s" means. Check `pgrep -x ps2EntryRunner` before starting
   anything long.
+
+  **Use `-x`, never `-f`.** `-f` matches the whole command line, so it reports
+  any process that merely mentions the path: the shell running your own launch
+  script, an editor, another pgrep. That false positive costs a full round,
+  because the oracle refuses the run as contended and `MEASUREMENT_FAILED` is
+  deliberately never retried into a number. And guard with a real conditional:
+  `pgrep ... || echo clear` prints a reassuring word when nothing is running and
+  does nothing at all when something is, which is the opposite of a guard.
 - **Check `python3 ghpc/scripts/bootskip.py --status` before trusting a repro.**
   When it is `on`, boot skips `bootup_load`, the intro video and both logo
   screens. It is usually left on for speed. Anything `bootup_load` initialises

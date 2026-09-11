@@ -121,7 +121,15 @@ def measure(build, secs, hold, verbose):
     # This is MEASUREMENT_FAILED rather than a warning on purpose: a contended
     # run tells you nothing, and the whole point of the third verdict is to stop
     # that being mistaken for "no change".
-    stray = subprocess.run(["pgrep", "-f", "ps2xRuntime/ps2EntryRunner"],
+    # -x matches the process NAME, not the command line. The old check was
+    # `pgrep -f ps2xRuntime/ps2EntryRunner`, which matches any process whose
+    # command line merely CONTAINS that path: a shell wrapper running this
+    # script, an editor, another pgrep. That is a false positive that costs a
+    # whole round, because the run is refused as contended and MEASUREMENT_FAILED
+    # is deliberately not retried into a number. Observed 2026-09-10: a launcher
+    # shell whose script text contained the pattern was reported as a stray
+    # runner alongside the real one.
+    stray = subprocess.run(["pgrep", "-x", "ps2EntryRunner"],
                            capture_output=True, text=True).stdout.split()
     if stray:
         return None, ("another ps2EntryRunner is already running (pid %s). Kill "
