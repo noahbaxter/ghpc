@@ -30,3 +30,25 @@ sceRead
 sceWrite
 sceLseek
 sceIoctl
+
+# The newlib allocator. The runtime binds seven levels of it by name and every
+# one of them has a real body in the ELF. The outer four alone are not enough:
+# _malloc_r reaches sbrk only through malloc_extend_top, whose stub
+# (Compatibility.cpp) returns 0 and never grows the heap, so a real _malloc_r
+# returns NULL without sbrk ever being entered. MemAlloc__FiPCci falls back to
+# plain malloc whenever gCurHeap is null, which is always, so that NULL lands
+# in ChunkAllocator and Refill__14FixedSizeAlloc dispatches through a vptr
+# that was never written. Un-stub the whole family or none of it.
+malloc
+free
+realloc
+memalign
+_malloc_r
+_free_r
+_realloc_r
+_calloc_r
+_memalign_r
+_malloc_trim_r
+malloc_extend_top
+__malloc_lock
+__malloc_unlock
