@@ -1162,7 +1162,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             // MSCAL always has imm < 2048. Larger values only come from a
             // desynced stream being read as VIFcode; masking them into range
             // (microAddressMask) runs whatever garbage happens to live there.
-            if (startPC >= PS2_VU1_CODE_SIZE && !getenv("GHPC_ALLOW_MASKED_MSCAL"))
+            static const bool s_allowMaskedMscal = std::getenv("GHPC_ALLOW_MASKED_MSCAL") != nullptr;
+            if (startPC >= PS2_VU1_CODE_SIZE && !s_allowMaskedMscal)
             {
 #if GHPC_DIAG
                 extern unsigned long long g_ghpcMscalRejected;
