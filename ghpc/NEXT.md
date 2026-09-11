@@ -39,14 +39,14 @@ supersede earlier ones and topic notes supersede both.
 |---|---|
 | furthest screen | `game_screen` |
 | rung | 9 of 9 |
-| recorded | 2026-09-10 20:17:31 |
+| recorded | 2026-09-11 12:15:53 |
 | build | `build` |
 | held for | 60s |
-| eerate pct | `0.6` |
-| fps | `0.25` |
+| eerate pct | `5.1` |
+| fps | `0.56` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 6 of 6 |
-| rounds total | 12 of 14 |
+| rounds since gain | 1 of 6 |
+| rounds total | 13 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -61,33 +61,43 @@ alongside the rung. Those two are what a round now has to move.
 
 Two numbers, both measured on a release build:
 
-    menus     84 to 91% of realtime      target 100%
-    gameplay  0.4 to 0.7% of realtime    target as high as it will go
+    menus     93 to 100% of realtime     target 100%
+    gameplay  the `eerate pct` row above  target as high as it will go
 
-They are not the same problem and must not be worked as one. Menus never run a
-VU1 program away; that last 10% is almost certainly vblank pacing and it is
-small. Gameplay is a ~150x hole and it is where the work is.
+They are not the same problem and must not be worked as one. Menus never ran a
+VU1 program away and are close to done. Gameplay is where the work is.
 
 Sizing it honestly, so no round oversells its result:
 
-- **The VU1 runaway is worth about 12x.** Measured: cut-off microprograms are
-  8.6% of invocations and consume 92% of all VU1 instructions. Killing it takes
-  gameplay from ~0.7% to ~8% of realtime. That is a huge win and it very likely
-  fixes the corrupted picture too, because the same code is involved.
-- **12x is not 150x.** Even a perfect fix does not reach playable. The rest is
-  the `Rnd` seam, which retires VIF1, VU1, GIF and the GS rasteriser as dead
-  code. Do not start the seam before the runaway: a native backend built on top
-  of a runaway is a backend that inherits it.
+- **The VU1 runaway was worth 3.6x, measured, not the 12x predicted.** Cut-off
+  microprograms were 8.6% of invocations and 92% of VU1 instructions; the
+  prediction assumed the instructions were the whole cost. With them gone,
+  release gameplay went 4.13 to 14.75 Mcycles/sec on one binary.
+- **The rest is the `Rnd` seam**, which retires VIF1, VU1, GIF and the GS
+  rasteriser as dead code. It was held until the runaway was understood so a
+  native backend would not inherit it. That hold is lifted.
 
 ## Current target
 
-**The VU1 runaway. Nothing else until it is understood.**
+**The VU1 runaway is fixed, and the 5% win landed. See `BACKLOG.md` `Now`
+for what follows.** The mechanism: the MFIFO drain copied a `cnt` tag's
+payload linearly from RAM, and a payload starting in the last quadwords of
+the ring (end 0xb80000) handed VIF1 whatever sits past it. The fill side
+already wrapped. Fixed in `appendData` by address, as PCSX2 does;
+`GHPC_MFIFO_NOWRAP_LEGACY=1` is the control arm. Measured on one binary:
+cut-off microprograms 2331 -> 0 in 74,000 MSCALs, release gameplay 4.13 ->
+14.75 Mcycles/sec (1.4% -> 5.0%). Full table in
+`notes/evidence/2026-09-11-mfifo-drain-wrap.txt`. Every "STCYCL 0x0011" and
+"0xffff0000" word chased in earlier rounds was memory past the ring end.
 
-A third of GH2's VU1 microprograms never reach their end bit. They burn the
-whole cycle budget and get cut off mid-flight, which both costs the frame and
-leaves half-written geometry to be kicked at the GS.
+The history below is kept because its ruled-out list is still the ruled-out
+list. Read it as how the bug was cornered, not as open work.
 
-What is established, all of it measured:
+A third of GH2's VU1 microprograms never reached their end bit. They burned
+the whole cycle budget and got cut off mid-flight, which both cost the frame
+and left half-written geometry to be kicked at the GS.
+
+What was established, all of it measured:
 
     healthy invocation      2296 instructions
     cut-off invocation      285786 instructions, 124x
@@ -227,8 +237,13 @@ the mass of them at `game_screen`. Do not assume one explanation covers both.
     GHPC_DMA_SPR_LEGACY=1  read a bit-31 scratchpad DMA source from RAM, as
                          before the fix. Control arm only.
     GHPC_VIF_STCYCL_LEGACY=1  read STCYCL WL=0 as 1 and CL=0 as 1, as before
-                         the fix. Control arm only; release speed of the fix is
-                         unmeasured.
+                         the fix. Control arm only.
+    GHPC_MFIFO_NOWRAP_LEGACY=1  read an MFIFO drain payload linearly past the
+                         ring end, as before the fix. Control arm only.
+    GHPC_VIF1_DUMPCHUNK=<dir>  write the first eight chunks that go wrong
+                         (invalid opcode, or OFFSET with NUM != 0) as .bin plus
+                         a .txt of tags, chain pieces and the parsed commands.
+                         Walk one with scripts/vifwalk.py.
 
 `eerate_pct` rounds to 0.1, which cannot separate gameplay arms at 0.7%. Compare
 the `Mcycles/sec` figure on the `[eerate]` line instead.
@@ -404,6 +419,3 @@ this next starts from a true statement rather than a half-finished round.
   `main_screen` and the thread census killed it. `progress.py` scores that
   `MEASUREMENT_FAILED` and retries, so it is invisible unless every attempt
   fails. The underlying rate is unmeasured.
-- **`ghpc/config/stub-denylist.txt` carries an uncommitted newlib allocator
-  change** on branch `fix/real-newlib-allocator`. It is already baked into
-  `work/output`, so the current build includes it. Decide whether it lands.

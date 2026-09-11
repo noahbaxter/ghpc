@@ -2,15 +2,15 @@
   "rung": 9,
   "screen": "game_screen",
   "detail": {
-    "eerate_pct": "0.6",
-    "fps": "0.25"
+    "fps": "0.56",
+    "eerate_pct": "5.1"
   },
   "env": {
     "GHPC_COUNTIN": "0.5"
   },
   "build": "build",
   "hold_secs": 60,
-  "rounds_since_gain": 6,
-  "rounds_total": 12,
-  "recorded": "2026-09-10 20:17:31"
+  "rounds_since_gain": 1,
+  "rounds_total": 13,
+  "recorded": "2026-09-11 12:15:53"
 }

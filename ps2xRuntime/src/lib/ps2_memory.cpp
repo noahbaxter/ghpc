@@ -1600,6 +1600,37 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                                qwCount * 16u, false);
                         }
 #endif
+                        // An MFIFO drain reads ring memory, and the ring wraps at
+                        // RBSR. The fill side (channel 8) already wraps every
+                        // quadword it writes; this side read linearly, so a
+                        // cnt tag whose payload started in the last few
+                        // quadwords of the ring handed VIF1 whatever RAM sits
+                        // past the ring end. Every dirty chunk dumped on
+                        // 2026-09-11 had its first piece at 0xb7fe20..0xb7fff0
+                        // with the junk starting at 0xb80000. PCSX2
+                        // (mfifoVIF1chain) wraps by MADR being inside the ring,
+                        // whatever the tag id, so do the same.
+                        {
+                            static const bool s_noWrapLegacy = std::getenv("GHPC_MFIFO_NOWRAP_LEGACY") != nullptr;
+                            const uint32_t dctrlA = m_ioRegisters[0x1000E000u];
+                            const uint32_t ringBase = m_ioRegisters[0x1000E050u];
+                            const uint32_t ringMask = m_ioRegisters[0x1000E040u];
+                            const bool ringDrain = channelBase == 0x10009000u &&
+                                                   ((dctrlA >> 2) & 0x3u) == 2u && ringMask != 0u;
+                            if (!s_noWrapLegacy && ringDrain && m_rdram &&
+                                srcAddr >= ringBase && srcAddr < ringBase + ringMask + 16u)
+                            {
+                                uint32_t a = srcAddr;
+                                for (uint32_t q = 0u; q < qwCount; ++q)
+                                {
+                                    const uint32_t phys = a & PS2_RAM_MASK;
+                                    if (phys + 16u <= PS2_RAM_SIZE)
+                                        chainBuf.insert(chainBuf.end(), m_rdram + phys, m_rdram + phys + 16u);
+                                    a = ringBase | ((a + 16u) & ringMask);
+                                }
+                                return;
+                            }
+                        }
                         const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                         uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                         const bool scratch = isScratchpad(srcAddr);
@@ -1732,6 +1763,17 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
                         ++tagsProcessed;
+#if GHPC_DIAG
+                        if (channelBase == 0x10009000u)
+                        {
+                            extern void ghpcNoteChainTag(unsigned, unsigned, unsigned, unsigned, unsigned,
+                                                         unsigned long long, unsigned long long);
+                            uint64_t tagHi = 0ull;
+                            std::memcpy(&tagHi, tp + 8, 8);
+                            ghpcNoteChainTag((unsigned)chainBuf.size(), currentTagAddr, id, tagQwc, addr,
+                                             (unsigned long long)tag, (unsigned long long)tagHi);
+                        }
+#endif
 
                         uint32_t dataAddr = 0;
                         bool hasPayload = (tagQwc > 0);
@@ -2001,6 +2043,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 #endif
                     if (channelBase == 0x10009000u)
                         m_vif1DrainStalled = drainStalled;
+#if GHPC_DIAG
+                    if (channelBase == 0x10009000u)
+                    {
+                        extern void ghpcChainKickCommit(bool pushed);
+                        ghpcChainKickCommit(!chainBuf.empty());
+                    }
+#endif
                     m_ioRegisters[channelBase + 0x30] = tagAddr;
                     m_ioRegisters[channelBase + 0x40] = asr0;
                     m_ioRegisters[channelBase + 0x50] = asr1;

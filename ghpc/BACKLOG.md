@@ -18,49 +18,37 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The VU1 runaway in 0xcd8, per `NEXT.md`. Its loops are sound; their input is
-bad because the VIF1 parser falls out of step at gameplay. Find where.**
+**The VU1 runaway is fixed.** The MFIFO drain read a `cnt` payload linearly
+past the ring end; it now wraps (`GHPC_MFIFO_NOWRAP_LEGACY=1` for the old
+read). Same binary: cut-off microprograms 2331 -> 0, release gameplay
+4.13 -> 14.75 Mcycles/sec. `notes/evidence/2026-09-11-mfifo-drain-wrap.txt`
+and the third MFIFO section of `notes/boot-sequence-reference.md`.
 
-`notes/evidence/2026-09-11-vif1-offset-misparse.txt`: the gameplay OFFSETs
-(514, 515, 768) are payload read as VIFcodes, all in one 7120-byte chunk at
-mscal 8467. The STCYCL WL=0 decode was wrong and is fixed
-(`GHPC_VIF_STCYCL_LEGACY=1` for the old one), but the OFFSETs survive it. In
-order:
+Loose ends from it, in order:
 
-1. **Walk the 7120-byte chunk at mscal 8467 from its first byte.** The
-   12-command window before the first bad OFFSET is all zero words read as
-   NOPs, so the step that went wrong is earlier. Dump the whole chunk once with
-   every command and its consumed size, find the first command that is not a
-   plausible GH2 group (`NOP NOP FLUSHE UNPACK` on quadword boundaries), and
-   recompute that command's size by hand against PCSX2 (`vifUnpackSetup`, and
-   the table in `2026-09-11-vif1-offset-misparse.txt`). Also check the chunk's
-   provenance: it is a flattened chain (`src=0`), so a wrong tag walk would
-   look the same.
-2. **Measure the STCYCL fix's release speed** with a same-build control. It was
-   not measured (a low-memory kill ended the run).
-3. **0x30b0's vertex loop inside 0xcd8** (dumps 7 to 10): back edges taken ~800
-   times against vi3 moving 15 to 20. Decode 0x31b0 to 0x3730 and follow the
-   unconditional B at 0x3700.
-4. **Left over.** The UNPACK behind the menu zero headers (mscal 3363 onward),
-   and the chain tag walker masking bit 31 off the tag ADDR
-   (`ps2_memory.cpp:215`), which would read a chain REF into scratchpad from
-   RAM the same way.
+1. **A second, rarer junk source survives the fix.** 13 OFFSETs with NUM != 0
+   per 130s debug run, in two gameplay chunks (mscal 14929 and 36983) that
+   both open `BASE 0 -> 99` at pos 12 and then the same packed-byte stretch.
+   No invalid opcode and no runaway followed them in that run. Dump them:
+   `GHPC_VIF1_DUMPCHUNK=<dir>` fires on the first NUM != 0 OFFSET of a chunk,
+   `scripts/vifwalk.py` walks the dump with piece boundaries. Same method as
+   the fix, so it should be one round.
+2. **Confirm the picture.** The corrupted gameplay frames in `notes/evidence/`
+   were blamed on the runaway. Capture new ones on the fixed build and say
+   whether the geometry is now sane, before anything downstream is built on
+   the assumption.
+3. **The `Rnd` seam.** Gameplay is at 5% of realtime on release, so the
+   remaining 20x is VU1 interpretation and the software GS, and the runaway
+   no longer poisons a native backend built above them.
 
-VU code is readable offline. `work/GH2_debug.elf` has a `.DVP.overlay..<addr>`
-section per overlay naming its VU load address and size, and the code itself
-sits in `.vutext` as `.vu.N` symbols, each right after its `.vif.N` MPG
-VIFcode. Decode by hand, checked against instructions whose effect a runtime
-dump already confirmed.
+Ruled out this round: VIF command sizing (PCSX2 rules agree with the runtime
+on every command before the ring end), TTE tag splicing (2 tags total), and
+the STCYCL WL=0 words as a GH2 behaviour (they were bytes past the ring end;
+the decode stays because it matches hardware).
 
-Done: the VIF1 residual fix (`GHPC_VIF1_NO_RESIDUAL=1` for the old behaviour,
-invalid opcodes 118,798 to 1,018, speed unchanged) and the scratchpad DMA
-decode (0x30b0 runaway gone, speed unchanged). Still open from the VIF1 thread:
-6 dirty chunks with no truncation behind them, and whether TOP
-514/515/753/768 at gameplay are offsets the game really sets.
-
-**Then the `Rnd` seam.** Not before the runaway: a native backend built on top
-of a runaway inherits it. The cost is VU1 interpretation, not the GS
-rasteriser.
+Done earlier in the same thread: the VIF1 residual fix
+(`GHPC_VIF1_NO_RESIDUAL=1`), the scratchpad DMA decode (0x30b0 runaway), and
+the STCYCL WL=0 decode (`GHPC_VIF_STCYCL_LEGACY=1`).
 
 Cheap and still pending: cache three `getenv` calls in the VIF1 hot path
 (`ps2_vif1_interpreter.cpp:947` per MSCAL, plus 816 and 901), 45 profile

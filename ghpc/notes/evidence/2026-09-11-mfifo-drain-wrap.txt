@@ -1,0 +1,78 @@
+VIF1: the MFIFO drain read past the ring end, 2026-09-11, bootskip on,
+GHPC_COUNTIN=0.5 on every run. Runtime at 406f9d6 plus the change below.
+
+QUESTION
+
+The gameplay OFFSETs (514, 515, 768) are payload read as VIFcodes, all in one
+chain-flattened chunk (2026-09-11-vif1-offset-misparse.txt). Where does the
+parser fall out of step: a command sized wrong, or a tag walk that handed it
+the wrong bytes?
+
+PROBE
+
+GHPC_VIF1_DUMPCHUNK=<dir> writes the first eight chunks that go wrong to disk:
+raw bytes, entry VIF registers, the DMA tags that built the chunk, the
+chain-piece table (chunk offset -> EE address), and every command the runtime
+parsed up to the trigger. scripts/vifwalk.py re-parses the bytes with PCSX2's
+sizing rules (Vif_Codes.cpp, vifUnpackSetup) and prints piece boundaries
+next to commands.
+
+RESULT: THE TAG WALK
+
+build-debug, 100s. Eight dumps, five distinct chunks, every one a chain
+(src=0) whose FIRST piece is a cnt tag payload inside the VIF1 MFIFO ring
+(base 0xb00000, mask 0x7fff0, so the ring ends at 0xb80000):
+
+  dump  mscal  piece 0 EE addr  len   ring end at  first junk at
+  1     965    0xb7fe20         560   +480         +496  (UNPACK at +364 spans it)
+  2     4603   0xb7ffb0         384   +80          +92   BASE 0x030b73a4
+  3     6686   0xb7ffa0         560   +96          +240  (the "STCYCL 0x0011 / 0xffff0000" run)
+  4-6   8464   0xb7fff0         144   +16          +80   OFFSET 0x02030000, 515, 514
+  7-8   9389   0xb7ffc0         288   +48          +80   BASE, then the OFFSETs
+
+PCSX2 sizing agrees with the runtime on every command before the ring end.
+The junk starts at, or inside the first command spanning, offset 0xb80000.
+The fill side (channel 8, fromSPR) wraps every quadword it writes with
+rbor | ((dest + 16) & rbsr); the drain side (appendData in the chain walker)
+copied linearly from RAM, so whatever sits at 0xb80000.. was handed to VIF1 as
+the rest of the packet.
+
+The STCYCL 0x0011 and 0x0016 "GH2 sends" in the previous round were in dump 3
+at +252, past the ring end. They were never the game's. The WL=0 decode is
+kept because it matches hardware, but the premise of that round was junk.
+
+FIX
+
+appendData wraps a source inside the ring by rbor/rbsr per quadword, for an
+MFIFO drain on channel 9, by address rather than tag id (PCSX2 mfifoVIF1chain
+does the same). GHPC_MFIFO_NOWRAP_LEGACY=1 restores the linear read.
+
+MECHANISM CHECK, build-debug, 130s, GHPC_VU1_CENSUS=2000, same binary
+
+                      wrap fix           legacy
+  chunks              50274              ~18000 (slower guest)
+  dirtyChunks         0                  4
+  invalidOps          0                  5
+  0xcd8 cut off       0 of 73387         2331 of 17834 (148M instrs)
+  max instrs/run      14635              65536 (the budget)
+
+The VU1 runaway is gone with the fix and back without it. No microprogram in
+74,000 MSCALs failed to reach its end bit.
+
+SPEED, build (release), 150s, both arms at game_screen, same binary
+
+                      wrap fix           legacy
+  Mcycles/sec         14.75              4.13
+  eerate_pct          5.0                1.4
+  fps                 2.78               0.80
+
+3.6x. The debug build went 0.6% -> 3.8%. Menus unchanged (release ~93-100%).
+
+STILL OPEN
+
+With the fix, 13 OFFSETs with NUM != 0 remain per 130s debug run, in two
+gameplay chunks (mscal 14929 size 2992, mscal 36983 size 2256), both
+starting BASE 0->99 at pos 12 then the same packed-byte stretch. dirtyChunks
+is 0 so they trip no invalid opcode, and no runaway followed them in this run.
+A second, rarer source of the same junk. Dump them with GHPC_VIF1_DUMPCHUNK
+(the offset-num trigger) before assuming they are harmless.

@@ -672,10 +672,33 @@ underneath. The remaining question for screens 2-4 is therefore why the game
 submits no geometry for them, which is likely the same stall that keeps it in
 `ui/mem_card.dtb`.
 
-Still open: 41 dirty chunks and 1.09 MB of desynced bytes per 45 s remain, from
-a source other than the fill pointer. Note the `payloadPastFill` counter is not
-a clean measure of this, since the diagnostic counts every tag id while the fix
-deliberately bounds only ids 1/2/5/6/7.
+Still open at the time: 41 dirty chunks and 1.09 MB of desynced bytes per 45 s
+remained, from a source other than the fill pointer. Note the `payloadPastFill`
+counter is not a clean measure of this, since the diagnostic counts every tag
+id while the fix deliberately bounds only ids 1/2/5/6/7.
+
+## Third MFIFO bug: the drain read past the ring end (2026-09-11)
+
+That remaining source was the ring's own wrap. Channel 8 (fromSPR) wraps every
+quadword it writes with `rbor | ((dest + 16) & rbsr)`, but `appendData` in the
+chain walker copied a tag's payload linearly from RAM. A `cnt` tag whose
+payload started in the last few quadwords of the ring (0xb7fe20 to 0xb7fff0,
+ring end 0xb80000) handed VIF1 whatever sits past 0xb80000 as the rest of the
+packet. `GHPC_VIF1_DUMPCHUNK` caught five distinct dirty chunks and every one
+had that shape; the junk begins at, or inside the first command that spans,
+the ring end. Evidence and the per-dump table in
+`evidence/2026-09-11-mfifo-drain-wrap.txt`; `scripts/vifwalk.py` re-parses a
+dump against PCSX2's sizing rules.
+
+The fix wraps by address, as PCSX2's `mfifoVIF1chain` does: a source inside
+`[rbor, rbor + rbsr + 16)` on an MFIFO drain is read per quadword with the
+mask, whatever the tag id. `GHPC_MFIFO_NOWRAP_LEGACY=1` restores the linear
+read. Same binary, debug: dirty chunks 4 -> 0, invalid opcodes 5 -> 0, and
+the VU1 runaway (2331 cut-off microprograms in 18,000 MSCALs) -> 0 in 74,000.
+Release gameplay went 4.13 -> 14.75 Mcycles/sec.
+
+The "STCYCL 0x0011 / 0xffff0000" words described above at 0x164 were this
+bug: dump 3 has them at +252 with the ring end at +96.
 
 Ruled out along the way: TTE tag splicing (TTE is enabled for 2 tags total,
 0 skipped by the id predicate), and any fault in the GS texture path.

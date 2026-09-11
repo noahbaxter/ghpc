@@ -376,6 +376,94 @@ unsigned ghpcChainOffsetToEe(unsigned off)
             return g_chainEe[k] + (off - g_chainOff[k]);
     return 0xFFFFFFFFu;
 }
+// GHPC_VIF1_DUMPCHUNK=<dir>: write a chunk that goes wrong to disk, raw, with
+// the DMA tags that built it and every command parsed so far, so the walk can
+// be redone offline against PCSX2's sizing rules. The tag table is built at
+// kick time and consumed at parse time, which can be several kicks later, so
+// tables queue up in kick order.
+#include <deque>
+#include <string>
+#include <cstdio>
+extern uint32_t g_curChunkSource;
+namespace
+{
+    struct ChainTag { unsigned chainOff, tagAddr, id, qwc, addr; unsigned long long lo, hi; };
+    std::vector<ChainTag> g_tagBuild;
+    std::deque<std::vector<ChainTag>> g_tagQueue;
+    std::vector<ChainTag> g_curTags;
+    struct VifTrace { uint32_t pos, cmd; };
+    std::vector<VifTrace> g_chunkTrace;
+    struct VifEntry { uint32_t cycle, base, ofst, tops, stat, residual, pendingImg; } g_chunkEntry;
+    int g_chunkDumps = 0;
+    bool g_chunkDumped = false;
+    const char *ghpcDumpDir()
+    {
+        static const char *d = std::getenv("GHPC_VIF1_DUMPCHUNK");
+        return d;
+    }
+}
+void ghpcNoteChainTag(unsigned chainOff, unsigned tagAddr, unsigned id, unsigned qwc, unsigned addr,
+                      unsigned long long lo, unsigned long long hi)
+{
+    if (!ghpcDumpDir()) return;
+    if (chainOff == 0u && !g_tagBuild.empty() && g_tagBuild.back().chainOff != 0u)
+        g_tagBuild.clear();
+    if (g_tagBuild.size() < 4096u)
+        g_tagBuild.push_back(ChainTag{chainOff, tagAddr, id, qwc, addr, lo, hi});
+}
+void ghpcChainKickCommit(bool pushed)
+{
+    if (!ghpcDumpDir()) return;
+    if (pushed && g_tagQueue.size() < 64u)
+        g_tagQueue.push_back(g_tagBuild);
+    g_tagBuild.clear();
+}
+static void ghpcChunkBegin(uint32_t src, uint32_t residual, uint32_t pendingImg,
+                           uint32_t cycle, uint32_t base, uint32_t ofst, uint32_t tops, uint32_t stat)
+{
+    if (!ghpcDumpDir()) return;
+    g_chunkTrace.clear();
+    g_curTags.clear();
+    g_chunkDumped = false;
+    if (src == 0u && !g_tagQueue.empty())
+    {
+        g_curTags = std::move(g_tagQueue.front());
+        g_tagQueue.pop_front();
+    }
+    g_chunkEntry = VifEntry{cycle, base, ofst, tops, stat, residual, pendingImg};
+}
+static void ghpcDumpChunk(const char *reason, const uint8_t *data, uint32_t sizeBytes, uint32_t pos)
+{
+    const char *dir = ghpcDumpDir();
+    if (!dir || g_chunkDumps >= 8 || g_chunkDumped) return;
+    ++g_chunkDumps;
+    g_chunkDumped = true;
+    extern unsigned long long g_ghpcVu1Mscals;
+    char base[512];
+    std::snprintf(base, sizeof(base), "%s/vif1chunk-%d-mscal%llu", dir, g_chunkDumps, g_ghpcVu1Mscals);
+    std::string bin = std::string(base) + ".bin", txt = std::string(base) + ".txt";
+    if (FILE *f = std::fopen(bin.c_str(), "wb")) { std::fwrite(data, 1, sizeBytes, f); std::fclose(f); }
+    FILE *f = std::fopen(txt.c_str(), "w");
+    if (!f) return;
+    std::fprintf(f, "reason=%s pos=%u size=%u mscals=%llu src=%u\n", reason, pos, sizeBytes,
+                 g_ghpcVu1Mscals, g_curChunkSource);
+    std::fprintf(f, "entry cycle=0x%04x base=%u ofst=%u tops=%u dbf=%u residual=%u pendingImgQw=%u\n",
+                 g_chunkEntry.cycle & 0xFFFFu, g_chunkEntry.base, g_chunkEntry.ofst, g_chunkEntry.tops,
+                 (g_chunkEntry.stat >> 7) & 1u, g_chunkEntry.residual, g_chunkEntry.pendingImg);
+    std::fprintf(f, "tags (chainOff is before the residual prefix)\n");
+    for (const ChainTag &t : g_curTags)
+        std::fprintf(f, "tag chainOff=%u tag@0x%x id=%u qwc=%u addr=0x%x lo=0x%016llx hi=0x%016llx\n",
+                     t.chainOff, t.tagAddr, t.id, t.qwc, t.addr, t.lo, t.hi);
+    std::fprintf(f, "pieces\n");
+    for (int k = 0; k < g_chainN; ++k)
+        std::fprintf(f, "piece chainOff=%u ee=0x%x len=%u\n", g_chainOff[k], g_chainEe[k], g_chainLen[k]);
+    std::fprintf(f, "trace (pos cmd), parsed before the trigger\n");
+    for (const VifTrace &t : g_chunkTrace)
+        std::fprintf(f, "cmd pos=%u 0x%08x\n", t.pos, t.cmd);
+    std::fclose(f);
+    std::fprintf(stderr, "[vif1/dumpchunk] #%d %s wrote %s (pos=%u size=%u mscals=%llu)\n",
+                 g_chunkDumps, reason, bin.c_str(), pos, sizeBytes, g_ghpcVu1Mscals);
+}
 #endif
 
 static std::map<uint32_t, unsigned long long> g_unpackDest;
@@ -595,6 +683,8 @@ inline void pushHist(uint32_t pos, uint32_t cmd, uint8_t op, uint8_t num, uint16
     }
     g_hist[g_histIdx & 31u] = VifHist{pos, cmd, op, num, imm, 0u};
     ++g_histIdx;
+    if (ghpcDumpDir() && g_chunkTrace.size() < 65536u)
+        g_chunkTrace.push_back(VifTrace{pos, cmd});
 }
 inline void noteConsumed(uint32_t) {}
 inline void dumpHist(uint32_t badPos, uint32_t sizeBytes)
@@ -729,6 +819,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
     // wreck TOP at gameplay came from.
     static const bool s_noResidual = std::getenv("GHPC_VIF1_NO_RESIDUAL") != nullptr;
     std::vector<uint8_t> joined;
+#if GHPC_DIAG
+    ghpcChunkBegin(g_curChunkSource, static_cast<uint32_t>(m_vif1Residual.size()),
+                   m_vif1PendingPath2ImageQwc, vif1_regs.cycle, vif1_regs.base, vif1_regs.ofst,
+                   vif1_regs.tops, vif1_regs.stat);
+#endif
     if (!m_vif1Residual.empty())
     {
         joined.reserve(m_vif1Residual.size() + sizeBytes);
@@ -823,6 +918,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     g_chunkFirstBadPos = static_cast<int>(pos - 4u);
                     if (!g_prevChunkTruncated && (pos - 4u) != 0u)
                         dumpHist(pos - 4u, sizeBytes);
+                    ghpcDumpChunk("invalid-opcode", data, sizeBytes, pos - 4u);
                 }
             }
             if (++total % 50u == 0u && !ghpcQuietLogs())
@@ -889,6 +985,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             if (num != 0u)
             {
                 static int offsetCtx = 0;
+                if (!g_chunkDirty)
+                    ghpcDumpChunk("offset-num", data, sizeBytes, pos - 4u);
                 if (offsetCtx < 6)
                 {
                     ++offsetCtx;
