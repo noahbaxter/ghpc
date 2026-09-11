@@ -74,6 +74,11 @@ namespace
 void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint32_t upperInstr)
 {
     (void)upperInstr;
+#if GHPC_DIAG
+    // Reset before dispatch so a non-load VI write never inherits the address
+    // of a previous instruction's load. Only ILW/ILWR below sets this back.
+    { extern bool g_ghpcPendingIntLoadValid; g_ghpcPendingIntLoadValid = false; }
+#endif
     if (instr == 0x00000000 || instr == 0x8000033C) // NOP
         return;
 
@@ -189,7 +194,13 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
             uint32_t v;
             std::memcpy(&v, vuData + addr + comp * 4, 4);
             if (it != 0)
+            {
+#if GHPC_DIAG
+                { extern bool g_ghpcPendingIntLoadValid; extern uint32_t g_ghpcPendingIntLoadAddr;
+                  g_ghpcPendingIntLoadValid = true; g_ghpcPendingIntLoadAddr = addr; }
+#endif
                 m_state.vi[it] = (int32_t)(int16_t)(v & 0xFFFF);
+            }
         }
         return;
     }
@@ -719,7 +730,13 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                     uint32_t v;
                     std::memcpy(&v, vuData + addr + comp * 4, 4);
                     if (viT != 0)
+                    {
+#if GHPC_DIAG
+                        { extern bool g_ghpcPendingIntLoadValid; extern uint32_t g_ghpcPendingIntLoadAddr;
+                          g_ghpcPendingIntLoadValid = true; g_ghpcPendingIntLoadAddr = addr; }
+#endif
                         m_state.vi[viT] = (int32_t)(int16_t)(v & 0xFFFF);
+                    }
                 }
                 return;
             }

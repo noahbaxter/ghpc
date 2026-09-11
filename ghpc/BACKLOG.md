@@ -18,36 +18,37 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**Make gameplay reachable in minutes. Nothing else until that is done.**
+**The VU1 runaway, per `NEXT.md`. The bound is named; find why TOP=0 input is
+wrong.**
 
-The song load is finished and rung 9 is the floor. The problem now is that the
-project cannot measure its own goal: gameplay is about 85 minutes of wall clock
-away, so no 300s round can see the chart, photograph it, hear it, or catch it
-regressing. `progress.py` therefore cannot check the win condition in `NEXT.md`,
-which means no round can currently win and no round can detect a regression in
-the thing this project exists to do.
+`notes/evidence/2026-09-10-vu1-loop-bound-provenance.txt` names it: in
+microprogram 0x30b0, `ILW vi12, 0(vi5)` at pc 0x31b8 loads the loop bound from
+VU1 address 0 (1042) instead of 0x14a0 (18), because its base came from XTOP
+and TOP was 0. Boot sets BASE=0, OFFSET=330, so TOP=0 is the real other half of
+the double buffer. The fault is upstream of the VU. In order:
 
-In order, and do not reorder:
+1. **Split the census by TOP.** Per (startPc, TOP), count E-bit ends against
+   cut-offs. If every TOP=0 run of 0x30b0 is cut off and every TOP=330 run
+   ends, the buffer half is the variable. If not, it is not.
+2. **Find what is at qw 0 when a TOP=0 MSCAL reads it.** `ghpcLogQwWrite`
+   logs UNPACK, store and read events per quadword, windowed by
+   `GHPC_RW_FROM` and `GHPC_RW_SPAN` (`gs_cpu_backend.cpp:1173`). Aim it at
+   qw 0 and qw 330 around a runaway. Either the input was unpacked to 0 and is
+   wrong, or it went to 330 while TOP said 0, which is a VIF1 double-buffer
+   bug (`ps2_vif1_interpreter.cpp:959`).
+3. **Dump gameplay runaways, not the first ten.** `GHPC_VU1_LOOP` dumps the
+   first N, which were all on `qp_selsong_screen` and `loading_screen`. Add a
+   skip so the dumps land on `game_screen`, and confirm the same instruction
+   is at fault there before assuming it.
 
-1. **Shorten the count-in.** Ten guest seconds (`offset78 = -10.0`), threshold
-   at 0x10723c, `StartGame` at 0x1070f8. `GamePanel` carries `mSkipIntro` at
-   +0x60, `mStartPaused` at +0x64, `mFastIntro` at +0x68, and `fast_intro` is
-   settable through `SyncProperty` (0x10a038). A `GHPC_*` knob is fine: it is a
-   harness, so it stays out of any run that touches the mark. Prove it changes
-   nothing else, with a same-build control and a check that `BeatMatch::Poll`
-   (0x1259c0) and `PlayerMatcher::Poll` (0x117dd0) still run.
-2. **Screenshot gameplay** and commit the PNG under `notes/evidence/`. The frame
-   dumper (`ps2_runtime.cpp` near line 540) caps at 20 and burns them all in
-   boot, which is why no such picture exists.
-3. **Reproduce the chart result densely**, on two runs. It is currently n=1 with
-   two samples, because the `[ghpc/song]` heartbeat prints every 120th call.
-4. **Measure audio**, which has never been measured at all.
+Side leads, not this bug: 1015 of 1016 OFFSET VIFcodes in a 300s run carry
+NUM != 0, the shape the BASE handler rejects as desync
+(`ps2_vif1_interpreter.cpp:873`); they start at mscal 8597, after the runaways
+above. And the 0xcd8 runaway path enters through a jump from 0x0d00 to 0x0000.
 
-**Then the `Rnd` seam**, which is the only thing between here and playable, and
-which is too big to start in the same round. Measure a release build before
-sizing it: every throughput number on record is `build-debug`, and a live
-profile shows the diagnostics themselves taking a real slice. The cost is VU1
-interpretation, not the GS rasteriser.
+**Then the `Rnd` seam.** Not before the runaway: a native backend built on top
+of a runaway inherits it. The cost is VU1 interpretation, not the GS
+rasteriser.
 
 Cheap and still pending: cache three `getenv` calls in the VIF1 hot path
 (`ps2_vif1_interpreter.cpp:947` per MSCAL, plus 816 and 901), 45 profile

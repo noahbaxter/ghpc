@@ -197,6 +197,29 @@ void VU1Interpreter::recordViWriteForBranch(uint8_t reg, int32_t oldValue)
 unsigned int g_ghpcVfWriter[32][4];
 // And, for register loads, which VU data-memory address the value came from.
 unsigned int g_ghpcVfSrcAddr[32];
+
+// Same idea for VI: which pc last wrote each VI register, and if that write
+// was an ILW/ILWR (a load from VU data memory rather than an arithmetic
+// result), the address it loaded from. VI0 is hardwired zero and never
+// tracked. This is what answers "the back-edge branch tests vi9 -- who wrote
+// vi9, and did the value come from memory or from computation".
+struct ViWrite { uint32_t pc; uint32_t lo; uint32_t addr; int32_t val; bool isLoad; };
+// first: first write this MSCAL. prev: the last write from a pc other than
+// last's. In a runaway, last is always the loop's own increment, so entry,
+// first and prev are what name the value the loop was entered with.
+struct ViProv { ViWrite first, prev, last; int32_t entry; bool seen; };
+ViProv g_ghpcViProv[16];
+// Set by ILW/ILWR when they compute the loaded value, consumed and cleared by
+// the generic post-execLower VI write tracker below. Cleared at the top of
+// every execLower call so a write that isn't a load never inherits a stale
+// address from a previous instruction.
+bool g_ghpcPendingIntLoadValid = false;
+uint32_t g_ghpcPendingIntLoadAddr = 0;
+
+// One VI writer snapshot per microprogram (keyed by startPc), overwritten on
+// every normal termination so it always holds the most recent healthy run.
+struct ViSnapshot { ViProv v[16]; uint64_t atMscal; };
+std::map<uint32_t, ViSnapshot> g_ghpcHealthyVi;
 #endif
 
 void VU1Interpreter::applyDest(float *dst, const float *result, uint8_t dest)
@@ -2163,6 +2186,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     {
         extern void ghpcMtxWatch(const uint8_t *, uint32_t, const char *, unsigned);
         ghpcMtxWatch(vuData, dataSize, "outside-vu", 0u);
+        for (int r = 0; r < 16; ++r)
+        {
+            g_ghpcViProv[r].seen = false;
+            g_ghpcViProv[r].entry = m_state.vi[r];
+        }
     }
 #endif
 
@@ -2528,6 +2556,19 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         {
             const int32_t newVi = m_state.vi[writtenVi];
             m_state.vi[writtenVi] = oldVi;
+#if GHPC_DIAG
+            if (m_unit == Unit::VU1)
+            {
+                const ViWrite w{m_state.pc, decoded.lower,
+                                g_ghpcPendingIntLoadValid ? g_ghpcPendingIntLoadAddr : 0u,
+                                newVi, g_ghpcPendingIntLoadValid};
+                ViProv &p = g_ghpcViProv[writtenVi];
+                if (!p.seen) { p.first = w; p.seen = true; }
+                if (w.pc != p.last.pc) p.prev = p.last;
+                p.last = w;
+            }
+            g_ghpcPendingIntLoadValid = false;
+#endif
             const uint32_t latency =
                 decoded.lowerUsage.viLatency != 0u
                     ? decoded.lowerUsage.viLatency
@@ -2621,6 +2662,19 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         else if (m_stopRequested)  why = kStopped;
         else if (m_state.pc + 8u > codeSize) why = kOffEnd;
         else                       why = kBudget;
+
+        // VI provenance for a healthy run of this same microprogram, kept as
+        // the most recent normal termination seen so far. When this startPc
+        // later runs away, this is what "the same loop bound register, but
+        // from a run that actually ended" looked like, so the two can be
+        // diffed instead of theorized about.
+        if (why == kEnded)
+        {
+            ViSnapshot &snap = g_ghpcHealthyVi[m_ghpcStartPc];
+            std::memcpy(snap.v, g_ghpcViProv, sizeof(snap.v));
+            extern unsigned long long g_ghpcVu1Mscals;
+            snap.atMscal = g_ghpcVu1Mscals;
+        }
 
         // Instructions are counted PER TERMINATION REASON, not just per
         // program. The first version of this census recorded only a total, and
@@ -2724,6 +2778,87 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                 line += row;
             }
             line += "\n";
+
+            // VI provenance: decode the back-edge branch itself (not just a
+            // hot pc) to find which VI register(s) the test that fails to
+            // exit actually reads, then name the instruction that put the
+            // value there, and diff it against the last time this same
+            // microprogram terminated normally.
+            //
+            // The edge key's "from" is NOT the branch's own pc. It is
+            // recorded as m_state.pc at the moment the jump actually takes
+            // effect, which is one branch-delay slot AFTER the branch
+            // instruction executed: pc advances past the branch (+8) to the
+            // delay slot, the delay slot then executes and advances again
+            // (+8) before the pending jump is applied. So the branch that
+            // produced this edge sits 16 bytes before the recorded "from".
+            // Verified against the disassembly: the recorded "from" decoded
+            // as a JR reading a register that stayed constant across every
+            // cutoff, while "from - 16" decoded as the IBNE whose vi operand
+            // matched the register climbing without bound.
+            if (!edges.empty())
+            {
+                const uint32_t edgeFromPc = (edges[0].second >> 16) & 0xFFFFu;
+                const uint32_t fromPc = (edgeFromPc - 16u) & 0xFFFFu;
+                uint32_t lo = 0u;
+                if (fromPc + 4u <= codeSize)
+                    std::memcpy(&lo, vuCode + fromPc, 4);
+                const uint8_t opHi = (lo >> 25) & 0x7Fu;
+                const uint8_t vis = VIS(lo);
+                const uint8_t vit = VIT(lo);
+                uint8_t regs[2] = {0, 0};
+                int nRegs = 0;
+                // IBEQ/IBNE test two VI regs; the four sign-compares test one.
+                if (opHi == 0x28u || opHi == 0x29u) { regs[0] = vis; regs[1] = vit; nRegs = 2; }
+                else if (opHi == 0x2Cu || opHi == 0x2Du || opHi == 0x2Eu || opHi == 0x2Fu) { regs[0] = vis; nRegs = 1; }
+
+                char row[256];
+                std::snprintf(row, sizeof(row),
+                              "[vu1/loop]   branch@0x%04x lo=0x%08x op=0x%02x tests vi%u%s%u\n",
+                              fromPc, (unsigned)lo, (unsigned)opHi, (unsigned)regs[0],
+                              nRegs == 2 ? ",vi" : "",
+                              nRegs == 2 ? (unsigned)regs[1] : 0u);
+                line += row;
+
+                auto emit = [&](const char *tag, unsigned r, const ViProv &p) {
+                    char b[256];
+                    if (p.seen)
+                        std::snprintf(b, sizeof(b),
+                                      "[vu1/loop]   vi%u %s entry=%d first pc=0x%04x lo=0x%08x val=%d load=%d addr=0x%x\n",
+                                      r, tag, (int)(int16_t)p.entry, (unsigned)p.first.pc,
+                                      (unsigned)p.first.lo, (int)(int16_t)p.first.val,
+                                      (int)p.first.isLoad, (unsigned)p.first.addr);
+                    else
+                        std::snprintf(b, sizeof(b),
+                                      "[vu1/loop]   vi%u %s entry=%d first NONE (never written this mscal)\n",
+                                      r, tag, (int)(int16_t)p.entry);
+                    line += b;
+                    std::snprintf(b, sizeof(b),
+                                  "[vu1/loop]   vi%u %s prev pc=0x%04x lo=0x%08x val=%d load=%d addr=0x%x"
+                                  " | last pc=0x%04x lo=0x%08x val=%d\n",
+                                  r, tag, (unsigned)p.prev.pc, (unsigned)p.prev.lo,
+                                  (int)(int16_t)p.prev.val, (int)p.prev.isLoad, (unsigned)p.prev.addr,
+                                  (unsigned)p.last.pc, (unsigned)p.last.lo, (int)(int16_t)p.last.val);
+                    line += b;
+                };
+                for (int i = 0; i < nRegs; ++i)
+                {
+                    const unsigned r = regs[i];
+                    if (r == 0u) continue;
+                    emit("runaway", r, g_ghpcViProv[r]);
+                    const auto it2 = g_ghpcHealthyVi.find(m_ghpcStartPc);
+                    if (it2 != g_ghpcHealthyVi.end())
+                    {
+                        std::snprintf(row, sizeof(row), "[vu1/loop]   vi%u healthy snapshot atMscal=%llu\n",
+                                      r, (unsigned long long)it2->second.atMscal);
+                        line += row;
+                        emit("healthy", r, it2->second.v[r]);
+                    }
+                    else
+                        line += "[vu1/loop]   (no healthy termination of this startPc recorded yet)\n";
+                }
+            }
+
             std::fwrite(line.data(), 1, line.size(), stderr);
         }
 

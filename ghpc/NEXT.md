@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `0.6` |
 | fps | `0.25` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 0 of 6 |
-| rounds total | 6 of 14 |
+| rounds since gain | 1 of 6 |
+| rounds total | 7 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -116,11 +116,23 @@ The two runs agree to within 2 MSCALs, and their census at `total=2000` is
 identical to the instruction (`budget=5 avgBudget=62917 maxInstr=62928`). This
 is deterministic, not a race.
 
-ITOP is masked to 0x3FF so it cannot be the source of an oversized bound, but
-the VI registers at cutoff hold `vi3=17322` and `vi9=29202` where a vertex count
-cannot exceed 1023. Something is loading a loop bound from somewhere it should
-not. The VI provenance is the next probe: record which pc last wrote the VI the
-back-edge branch tests, and if it was a load, from what address.
+**The bound is loaded from VU1 address 0, because TOP is 0.** Named, with
+evidence, in `notes/evidence/2026-09-10-vu1-loop-bound-provenance.txt`:
+
+    microprogram 0x30b0  pc 0x31b8  ILW vi12, 0(vi5)   the loop bound
+    healthy   reads 0x14a0, gets 18    bound 330+18 = 348, loop ends
+    runaway   reads 0x0,    gets 1042  bound 0+1042, counter never equals it
+
+The base register comes from XTOP, which returned 330 healthy and 0 in every
+runaway dumped. 0xcd8 shows the same signature through different code. It is
+not the ITOP mask. **TOP=0 is not garbage either:** boot sets BASE=0 and
+OFFSET=330, so TOP legitimately alternates 0 and 330. The open question is
+upstream of the VU: whether the input for a TOP=0 MSCAL was ever unpacked to
+address 0.
+
+Those dumps cover the first ten runaways, which were on `qp_selsong_screen`
+(0xcd8) and `loading_screen` (0x30b0). None was on `game_screen`, so that
+gameplay's runaways are the same mechanism is not shown.
 
 **A retracted claim, and an unexplained discrepancy that goes with it.** An
 earlier round reported "everything is healthy until `game_screen`, the first
@@ -137,6 +149,10 @@ than explained, because an unexplained non-reproduction is exactly the kind of
 thing that later turns out to matter. Do not build on the current numbers
 without re-checking the census at `total=2000`.
 
+A third data point, same class: on the provenance round's builds the first
+runaway landed at mscal 963 once and 3363 twice (on `qp_selsong_screen`), with
+only the diagnostic dump differing between them. Still unexplained.
+
 The degradation at `game_screen` is progressive rather than a switch: `maxInstr`
 climbs 2456, then 25568, then 1000000. Early menu runaways are few and then it
 goes quiet, so the handful on `main_screen` may be a different phenomenon from
@@ -146,7 +162,8 @@ the mass of them at `game_screen`. Do not assume one explanation covers both.
 
     GHPC_COUNTIN=0.5     clamp the count-in so gameplay arrives in ~1 min
     GHPC_VU1_CENSUS=N    census of why microprograms stopped, every N MSCALs
-    GHPC_VU1_LOOP=N      dump pc histogram, back edges and VI regs for N runaways
+    GHPC_VU1_LOOP=N      dump pc histogram, back edges, VI regs and exit-branch
+                         VI provenance for the first N runaways
     GHPC_VU1_BUDGET=N    the per-MSCAL cycle budget, default 65536
 
 **`GHPC_COUNTIN` is a probe and every gameplay-speed mark carries it.** That is

@@ -1,0 +1,115 @@
+VU1 runaway: VI provenance of the loop bound, 2026-09-10, build-debug
+
+THE INSTRUCTION
+
+  microprogram 0x30b0, pc 0x31b8, lo=0x084c2800   ILW vi12, 0(vi5)
+
+It loads the loop bound. Healthy, it reads VU1 address 0x14a0 and gets
+18. In every runaway dumped it reads address 0x0 and gets 1042. vi5 is
+the input buffer base, 0 instead of 330 (0x14a). The bound is then
+base + count (0x31e0 IADD vi12, vi12, vi5): healthy 330+18 = 348 and
+the counter stops there; runaway 0+1042, which the counter, entered at
+16384 and stepping by 1, never equals.
+
+The base comes from XTOP (VIF1 TOP, masked 0x3FF). XTOP returned 330
+healthy and 0 in the runaways. The mask is not the problem; TOP itself
+is 0.
+
+PROBE
+
+GHPC_VU1_LOOP=10 with per-VI provenance in ps2_vu1_core.cpp. For each
+cut-off microprogram: decode the branch behind the hottest back edge,
+and for each VI it tests print the value at MSCAL entry, the first,
+previous-distinct and last write this MSCAL (pc, lower word, value,
+and for ILW/ILWR the VU1 address), plus the same from the most recent
+E-bit termination of the same startPc.
+
+Run: GHPC_COUNTIN=0.5 GHPC_VU1_LOOP=10, pad cross, bootskip on,
+game_screen at t=62.0. GHPC_DIAG is compiled out of release, so this
+changes no guest behaviour.
+
+WHERE THESE RUNAWAYS ARE
+
+The dumps cover the first ten runaways of the session. By log order,
+0xcd8 dumps fall on qp_selsong_screen and the 0x30b0 dumps on
+loading_screen. None is on game_screen. That gameplay runaways share
+this mechanism is not shown.
+
+PROGRAM 0x30b0, loading_screen (5 dumps)
+
+  4 of 5: branch@0x34c0 lo=0x520367bd IBNE vi12, vi3 -> 0x32b0
+  1 of 5: hottest back edge was an unconditional B at 0x36f0, which
+          tests no VI, so no provenance
+
+  vi12 runaway first pc=0x31b8 ILW val=1042 addr=0x0      (4 of 4)
+  vi12 healthy first pc=0x31b8 ILW val=18   addr=0x14a0   (mscal 7872)
+  vi12 runaway last  pc=0x31e0 IADD val=1042
+  vi12 healthy last  pc=0x31e0 IADD val=348
+
+  vi3  runaway first pc=0x3e90 ILW vi3, 0(vi4) val=4 addr=0x0
+  vi3  healthy first pc=0x3e90 ILW vi3, 0(vi4) val=4 addr=0x14a0
+  vi3  runaway prev  pc=0x31d0 IADD vi3, vi3, vi5 val=16384
+  vi3  runaway last  pc=0x3468 IADDIU vi3, vi3, 1 val=17325, 17234, 17319
+
+Two different loads at two different pcs, both reading 0x0 in the
+runaway and 0x14a0 healthy. Same instructions, same program, only the
+base differs.
+
+PROGRAM 0xcd8, qp_selsong_screen (first runaway, mscal 3363)
+
+  branch@0x0bc0 lo=0x520327e9 IBNE vi4, vi3 -> 0x0b10
+  runaway: 0x0a00 XTOP vi3 -> 0
+           0x0a08 ILW vi4, 0(vi3) addr=0x0 -> 0 (16384 in a later dump)
+           0x0a38 IADDIU vi4, vi4, 4 -> bound 4
+           0x0b88 IADDIU vi3, vi3, 4, counter 5, 9, 13 ... never 4
+  healthy: 0x3e40 XTOP vi4 -> 330
+           0x3e90 ILW vi3, 0(vi4) addr=0x14a0
+
+The two paths are not the same code: the runaway reaches 0x0a00 through
+a jump to 0x0000 (backedge 0x0d10 -> 0x0000, so the branch at 0x0d00,
+taken once), healthy runs go through 0x3e40. Same signature though:
+XTOP 0, count loaded from address 0x0.
+
+vi3 carries across cut-off MSCALs of 0xcd8: 10433, 20917, 31405, steps
+of 2622 iterations x 4. A cut-off program resumes inside the loop
+(distinctPcs=24, first write already 0x0b88), so nothing resets it.
+
+TOP=0 IS A REAL BUFFER, SO THE QUESTION MOVES UPSTREAM
+
+  [vif1/dbuf] BASE 0 -> 0     mscal 0
+  [vif1/dbuf] OFFSET 0 -> 330 mscal 0
+
+With BASE=0 and OFST=330, TOP alternates 0 and 330 on every MSCAL
+(ps2_vif1_interpreter.cpp:959-969). XTOP=0 is the other half of the
+double buffer, not a garbage value. Healthy runs read their count from
+the 330 half; every runaway dumped read it from the 0 half.
+
+Not yet known: whether the input for a TOP=0 MSCAL was ever unpacked
+to address 0, or went to 330 while TOP said 0. Nor is "every TOP=0
+MSCAL runs away" established, since the census does not split by TOP.
+
+NOT THE CAUSE OF THESE RUNAWAYS
+
+OFFSET VIFcodes with NUM != 0: 1015 of the 1016 OFFSETs in this run
+(the other is the boot OFFSET 0 -> 330). The BASE handler rejects that
+shape as a desynced stream (ps2_vif1_interpreter.cpp:873); OFFSET has
+no such guard, and every OFFSET resets TOPS to BASE. But the first one
+is at mscal 8597, after every runaway dumped here. Worth checking on its
+own; it does not explain these.
+
+CORRECTIONS
+
+1. The back-edge "from" is m_state.pc when the jump takes effect, which
+   is branch + 16 (branch, delay slot, jump). "backedge 0x0bd0 ->
+   0x0b10" in 2026-09-10-vu1-runaway-cost.txt is the IBNE at 0x0bc0.
+   0x0bd0 decodes as JR vi2, vi2=418, 418*8=0xd10, not the loop.
+2. An intermediate reading of this probe said the bound was not loaded.
+   It only tracked the LAST writer, and in these loops the last writer
+   is the IADD that adds the base. The first writer is the load.
+
+DETERMINISM
+
+First runaway at mscal 963 in one run (matches NEXT.md's 961/963),
+3363 in the next two. The later two differ from the first only in the
+diagnostic dump. Same class of timing sensitivity NEXT.md already logs
+as unexplained. The provenance is identical across the two later runs.
