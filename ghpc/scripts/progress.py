@@ -335,7 +335,13 @@ def main():
         print("NEXT.md is %s" % ("STALE" if stale else "fresh"))
         return 1 if stale else 0
 
-    if a.render:
+    # --render is a standalone action, but --record already renders after it
+    # stores the mark. Letting --render short-circuit here meant that
+    # `--record --render`, which is the invocation NEXT.md documents for closing
+    # a round, silently skipped the measurement entirely and just redrew the
+    # block from the OLD mark: no run, no verdict, no new floor, exit 0. The
+    # combination has to either work or be refused, never quietly no-op.
+    if a.render and not a.record:
         return render()
 
     if a.round_done:

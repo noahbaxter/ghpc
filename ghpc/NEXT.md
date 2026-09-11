@@ -99,18 +99,21 @@ are unbounded rather than merely long, and `pc0x30b0` starts running away before
 `pc0xcd8` does. Different runs stall in different loops (0x0b10, 0x32b0, 0x0e98,
 0x15c0), so this is not one mis-decoded branch.
 
-**The runaway comes first, and it starts in the menus.** Both events are now
-stamped with `g_ghpcVu1Mscals`, so they can be ordered directly instead of by
-log line:
+**The runaway comes first, and it starts in the menus. Confirmed on two runs.**
+Both events are stamped with `g_ghpcVu1Mscals`, so they order directly rather
+than by log line:
 
-    [vu1/first-runaway] mscal=963   startPc=0xcd8  instrs=62928
-    [projw]             mscal=8570  pc=0x0b10
+    run 1   [vu1/first-runaway] mscal=963  startPc=0xcd8   [projw] mscal=8570
+    run 2   [vu1/first-runaway] mscal=961  startPc=0xcd8   [projw] mscal=8378
 
-mscal 963 lands between `enter main_screen` and `main_screen ->
-qp_selsong_screen`, so the first microprogram to run away does it on a menu,
-about 7600 MSCALs before the projection matrix goes bad. **So the runaway is the
-cause and the corruption is downstream of it.** Chase the loop bound, not the
-bad write.
+Both land between `enter main_screen` and `main_screen -> qp_selsong_screen`, so
+the first microprogram to run away does it on a menu, roughly 7500 MSCALs before
+the projection matrix goes bad. **The runaway is the cause and the corruption is
+downstream of it.** Chase the loop bound, not the bad write.
+
+The two runs agree to within 2 MSCALs, and their census at `total=2000` is
+identical to the instruction (`budget=5 avgBudget=62917 maxInstr=62928`). This
+is deterministic, not a race.
 
 ITOP is masked to 0x3FF so it cannot be the source of an oversized bound, but
 the VI registers at cutoff hold `vi3=17322` and `vi9=29202` where a vertex count
@@ -118,14 +121,20 @@ cannot exceed 1023. Something is loading a loop bound from somewhere it should
 not. The VI provenance is the next probe: record which pc last wrote the VI the
 back-edge branch tests, and if it was a load, from what address.
 
-**A retracted claim, left here because it cost a conclusion.** An earlier round
-reported "everything is healthy until `game_screen`, the first 10,000 MSCALs are
-all clean". That came from one run whose census happened to show `budget=0`
-through `total=10000`. It does not reproduce: another run has 5 runaways by
-`total=2000`, on `main_screen`. **Runs differ here**, so a single run is not
-enough to establish when something starts. The ordering above is itself n=1 and
-is being confirmed; treat it as the leading reading, not a settled fact, until a
-second run agrees.
+**A retracted claim, and an unexplained discrepancy that goes with it.** An
+earlier round reported "everything is healthy until `game_screen`, the first
+10,000 MSCALs are all clean". That came from one run whose census showed
+`budget=0` through `total=10000`. Both runs on the current build instead show
+`budget=5` by `total=2000`, on `main_screen`, so the claim is withdrawn.
+
+**Why that older run differed is not understood.** It was a different build
+(before the per-reason instruction split and the first-runaway stamp), and
+nothing in those changes should affect whether a microprogram terminates. Either
+the early runaway is sensitive to timing in a way the current build happens to
+pin, or something in that run was genuinely different. It is logged here rather
+than explained, because an unexplained non-reproduction is exactly the kind of
+thing that later turns out to matter. Do not build on the current numbers
+without re-checking the census at `total=2000`.
 
 The degradation at `game_screen` is progressive rather than a switch: `maxInstr`
 climbs 2456, then 25568, then 1000000. Early menu runaways are few and then it
