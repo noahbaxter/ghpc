@@ -18,26 +18,26 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The VU1 runaway in 0xcd8, per `NEXT.md`. Its loops are sound and their input
-at gameplay TOPs is bad. Find out whether the gameplay OFFSETs are real.**
+**The VU1 runaway in 0xcd8, per `NEXT.md`. Its loops are sound; their input is
+bad because the VIF1 parser falls out of step at gameplay. Find where.**
 
-`notes/evidence/2026-09-11-vu1-gameplay-loops.txt`: the first ten gameplay
-cut-offs, all 0xcd8, spread over four loops. Six have a bad count or bound from
-input: a zero header, a y == z header of -31872 at TOP 514, a strip count near
-900. Four spin in 0x30b0's vertex loop with plausible headers and are not
-explained. In order:
+`notes/evidence/2026-09-11-vif1-offset-misparse.txt`: the gameplay OFFSETs
+(514, 515, 768) are payload read as VIFcodes, all in one 7120-byte chunk at
+mscal 8467. The STCYCL WL=0 decode was wrong and is fixed
+(`GHPC_VIF_STCYCL_LEGACY=1` for the old one), but the OFFSETs survive it. In
+order:
 
-1. **Are OFFSET 514 and 515 real?** Gameplay TOPs come from OFFSET VIFcodes
-   carrying NUM 2 or 3. At the first few, dump the last parsed commands with
-   their consumed sizes (the `g_hist` ring behind `dumpHist`, whose own cap is
-   already spent at boot, so give this its own) and the raw words around the
-   code. A real OFFSET sits exactly where the previous command's payload ends;
-   a misparsed one sits inside a payload. If misparsed, name the command whose
-   size is wrong.
-2. **If they are real**, the second input half at qw 514 overlaps the constants
-   at 680 and the outputs at 704 and 849, so something else has to keep batches
-   small or move those. Check the projection matrix going bad at the start of
-   gameplay against unpacks landing past qw 680.
+1. **Walk the 7120-byte chunk at mscal 8467 from its first byte.** The
+   12-command window before the first bad OFFSET is all zero words read as
+   NOPs, so the step that went wrong is earlier. Dump the whole chunk once with
+   every command and its consumed size, find the first command that is not a
+   plausible GH2 group (`NOP NOP FLUSHE UNPACK` on quadword boundaries), and
+   recompute that command's size by hand against PCSX2 (`vifUnpackSetup`, and
+   the table in `2026-09-11-vif1-offset-misparse.txt`). Also check the chunk's
+   provenance: it is a flattened chain (`src=0`), so a wrong tag walk would
+   look the same.
+2. **Measure the STCYCL fix's release speed** with a same-build control. It was
+   not measured (a low-memory kill ended the run).
 3. **0x30b0's vertex loop inside 0xcd8** (dumps 7 to 10): back edges taken ~800
    times against vi3 moving 15 to 20. Decode 0x31b0 to 0x3730 and follow the
    unconditional B at 0x3700.

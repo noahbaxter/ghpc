@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `0.6` |
 | fps | `0.25` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 5 of 6 |
-| rounds total | 11 of 14 |
+| rounds since gain | 6 of 6 |
+| rounds total | 12 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -172,7 +172,16 @@ near 900. The other four spin inside 0x30b0's vertex loop with plausible
 headers and are not explained. The bad headers sit at gameplay TOPs, which come
 from OFFSET 514 and 515 VIFcodes carrying NUM 2 or 3, and a second input half at
 qw 514 overlaps the constants at 680 and the output buffers at 704 and 849.
-**Next: are those OFFSETs real, or read out of a payload?**
+**They are payload.** Measured in
+`notes/evidence/2026-09-11-vif1-offset-misparse.txt`: every NUM != 0 OFFSET
+(`0x02020203` as OFFSET 515, `0x02030000` as OFFSET 0, `0x02020300` as 768)
+sits in a stretch of zero words read as NOPs with packed-byte words at a regular
+28 to 32 byte spacing, all in one 7120-byte chunk at mscal 8467. So the
+gameplay TOPs, and the bad headers the runaways read, come from a VIF1 parser
+that has fallen out of step. STCYCL WL=0 was the first suspect (GH2 sends
+`0x0011` and `0x0016`, and the runtime read WL as 1, not 256). Fixed and kept,
+since it matches hardware, but it is not the cause: the OFFSETs are still there
+with it. **Next: find where the parser falls out of step in that chunk.**
 
 **A VIF1 desync was found and fixed, and it did not move speed.** A command
 whose payload straddled two DMA chunks was dropped, so the next chunk parsed
@@ -217,6 +226,9 @@ the mass of them at `game_screen`. Do not assume one explanation covers both.
                          before the fix. Control arm only.
     GHPC_DMA_SPR_LEGACY=1  read a bit-31 scratchpad DMA source from RAM, as
                          before the fix. Control arm only.
+    GHPC_VIF_STCYCL_LEGACY=1  read STCYCL WL=0 as 1 and CL=0 as 1, as before
+                         the fix. Control arm only; release speed of the fix is
+                         unmeasured.
 
 `eerate_pct` rounds to 0.1, which cannot separate gameplay arms at 0.7%. Compare
 the `Mcycles/sec` figure on the `[eerate]` line instead.
@@ -261,6 +273,16 @@ Stop when any of these is true:
   `STOP_ROUNDS_SINCE_GAIN`, or `rounds_total` reaching `STOP_ROUNDS_TOTAL`.
   Both live in `scripts/progress.py`. Raising either is a decision to make
   awake, not mid-loop.
+
+  **Decide awake: the gain counter can no longer reset.** The verdict compares
+  the rung only (`PROGRESSED` means a higher held rung), and a recorded gain is
+  the only thing that zeroes `rounds_since_gain`. The rung has sat at the top
+  since `game_screen` became reachable, so no round can register a gain, and a
+  round that doubled gameplay speed would still count toward the stop. The 5%
+  win above is checked by whoever reads the `detail` line, never by the verdict.
+  This is the saturated-ladder trap described above, come back through the
+  counter. Options: make an `eerate_pct` gain at `game_screen`, same probes,
+  count as `PROGRESSED`, or reset the counter by hand after reviewing a round.
 - **Three failed fixes on one hypothesis.** It is an architecture problem, not a
   fourth attempt.
 

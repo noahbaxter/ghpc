@@ -238,12 +238,21 @@ void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes)
             const int bitsPerVector = (vl == 3u && vn == 3u) ? 16 : (components * bitsPerComponent);
             uint32_t bytesPerVector = static_cast<uint32_t>((bitsPerVector + 7) / 8);
             const uint32_t writeVectorCount = (num == 0u) ? 256u : static_cast<uint32_t>(num);
+            // Same STCYCL decode as VIF1: WL=0 means 256, CL=0 reads nothing.
+            static const bool s_cycleLegacy0 = std::getenv("GHPC_VIF_STCYCL_LEGACY") != nullptr;
             uint32_t cl = vif0_regs.cycle & 0xFFu;
             uint32_t wl = (vif0_regs.cycle >> 8) & 0xFFu;
-            if (cl == 0u)
-                cl = 1u;
-            if (wl == 0u)
-                wl = 1u;
+            if (s_cycleLegacy0)
+            {
+                if (cl == 0u)
+                    cl = 1u;
+                if (wl == 0u)
+                    wl = 1u;
+            }
+            else if (wl == 0u)
+            {
+                wl = 256u;
+            }
             uint32_t sourceVectorCount = writeVectorCount;
             if (cl < wl)
             {
@@ -871,6 +880,52 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                              (unsigned)(pos >= 4u ? pos - 4u : 0u));
             }
 #endif
+#if GHPC_DIAG
+            // Are the gameplay OFFSETs (NUM 2 or 3, values 514 and 515) real, or
+            // payload read as a VIFcode? The parser's own step decides where the
+            // next "command" starts, so how far each advanced proves nothing by
+            // itself. The words around the OFFSET are the independent evidence:
+            // real ones sit among VIFcodes, misparsed ones among data.
+            if (num != 0u)
+            {
+                static int offsetCtx = 0;
+                if (offsetCtx < 6)
+                {
+                    ++offsetCtx;
+                    extern unsigned long long g_ghpcVu1Mscals;
+                    const uint32_t codePos = pos - 4u;
+                    std::string s;
+                    char b[200];
+                    std::snprintf(b, sizeof(b),
+                                  "[vif1/offsetctx] #%d OFFSET->%u num=%u codePos=%u size=%u mscals=%llu src=%u\n",
+                                  offsetCtx, (unsigned)(imm & 0x3FFu), (unsigned)num, (unsigned)codePos,
+                                  (unsigned)sizeBytes, g_ghpcVu1Mscals, (unsigned)g_curChunkSource);
+                    s += b;
+                    // The last 12 entries of the ring, oldest first; the newest is
+                    // this OFFSET, and the one before it now has its consumed set.
+                    for (uint32_t i = 20u; i < 32u; ++i)
+                    {
+                        const VifHist &h = g_hist[(g_histIdx + i) & 31u];
+                        std::snprintf(b, sizeof(b),
+                                      "[vif1/offsetctx]   pos=%u cmd=0x%08x op=0x%02x num=%u imm=0x%04x consumed=%u\n",
+                                      (unsigned)h.pos, (unsigned)h.cmd, (unsigned)h.op, (unsigned)h.num,
+                                      (unsigned)h.imm, (unsigned)h.consumed);
+                        s += b;
+                    }
+                    const uint32_t from = (codePos >= 48u) ? codePos - 48u : 0u;
+                    const uint32_t to = (codePos + 24u < sizeBytes) ? codePos + 24u : sizeBytes;
+                    for (uint32_t a = from; a + 4u <= to; a += 4u)
+                    {
+                        uint32_t w = 0u;
+                        std::memcpy(&w, data + a, 4);
+                        std::snprintf(b, sizeof(b), "[vif1/offsetctx]   +%u 0x%08x%s\n",
+                                      (unsigned)a, (unsigned)w, a == codePos ? "   <== OFFSET" : "");
+                        s += b;
+                    }
+                    std::fwrite(s.data(), 1, s.size(), stderr);
+                }
+            }
+#endif
             vif1_regs.ofst = imm & 0x3FFu;
 #if GHPC_DIAG
             if (const char *fb = std::getenv("GHPC_FORCE_DBUF"))
@@ -1391,12 +1446,25 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             const uint32_t writeVectorCount = (num == 0u) ? 256u : static_cast<uint32_t>(num);
 
             // STCYCL controls write cycles for UNPACK.
+            // WL=0 means 256, and CL=0 reads nothing in a filling write
+            // (PCSX2 vifUnpackSetup). GH2 sends STCYCL 0x0011 and 0x0016, both
+            // WL=0. Forcing WL to 1 made those skipping writes that read every
+            // vector from the stream, overran the real payload, and parsed the
+            // rest of the chunk as VIFcodes.
+            static const bool s_cycleLegacy = std::getenv("GHPC_VIF_STCYCL_LEGACY") != nullptr;
             uint32_t cl = vif1_regs.cycle & 0xFFu;
             uint32_t wl = (vif1_regs.cycle >> 8) & 0xFFu;
-            if (cl == 0u)
-                cl = 1u;
-            if (wl == 0u)
-                wl = 1u;
+            if (s_cycleLegacy)
+            {
+                if (cl == 0u)
+                    cl = 1u;
+                if (wl == 0u)
+                    wl = 1u;
+            }
+            else if (wl == 0u)
+            {
+                wl = 256u;
+            }
 
             uint32_t sourceVectorCount = writeVectorCount;
             if (cl < wl)
@@ -1408,6 +1476,19 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 sourceVectorCount = fullBlocks * cl + remainder;
             }
 
+#if GHPC_DIAG
+            // Proof the WL=0 path runs: how many vectors an UNPACK reads from
+            // the stream against how many it writes.
+            if ((vif1_regs.cycle & 0xFF00u) == 0u || (vif1_regs.cycle & 0xFFu) == 0u)
+            {
+                static int cycleLogs = 0;
+                if (cycleLogs++ < 8)
+                    std::fprintf(stderr,
+                                 "[vif1/stcycl] UNPACK cmd=0x%08x cycle=0x%04x cl=%u wl=%u writes=%u reads=%u\n",
+                                 (unsigned)cmd, (unsigned)(vif1_regs.cycle & 0xFFFFu), (unsigned)cl,
+                                 (unsigned)wl, (unsigned)writeVectorCount, (unsigned)sourceVectorCount);
+            }
+#endif
             uint32_t totalBytes = sourceVectorCount * bytesPerVector;
             totalBytes = (totalBytes + 3) & ~3u;
             if (!s_noResidual && pos + totalBytes > sizeBytes)
