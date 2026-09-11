@@ -1885,7 +1885,13 @@ void PS2Runtime::noteSongCall(uint8_t *rdram, R5900Context *ctx, uint32_t target
     // Print the first call, then on a heartbeat. A stuck chart and a chart that
     // never got polled at all are different failures, and only the heartbeat
     // tells them apart: the line keeps arriving with the number standing still.
-    if (n != 1ull && (n % 120ull) != 0ull)
+    // GHPC_SONG_HEARTBEAT=N overrides the cadence; N<=0 falls back to 120.
+    static const unsigned long long every = []() -> unsigned long long {
+        const char *env = std::getenv("GHPC_SONG_HEARTBEAT");
+        const long v = env ? std::strtol(env, nullptr, 10) : 0L;
+        return v > 0L ? (unsigned long long)v : 120ull;
+    }();
+    if (n != 1ull && (n % every) != 0ull)
     {
         return;
     }
