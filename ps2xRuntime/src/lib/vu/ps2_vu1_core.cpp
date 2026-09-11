@@ -717,11 +717,11 @@ void VU1Interpreter::queueStore(uint32_t address, const uint32_t words[4], uint8
             {
                 // At issue, m_state.pc is the storing instruction itself; by the
                 // time the store lands the pc has moved on.
-                extern void ghpcNoteTopStoreIssue(uint32_t, uint32_t, const int32_t *);
+                extern void ghpcNoteTopStoreIssue(uint32_t, uint32_t, const int32_t *, const float *);
                 int32_t vi[16];
                 for (int r = 0; r < 16; ++r)
                     vi[r] = (int32_t)m_state.vi[r];
-                ghpcNoteTopStoreIssue(address, m_state.pc, vi);
+                ghpcNoteTopStoreIssue(address, m_state.pc, vi, m_state.vf[2]);
             }
 #endif
             store.valid = true;
@@ -2208,7 +2208,13 @@ static TwRead g_twFirstRead = {}, g_twDiffRead = {};
 // moment, and who wrote each VI so far this run.
 struct TwIssue { bool seen; uint32_t pc; int32_t vi[16]; ViProv prov[16]; };
 static TwIssue g_twIssue = {};
-static void ghpcTopWatchBegin(const uint8_t *vuData, uint32_t top)
+// The output pointer is MTIR vi4, vf2.x. vf2 at entry, its first and last
+// writer this run, and its value when the qw[TOP] store issued.
+struct TwVf { bool seen; uint32_t pc, lo, hi; bool upper; uint8_t lanes; uint32_t v[4]; };
+static uint32_t g_twVf2Entry[4] = {};
+static uint32_t g_twVf2AtIssue[4] = {};
+static TwVf g_twVf2First = {}, g_twVf2Last = {};
+static void ghpcTopWatchBegin(const uint8_t *vuData, uint32_t top, const float *vf2)
 {
     g_twTop = top & 0x3FFu;
     std::memcpy(g_twEntry, vuData + g_twTop * 16u, sizeof(g_twEntry));
@@ -2216,11 +2222,25 @@ static void ghpcTopWatchBegin(const uint8_t *vuData, uint32_t top)
     g_twFirstRead = {};
     g_twDiffRead = {};
     g_twIssue = {};
+    std::memcpy(g_twVf2Entry, vf2, sizeof(g_twVf2Entry));
+    std::memset(g_twVf2AtIssue, 0, sizeof(g_twVf2AtIssue));
+    g_twVf2First = {};
+    g_twVf2Last = {};
 }
-void ghpcNoteTopStoreIssue(uint32_t address, uint32_t pc, const int32_t *vi)
+static void ghpcNoteVf2Write(uint32_t pc, uint32_t lo, uint32_t hi, bool upper,
+                             uint8_t lanes, const float *v)
+{
+    TwVf w{true, pc, lo, hi, upper, lanes, {}};
+    std::memcpy(w.v, v, sizeof(w.v));
+    if (!g_twVf2First.seen)
+        g_twVf2First = w;
+    g_twVf2Last = w;
+}
+void ghpcNoteTopStoreIssue(uint32_t address, uint32_t pc, const int32_t *vi, const float *vf2)
 {
     if (address / 16u != g_twTop || g_twIssue.seen)
         return;
+    std::memcpy(g_twVf2AtIssue, vf2, sizeof(g_twVf2AtIssue));
     g_twIssue.seen = true;
     g_twIssue.pc = pc;
     std::memcpy(g_twIssue.vi, vi, sizeof(g_twIssue.vi));
@@ -2265,7 +2285,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
             g_ghpcViProv[r].seen = false;
             g_ghpcViProv[r].entry = m_state.vi[r];
         }
-        ghpcTopWatchBegin(vuData, m_state.top);
+        ghpcTopWatchBegin(vuData, m_state.top, m_state.vf[2]);
     }
 #endif
 
@@ -2608,6 +2628,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                     ? decoded.upperUsage.vfLatency
                     : decoded.upperUsage.latency;
             queueVfWrite(upperWrite.reg, upperWrite.lanes, newUpperVf, latency);
+#if GHPC_DIAG
+            if (m_unit == Unit::VU1 && upperWrite.reg == 2u)
+                ghpcNoteVf2Write(m_state.pc, decoded.lower, decoded.upper, true,
+                                 (uint8_t)upperWrite.lanes, newUpperVf);
+#endif
         }
         if (hasDistinctLowerWrite)
         {
@@ -2617,6 +2642,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                                          ? decoded.lowerUsage.vfLatency
                                          : decoded.lowerUsage.latency;
             queueVfWrite(lowerWrite.reg, lowerWrite.lanes, newLowerVf, latency);
+#if GHPC_DIAG
+            if (m_unit == Unit::VU1 && lowerWrite.reg == 2u)
+                ghpcNoteVf2Write(m_state.pc, decoded.lower, decoded.upper, false,
+                                 (uint8_t)lowerWrite.lanes, newLowerVf);
+#endif
         }
         if (decoded.upperUsage.accWrite != 0u)
         {
@@ -2807,11 +2837,18 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         // value other than the entry one], per startPc.
         struct TwBucket { uint64_t n[2][2][2][2]; };
         static std::map<uint32_t, TwBucket> twByPc;
+        // [cut][TOP==0][vf2 written this run][vf2.x low 16 bits 0 at entry].
+        // Counted over every run, so carried-in and written-in-run are told
+        // apart on the population, not on ten samples.
+        struct VfBucket { uint64_t n[2][2][2][2]; };
+        static std::map<uint32_t, VfBucket> vfByPc;
         if (why == kEnded || why == kBudget)
         {
             const int cutI = (why == kBudget) ? 1 : 0;
             ++twByPc[m_ghpcStartPc].n[cutI][g_ghpcVu1Entry ? 1 : 0]
                                      [g_twStore.seen ? 1 : 0][g_twDiffRead.seen ? 1 : 0];
+            ++vfByPc[m_ghpcStartPc].n[cutI][g_twTop == 0u ? 1 : 0]
+                                     [g_twVf2First.seen ? 1 : 0][(g_twVf2Entry[0] & 0xFFFFu) == 0u ? 1 : 0];
             static std::map<uint32_t, int> twShown[2];
             if ((m_ghpcStartPc == 0x30b0u || m_ghpcStartPc == 0xcd8u) &&
                 twShown[cutI][m_ghpcStartPc]++ < (cutI ? 10 : 4))
@@ -2832,6 +2869,60 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                              g_twDiffRead.seen ? "yes" : "no", (unsigned)g_twDiffRead.pc,
                              g_twDiffRead.comp, (unsigned)g_twDiffRead.val,
                              (unsigned)g_twEntry[g_twDiffRead.comp & 3], (int)g_twDiffRead.afterStore);
+                {
+                    // Where the output pointer comes from. qw688.x and qw689.x
+                    // are the jump table 0x30b0 calls through; the second
+                    // callee is the one place left in its path that could set
+                    // vf2, so its code is dumped once per program.
+                    uint32_t q688 = 0u, q689 = 0u;
+                    std::memcpy(&q688, vuData + 688u * 16u, 4);
+                    std::memcpy(&q689, vuData + 689u * 16u, 4);
+                    char b2[400];
+                    std::snprintf(b2, sizeof(b2),
+                                  "[vu1/topwatch]   vf2 entry=%08x %08x %08x %08x atIssue.x=%08x"
+                                  " | first=%s pc=0x%x %s lo=0x%08x hi=0x%08x lanes=%x x=%08x"
+                                  " | last=%s pc=0x%x x=%08x | qw688.x=%u qw689.x=%u\n",
+                                  g_twVf2Entry[0], g_twVf2Entry[1], g_twVf2Entry[2], g_twVf2Entry[3],
+                                  g_twVf2AtIssue[0],
+                                  g_twVf2First.seen ? "yes" : "no", g_twVf2First.pc,
+                                  g_twVf2First.upper ? "upper" : "lower",
+                                  g_twVf2First.lo, g_twVf2First.hi, (unsigned)g_twVf2First.lanes,
+                                  g_twVf2First.v[0],
+                                  g_twVf2Last.seen ? "yes" : "no", g_twVf2Last.pc, g_twVf2Last.v[0],
+                                  q688 & 0xFFFFu, q689 & 0xFFFFu);
+                    std::string s2 = b2;
+                    static std::map<uint32_t, bool> calleeDumped;
+                    const uint32_t c2 = (q689 & 0xFFFFu) * 8u;
+                    if (!calleeDumped[m_ghpcStartPc] && c2 + 8u <= codeSize)
+                    {
+                        calleeDumped[m_ghpcStartPc] = true;
+                        for (uint32_t a = c2; a + 8u <= codeSize && a - c2 < 40u * 8u; a += 8u)
+                        {
+                            uint32_t l = 0u, h = 0u;
+                            std::memcpy(&l, vuCode + a, 4);
+                            std::memcpy(&h, vuCode + a + 4, 4);
+                            std::snprintf(b2, sizeof(b2), "[vu1/topwatch]   callee2 0x%04x lo=0x%08x hi=0x%08x\n", a, l, h);
+                            s2 += b2;
+                        }
+                    }
+                    static std::map<uint32_t, bool> writerDumped;
+                    if (g_twVf2First.seen && !writerDumped[m_ghpcStartPc])
+                    {
+                        writerDumped[m_ghpcStartPc] = true;
+                        const uint32_t wpc = g_twVf2First.pc;
+                        const uint32_t from = (wpc >= 0x30u) ? wpc - 0x30u : 0u;
+                        for (uint32_t a = from; a <= wpc + 0x10u && a + 8u <= codeSize; a += 8u)
+                        {
+                            uint32_t l = 0u, h = 0u;
+                            std::memcpy(&l, vuCode + a, 4);
+                            std::memcpy(&h, vuCode + a + 4, 4);
+                            std::snprintf(b2, sizeof(b2), "[vu1/topwatch]   vf2writer 0x%04x lo=0x%08x hi=0x%08x%s\n",
+                                          a, l, h, a == wpc ? "  <== first vf2 write" : "");
+                            s2 += b2;
+                        }
+                    }
+                    std::fwrite(s2.data(), 1, s2.size(), stderr);
+                }
                 if (g_twIssue.seen)
                 {
                     // Name the store and the register its address came from.
@@ -3123,6 +3214,23 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                                            (unsigned long long)t.n[c][e][0][0], (unsigned long long)t.n[c][e][0][1],
                                            (unsigned long long)t.n[c][e][1][0], (unsigned long long)t.n[c][e][1][1],
                                            (c == 1 && e == 1) ? "}" : " | ");
+                line += buf;
+            }
+            // w = vf2 written this run, z = vf2.x low 16 bits were 0 at entry.
+            line += "\n[vu1/vf2] total=" + std::to_string(total);
+            for (const auto &kv : vfByPc)
+            {
+                const VfBucket &t = kv.second;
+                char buf[640];
+                int w = std::snprintf(buf, sizeof(buf), " pc0x%x{", (unsigned)kv.first);
+                for (int c = 0; c < 2; ++c)
+                    for (int z = 0; z < 2; ++z)
+                        w += std::snprintf(buf + w, sizeof(buf) - (size_t)w,
+                                           "%s/%s w0z0=%llu w0z1=%llu w1z0=%llu w1z1=%llu%s",
+                                           c ? "cut" : "end", z ? "top0" : "topN",
+                                           (unsigned long long)t.n[c][z][0][0], (unsigned long long)t.n[c][z][0][1],
+                                           (unsigned long long)t.n[c][z][1][0], (unsigned long long)t.n[c][z][1][1],
+                                           (c == 1 && z == 1) ? "}" : " | ");
                 line += buf;
             }
             line += "\n";

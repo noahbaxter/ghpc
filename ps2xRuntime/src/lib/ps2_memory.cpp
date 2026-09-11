@@ -1320,6 +1320,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+#if GHPC_DIAG
+            // PsRnd::Reset sends the vf2 init call as a normal-mode VIF1 kick
+            // from scratchpad (PreSend: CHCR 0x101, MADR with the SPR bit).
+            if (channelBase == 0x10009000u && ((value >> 2) & 0x3u) == 0u && (madr & 0x80000000u))
+            {
+                static int normalSpr = 0;
+                if (normalSpr++ < 8)
+                    std::fprintf(stderr, "[dma/vif1] normal kick from SPR madr=0x%x qwc=%u chcr=0x%x dctrl=0x%x\n",
+                                 (unsigned)madr, (unsigned)qwc, (unsigned)value,
+                                 (unsigned)m_ioRegisters[0x1000E000u]);
+            }
+#endif
 
             // VIF1 draining an MFIFO stalls when it catches up with the fill
             // pointer. Without this the chain walker reads whatever happens to
@@ -1335,6 +1347,19 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     const uint32_t fill = m_ioRegisters[0x1000D010u];
                     if (tadr == fill)
                     {
+#if GHPC_DIAG
+                        // This stall is for a chain drain catching up with the
+                        // fill pointer. A normal-mode kick does not read the
+                        // ring, so refusing it here drops the packet.
+                        if (((value >> 2) & 0x3u) == 0u)
+                        {
+                            static int normalRefused = 0;
+                            if (normalRefused++ < 8)
+                                std::fprintf(stderr,
+                                             "[dma/vif1] NORMAL-mode kick refused by MFIFO stall: madr=0x%x qwc=%u chcr=0x%x tadr=0x%x fill=0x%x\n",
+                                             (unsigned)madr, (unsigned)qwc, (unsigned)value, (unsigned)tadr, (unsigned)fill);
+                        }
+#endif
                         return true;
                     }
                 }
@@ -1518,10 +1543,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 {
                     if (qwCount == 0)
                         return;
-                    const bool scratch = isScratchpad(srcAddr);
+                    // The DMAC's own scratchpad form is bit 31 over a scratchpad
+                    // offset (tDMAC_ADDR.SPR). isScratchpad() rejects it, because
+                    // 0x80000000 and up is also KSEG0 RAM to the CPU. PsRnd::Reset
+                    // sends the vf2 init call this way (madr=0x80000020), and it
+                    // was being read from RAM at 0x20 instead.
+                    static const bool s_sprLegacy = std::getenv("GHPC_DMA_SPR_LEGACY") != nullptr;
+                    const bool sprForm = !s_sprLegacy && (srcAddr & 0x80000000u) != 0u && !isScratchpad(srcAddr);
+                    const bool scratch = sprForm || isScratchpad(srcAddr);
                     PendingTransfer pt;
                     pt.fromScratchpad = scratch;
-                    pt.srcAddr = srcAddr;
+                    pt.srcAddr = sprForm ? (PS2_SCRATCHPAD_BASE | (srcAddr & (PS2_SCRATCHPAD_SIZE - 1u)))
+                                         : srcAddr;
                     pt.qwc = qwCount;
                     if (channelBase == 0x1000A000u)
                         m_pendingGifTransfers.push_back(pt);

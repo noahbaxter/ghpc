@@ -102,6 +102,20 @@ void PS2Memory::processVIF0Data(uint32_t srcPhys, uint32_t sizeBytes)
 
 void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes)
 {
+#if GHPC_DIAG
+    // Same scan as VIF1: did the vf2 init call go down the wrong channel?
+    for (uint32_t a = 0u; a + 4u <= sizeBytes; a += 4u)
+    {
+        uint32_t w = 0u;
+        std::memcpy(&w, data + a, 4);
+        if ((w & 0x7FFFFFFFu) == 0x140006E6u || (w & 0x7FFFFFFFu) == 0x150006E6u)
+        {
+            static int initScanLogs0 = 0;
+            if (initScanLogs0++ < 8)
+                std::fprintf(stderr, "[vif0/initscan] word 0x%08x at pos=%u of %u\n", w, a, sizeBytes);
+        }
+    }
+#endif
     if (sizeBytes == 0u)
         return;
 
@@ -715,6 +729,25 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         data = joined.data();
         sizeBytes = static_cast<uint32_t>(joined.size());
     }
+#if GHPC_DIAG
+    // PsRnd::Reset writes MSCAL 0x6e6 (the vf2 init at VU 0x3730) into a
+    // packet and sends it, yet no MSCAL to 0x3730 is ever parsed. Scan every
+    // chunk for the raw word, so "never delivered" and "delivered but read as
+    // payload" are told apart.
+    for (uint32_t a = 0u; a + 4u <= sizeBytes; a += 4u)
+    {
+        uint32_t w = 0u;
+        std::memcpy(&w, data + a, 4);
+        if ((w & 0x7FFFFFFFu) == 0x140006E6u || (w & 0x7FFFFFFFu) == 0x150006E6u)
+        {
+            static int initScanLogs = 0;
+            extern unsigned long long g_ghpcVu1Mscals;
+            if (initScanLogs++ < 8)
+                std::fprintf(stderr, "[vif1/initscan] word 0x%08x at pos=%u of %u src=%u mscals=%llu\n",
+                             w, a, sizeBytes, g_curChunkSource, g_ghpcVu1Mscals);
+        }
+    }
+#endif
     auto carry = [&](uint32_t from)
     {
 #if GHPC_DIAG
@@ -967,6 +1000,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_MSCAL || opcode == VIF_MSCALF)
         {
             uint32_t startPC = (uint32_t)imm * 8u;
+#if GHPC_DIAG
+            if (startPC == 0x3730u)
+                std::fprintf(stderr, "[vif1/initscan] PARSED MSCAL 0x3730 at pos=%u of %u\n",
+                             (unsigned)(pos - 4u), (unsigned)sizeBytes);
+#endif
             // VU1 micro memory is 16 KB, i.e. 2048 instruction pairs, so a real
             // MSCAL always has imm < 2048. Larger values only come from a
             // desynced stream being read as VIFcode; masking them into range

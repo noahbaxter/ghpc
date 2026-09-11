@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `0.6` |
 | fps | `0.25` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 3 of 6 |
-| rounds total | 9 of 14 |
+| rounds since gain | 4 of 6 |
+| rounds total | 10 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -148,9 +148,20 @@ writing a GIFtag (`00008000 300e4000 00000412`, z = the 1042) to qw 0. Its
 pointer vi4 comes from `MTIR vi4, vf2.x` at 0x3148, and vf2.x is 0. So the
 output buffer sits at qw 0, which only collides when the input half is TOP=0.
 TOP=0 is legitimate (BASE really is 0, the guard rejected nothing), so on
-hardware vf2.x must point clear of both halves. **Find what writes vf2.** It is
-not the 0x30b0 prologue or its 0x3e28 callee (both decoded from the ELF); it is
-the second callee through qw689.x, or state carried in from another program.
+hardware vf2.x must point clear of both halves.
+
+**Found and fixed: the vf2 init call was read from the wrong memory.** A
+six-instruction VU program at 0x3730 sets vf2 = (704, 849, 704, 849), two
+output buffers above the constants. `PsRnd::Reset` sends `MSCAL 0x6e6` for it
+at boot as a normal-mode VIF1 DMA from scratchpad, with MADR in the DMAC's own
+SPR form, bit 31 over an offset (0x80000020). The runtime did not decode that
+form and read the packet from RAM at 0x20, so the init never ran. Normal-mode
+DMA sources now decode it (PCSX2 `dmaGetAddr` does the same). The init runs
+once at boot and **0x30b0 no longer runs away: 110 ended, 0 cut off.** Release
+speed is SAME, 2.53 against 2.57 Mcycles/sec with `GHPC_DMA_SPR_LEGACY=1`,
+because 0x30b0 was never the gameplay cost. **0xcd8 is:** 13% of its runs are
+still cut off and they burn 187M VU1 instructions against 48M for the rest.
+Its runaway is a different mechanism. That is the target now.
 
 **A VIF1 desync was found and fixed, and it did not move speed.** A command
 whose payload straddled two DMA chunks was dropped, so the next chunk parsed
@@ -192,6 +203,8 @@ the mass of them at `game_screen`. Do not assume one explanation covers both.
                          VI provenance for the first N runaways
     GHPC_VU1_BUDGET=N    the per-MSCAL cycle budget, default 65536
     GHPC_VIF1_NO_RESIDUAL=1  drop a VIF1 command that straddles two chunks, as
+                         before the fix. Control arm only.
+    GHPC_DMA_SPR_LEGACY=1  read a bit-31 scratchpad DMA source from RAM, as
                          before the fix. Control arm only.
 
 `eerate_pct` rounds to 0.1, which cannot separate gameplay arms at 0.7%. Compare

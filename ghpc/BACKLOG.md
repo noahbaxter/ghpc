@@ -18,39 +18,42 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The VU1 runaway, per `NEXT.md`. The program writes its output over its own
-input header because vf2.x is 0. Find what writes vf2.**
+**The VU1 runaway in 0xcd8, per `NEXT.md`. 0x30b0's is fixed; 0xcd8's is the
+gameplay cost.**
 
-`notes/evidence/2026-09-10-vu1-top-clobber.txt`: 0x30b0's output store
-`SQI vf1, (vi4++)` at 0x3170 takes its pointer from `MTIR vi4, vf2.x` at
-0x3148, and vf2.x is 0, so the GIFtag lands on qw 0. That is the input header
-whenever TOP=0: 66 of 66 cut-offs, 1 of 302 ended runs. In order:
+`notes/evidence/2026-09-10-vu1-top-clobber.txt`: the vf2 init at VU 0x3730
+never ran, because `PsRnd::Reset` sends it as a normal-mode scratchpad DMA
+(MADR 0x80000020) and the runtime read it from RAM. Fixed, with
+`GHPC_DMA_SPR_LEGACY=1` for the old decode. 0x30b0 now ends 110 of 110.
+Release speed SAME. 0xcd8 still cuts off 13% of its runs, and those burn 187M
+VU1 instructions against 48M for the rest. In order:
 
-1. **Trace vf2 at runtime.** vf2 at MSCAL entry, every write to it during the
-   run (pc, lower and upper word, value), and its value at the MTIR. Split
-   TOP=0 against TOP=330 and cut against ended. Also dump the code at
-   qw689.x*8, the second callee, which is the one place left in 0x30b0's path
-   that could set it.
-2. **If vf2 is carried in**, find the program that last wrote it before 0x30b0
-   runs. VF registers persist across MSCALs, so a program sharing vf2 as
-   scratch, or an init program that never ran or ran on bad data, would both
-   look like this.
-3. **Then 0xcd8.** It also takes its output pointer from `MTIR vi4, vf2.x`
-   (0x0da0). Its runaway loop is different (header 0, and a store riding the
-   runaway counter), so confirm whether fixing vf2 moves it before assuming.
+1. **Characterize the gameplay cut-offs.** They are the cost, and their headers
+   look sane (w = 0x614, 0x373, 0x3c6, ...). `GHPC_VU1_LOOP` dumps the first N
+   runaways, which are menu ones; add a skip so the dumps land on
+   `game_screen`, then name the loop and its bound as was done for 0x30b0.
+2. **The all-zero header, which is the jump to 0x0000.** 0xcd8 starts with
+   `XTOP vi5; ILW.w vi1, 0(vi5); ... JALR vi2, vi1` (0x0cd8 to 0x0d00): its
+   first call goes to header.w * 8, a per-batch routine selector (0x614 is the
+   `JR vi2` stub at 0x30a0; 0x373/0x3c6/0x369/0x394 point into loaded
+   overlays). A zero header sends it to 0x0000, where no MPG ever loads code
+   (MPG ranges start at 0x9c8). So the menu runaways (mscal 3363 onward) are
+   the zero headers. Find that UNPACK and where its source came from.
+3. **Other bit-31 DMA addresses.** The chain tag walker masks bit 31 off the tag
+   ADDR (`ps2_memory.cpp:215`), so a chain REF into scratchpad would be read
+   from RAM the same way. Check whether GH2 issues any.
 
-VU code is readable offline: `work/GH2_debug.elf` holds the overlays as data.
-Search for a known instruction pair from a runtime dump to get VU 0's file
-offset, then decode by hand. Two overlays found so far: 0x3352e0 (0x30b0
-program) and 0x334c08 (the 0x3e28 callee).
+VU code is readable offline. `work/GH2_debug.elf` has a `.DVP.overlay..<addr>`
+section per overlay naming its VU load address and size, and the code itself
+sits in `.vutext` as `.vu.N` symbols, each right after its `.vif.N` MPG
+VIFcode. Decode by hand, checked against instructions whose effect a runtime
+dump already confirmed.
 
-Done this round: the VIF1 residual fix. Commands straddling two DMA chunks are
-now carried, not dropped (`GHPC_VIF1_NO_RESIDUAL=1` for the old behaviour).
-Invalid opcodes 118,798 to 1,018, speed unchanged. Still open from that thread:
-the 0xcd8 menu runaways whose freshly unpacked header is all zeros (mscal 3363
-onward), 6 dirty chunks with no truncation behind them, and whether TOP
-514/515/753/768 at gameplay are offsets the game really sets. The 0xcd8 runaway
-path also enters through a jump from 0x0d00 to 0x0000.
+Done: the VIF1 residual fix (`GHPC_VIF1_NO_RESIDUAL=1` for the old behaviour,
+invalid opcodes 118,798 to 1,018, speed unchanged) and the scratchpad DMA
+decode (0x30b0 runaway gone, speed unchanged). Still open from the VIF1 thread:
+6 dirty chunks with no truncation behind them, and whether TOP
+514/515/753/768 at gameplay are offsets the game really sets.
 
 **Then the `Rnd` seam.** Not before the runaway: a native backend built on top
 of a runaway inherits it. The cost is VU1 interpretation, not the GS
