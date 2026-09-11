@@ -52,6 +52,10 @@ DRIVE = re.compile(r"^\[drive\] (?:enter (\w+)|(\w+) -> (\w+) after)")
 DETAIL = {
     "streamEE_state": (re.compile(r"^\[ghpc/strm\].*\bstate=(\d+)"), 1),
     "song_tick": (re.compile(r"^\[ghpc/song\].*\btick=(-?[\d.]+)"), 1),
+    # SPU sample chunks the EE shipped over the synth link (cmd 0xc9). One per
+    # run until something acknowledges them, so the count moving is the signal.
+    "spu_chunks": (re.compile(r"^\[ghpc/spu2\] chunks=(\d+) bytes=(\d+)"), 1),
+    "spu_bytes": (re.compile(r"^\[ghpc/spu2\] chunks=(\d+) bytes=(\d+)"), 2),
     # Speed is the goal now, so the oracle has to be able to see it. The rung
     # saturated at game_screen and a saturated ladder cannot report progress on
     # anything; that is the same trap this file already documents for the song.
@@ -67,7 +71,7 @@ DETAIL = {
 # more; the chart advancing is the only thing left that separates "a screen
 # appeared" from "the song is playing". For these keys the first and last value
 # are both kept and the span is reported.
-ADVANCE = ["song_tick"]
+ADVANCE = ["song_tick", "spu_chunks"]
 
 # Speed keys only count while the run sits on the top rung. The reporters print
 # on a clock, and at 0.7% of realtime a gameplay run can go minutes without a

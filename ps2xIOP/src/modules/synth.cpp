@@ -36,6 +36,10 @@ namespace ps2x::iop::detail
         // silently dropped.
         constexpr uint32_t kCmdTerminate = 1u;      // SynthEE::Terminate
         constexpr uint32_t kCmdStreamInfo = 0x190u; // StreamEE Poll, state 2
+        // Not handled, only counted. Believed to be the SPU sample chunk that
+        // SPUSendPoll (0x26e4c8) ships, 0x5000 bytes at a time; it is seen once
+        // per run because nothing acknowledges it, so the count is the probe.
+        constexpr uint32_t kCmdSpuChunk = 0xc9u;
 
         // IOP -> EE replies. These are indexes into CtlDispatch_impl's jump
         // table at 0x4EB680, which is bounds checked with `sltiu $2, $5, 0xf`,
@@ -76,6 +80,9 @@ namespace ps2x::iop::detail
                 m_unrepliedRecords = 0u;
                 m_payloadLogs = 0u;
                 m_unknownLogs = 0u;
+                m_recordsSeen = 0u;
+                m_spuChunks = 0u;
+                m_spuBytes = 0u;
             }
 
             [[nodiscard]] RpcResult handleRpc(const RpcRequest &request) override
@@ -123,6 +130,10 @@ namespace ps2x::iop::detail
                         break;
                     }
                     const uint32_t payload = base + kRecordHeaderBytes;
+                    {
+                        std::lock_guard<std::mutex> lock(m_mutex);
+                        ++m_recordsSeen;
+                    }
 
                     if (cmd == kCmdStreamInfo)
                     {
@@ -166,6 +177,10 @@ namespace ps2x::iop::detail
                     }
                     else
                     {
+                        if (cmd == kCmdSpuChunk)
+                        {
+                            noteSpuChunk(len);
+                        }
                         noteUnknown(cmd, len);
                     }
 
@@ -237,6 +252,28 @@ namespace ps2x::iop::detail
                 m_host.log(LogLevel::Info, message.str());
             }
 
+            // Uncapped on purpose: the chunk count is the progress signal the
+            // oracle reads, and a capped line stops moving exactly when it
+            // matters.
+            void noteSpuChunk(uint32_t len)
+            {
+                uint32_t chunks = 0u;
+                uint64_t bytes = 0u;
+                uint32_t records = 0u;
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    ++m_spuChunks;
+                    m_spuBytes += len;
+                    chunks = m_spuChunks;
+                    bytes = m_spuBytes;
+                    records = m_recordsSeen;
+                }
+                std::ostringstream message;
+                message << "[ghpc/spu2] chunks=" << chunks << " bytes=" << bytes
+                        << " records=" << records;
+                m_host.log(LogLevel::Info, message.str());
+            }
+
             void noteUnknown(uint32_t cmd, uint32_t len)
             {
                 bool shouldLog = false;
@@ -268,6 +305,9 @@ namespace ps2x::iop::detail
             uint32_t m_unrepliedRecords = 0u;
             uint32_t m_payloadLogs = 0u;
             uint32_t m_unknownLogs = 0u;
+            uint32_t m_recordsSeen = 0u;
+            uint32_t m_spuChunks = 0u;
+            uint64_t m_spuBytes = 0u;
         };
     }
 
