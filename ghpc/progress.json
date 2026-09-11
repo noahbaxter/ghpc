@@ -2,12 +2,15 @@
   "rung": 9,
   "screen": "game_screen",
   "detail": {
-    "streamEE_state": "2"
+    "eerate_pct": "0.6",
+    "fps": "0.25"
   },
-  "env": {},
-  "build": "build-debug",
+  "env": {
+    "GHPC_COUNTIN": "0.5"
+  },
+  "build": "build",
   "hold_secs": 60,
-  "rounds_since_gain": 5,
+  "rounds_since_gain": 0,
   "rounds_total": 6,
-  "recorded": "2026-09-10 03:00:01"
+  "recorded": "2026-09-10 20:17:31"
 }

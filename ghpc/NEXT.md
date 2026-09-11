@@ -39,12 +39,13 @@ supersede earlier ones and topic notes supersede both.
 |---|---|
 | furthest screen | `game_screen` |
 | rung | 9 of 9 |
-| recorded | 2026-09-10 03:00:01 |
-| build | `build-debug` |
+| recorded | 2026-09-10 20:17:31 |
+| build | `build` |
 | held for | 60s |
-| streamEE state | `2` |
-| probes | none, stock build |
-| rounds since gain | 5 of 6 |
+| eerate pct | `0.6` |
+| fps | `0.25` |
+| probes | `GHPC_COUNTIN=0.5` |
+| rounds since gain | 0 of 6 |
 | rounds total | 6 of 14 |
 
 <!-- PROGRESS:END -->
