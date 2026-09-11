@@ -52,6 +52,14 @@ DRIVE = re.compile(r"^\[drive\] (?:enter (\w+)|(\w+) -> (\w+) after)")
 DETAIL = {
     "streamEE_state": (re.compile(r"^\[ghpc/strm\].*\bstate=(\d+)"), 1),
     "song_tick": (re.compile(r"^\[ghpc/song\].*\btick=(-?[\d.]+)"), 1),
+    # Speed is the goal now, so the oracle has to be able to see it. The rung
+    # saturated at game_screen and a saturated ladder cannot report progress on
+    # anything; that is the same trap this file already documents for the song.
+    # Both of these are reporters, not probes: they read a clock and print, and
+    # they change no guest behaviour, which is why measure() sets them itself
+    # and probe_env() does not count them as a non-stock build.
+    "eerate_pct": (re.compile(r"^\[eerate\] ([\d.]+)% of realtime"), 1),
+    "fps": (re.compile(r"^\[fps\] ([\d.]+) frames/sec"), 1),
 }
 
 # Sub-rungs whose whole meaning is whether the number moved. `game_screen` is
@@ -69,7 +77,7 @@ def probe_env():
     the file used to have no way to say so. A rung 9 recorded under
     GHPC_STREAM_READY once became the floor for every later round.
     """
-    always = {"GHPC_HIDE_WINDOW", "GHPC_PAD_DRIVE"}
+    always = {"GHPC_HIDE_WINDOW", "GHPC_PAD_DRIVE", "GHPC_FPS", "GHPC_EERATE"}
     return {k: v for k, v in sorted(os.environ.items())
             if k.startswith("GHPC_") and k not in always}
 
@@ -121,7 +129,8 @@ def measure(build, secs, hold, verbose):
                       % ", ".join(stray))
     if hold >= secs:
         return None, "hold (%ds) must be shorter than the cap (%ds)" % (hold, secs)
-    env = dict(os.environ, GHPC_HIDE_WINDOW="1", GHPC_PAD_DRIVE="cross")
+    env = dict(os.environ, GHPC_HIDE_WINDOW="1", GHPC_PAD_DRIVE="cross",
+               GHPC_FPS="20", GHPC_EERATE="60")
     started = time.time()
     p = subprocess.Popen([binary, "GH2_debug.elf"], cwd=WORK, env=env,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

@@ -51,6 +51,105 @@ supersede earlier ones and topic notes supersede both.
 
 That rung is the floor. A round that lowers it has broken something.
 
+**Gameplay is reachable and the rung is finished as a metric.** The ladder tops
+out at `game_screen` and the port now gets there in about a minute. Speed is the
+whole remaining problem, so `progress.py` scores `eerate_pct` and `fps`
+alongside the rung. Those two are what a round now has to move.
+
+## The goal, and the arithmetic behind it
+
+Two numbers, both measured on a release build:
+
+    menus     84 to 91% of realtime      target 100%
+    gameplay  0.4 to 0.7% of realtime    target as high as it will go
+
+They are not the same problem and must not be worked as one. Menus never run a
+VU1 program away; that last 10% is almost certainly vblank pacing and it is
+small. Gameplay is a ~150x hole and it is where the work is.
+
+Sizing it honestly, so no round oversells its result:
+
+- **The VU1 runaway is worth about 12x.** Measured: cut-off microprograms are
+  8.6% of invocations and consume 92% of all VU1 instructions. Killing it takes
+  gameplay from ~0.7% to ~8% of realtime. That is a huge win and it very likely
+  fixes the corrupted picture too, because the same code is involved.
+- **12x is not 150x.** Even a perfect fix does not reach playable. The rest is
+  the `Rnd` seam, which retires VIF1, VU1, GIF and the GS rasteriser as dead
+  code. Do not start the seam before the runaway: a native backend built on top
+  of a runaway is a backend that inherits it.
+
+## Current target
+
+**The VU1 runaway. Nothing else until it is understood.**
+
+A third of GH2's VU1 microprograms never reach their end bit. They burn the
+whole cycle budget and get cut off mid-flight, which both costs the frame and
+leaves half-written geometry to be kicked at the GS.
+
+What is established, all of it measured:
+
+    healthy invocation      2296 instructions
+    cut-off invocation      285786 instructions, 124x
+    share of runs cut off   8.6%
+    share of VU1 instrs     92%
+    offend=0 everywhere     the pc never leaves code memory
+
+`pc0x30b0`'s cut-off runs average *exactly* whatever cap they are given, so they
+are unbounded rather than merely long, and `pc0x30b0` starts running away before
+`pc0xcd8` does. Different runs stall in different loops (0x0b10, 0x32b0, 0x0e98,
+0x15c0), so this is not one mis-decoded branch.
+
+**The runaway comes first, and it starts in the menus.** Both events are now
+stamped with `g_ghpcVu1Mscals`, so they can be ordered directly instead of by
+log line:
+
+    [vu1/first-runaway] mscal=963   startPc=0xcd8  instrs=62928
+    [projw]             mscal=8570  pc=0x0b10
+
+mscal 963 lands between `enter main_screen` and `main_screen ->
+qp_selsong_screen`, so the first microprogram to run away does it on a menu,
+about 7600 MSCALs before the projection matrix goes bad. **So the runaway is the
+cause and the corruption is downstream of it.** Chase the loop bound, not the
+bad write.
+
+ITOP is masked to 0x3FF so it cannot be the source of an oversized bound, but
+the VI registers at cutoff hold `vi3=17322` and `vi9=29202` where a vertex count
+cannot exceed 1023. Something is loading a loop bound from somewhere it should
+not. The VI provenance is the next probe: record which pc last wrote the VI the
+back-edge branch tests, and if it was a load, from what address.
+
+**A retracted claim, left here because it cost a conclusion.** An earlier round
+reported "everything is healthy until `game_screen`, the first 10,000 MSCALs are
+all clean". That came from one run whose census happened to show `budget=0`
+through `total=10000`. It does not reproduce: another run has 5 runaways by
+`total=2000`, on `main_screen`. **Runs differ here**, so a single run is not
+enough to establish when something starts. The ordering above is itself n=1 and
+is being confirmed; treat it as the leading reading, not a settled fact, until a
+second run agrees.
+
+The degradation at `game_screen` is progressive rather than a switch: `maxInstr`
+climbs 2456, then 25568, then 1000000. Early menu runaways are few and then it
+goes quiet, so the handful on `main_screen` may be a different phenomenon from
+the mass of them at `game_screen`. Do not assume one explanation covers both.
+
+## Knobs this work needs
+
+    GHPC_COUNTIN=0.5     clamp the count-in so gameplay arrives in ~1 min
+    GHPC_VU1_CENSUS=N    census of why microprograms stopped, every N MSCALs
+    GHPC_VU1_LOOP=N      dump pc histogram, back edges and VI regs for N runaways
+    GHPC_VU1_BUDGET=N    the per-MSCAL cycle budget, default 65536
+
+**`GHPC_COUNTIN` is a probe and every gameplay-speed mark carries it.** That is
+fine and it is the honest way round: compare like for like, always with the same
+value, and let `ENV MISMATCH` catch a run that does not. A "stock build" mark
+cannot reach gameplay in a measurable time, so demanding one would mean not
+measuring the goal at all.
+
+**`GHPC_VU1_BUDGET` is a trap above its default.** Raising it makes the guest
+slower and get less far, because the runaways simply run longer. It exists to
+answer one question (is this a runaway or an undersized budget) and that
+question is answered. Leave it alone.
+
 ## When to stop
 
 An unattended loop needs an ending that is not a person noticing. These are
@@ -62,31 +161,20 @@ one number.
 
 Stop when any of these is true:
 
-- **The win, which is not just a rung.** The rung went up and held with
-  `probes: none, stock build` **and** `song_tick_advanced` is `yes`. Record it,
-  render, and stop.
+- **The win.** `eerate_pct` at `game_screen` reaches 5% with the rung still at 9
+  and `GHPC_COUNTIN` the only probe. The floor is 0.7% and fixing the runaway
+  predicts ~8%, so 5% confirms the fix landed without demanding perfection.
+  Record it, render, and stop.
 
-  This bullet used to say a held rung gain alone was the win. That was wrong and
-  it nearly ended the loop early: on 2026-09-10 rung 9 `game_screen` held for
-  300s on a stock build with `song_tick` never firing once. A screen named
-  `game_screen` is the exact thing this project keeps mistaking for gameplay,
-  and the top of a saturating ladder is where that mistake is easiest.
-
-  **This condition is currently unreachable, and that is the top priority to
-  fix, not a footnote.** `song_tick` cannot fire inside a 300s run: the count-in
-  is ten guest seconds and guest time advances at 0.0019 sec per real second at
-  `game_screen`, so gameplay is about 85 minutes of wall clock away. The one run
-  that ever saw the chart advance took 7200s. So the standard measurement cannot
-  check the stop condition, which means **no round can currently win, and no
-  round can detect a regression in the thing the project is trying to do.**
-  Until a round can reach gameplay in minutes, every result here is unverifiable
-  and the loop is running blind. See Current target.
+  The win used to be a held rung. That was wrong twice over: the ladder
+  saturates at `game_screen`, and a saturating ladder cannot report progress on
+  anything past it. Never set a stop condition at the top of a ladder.
 - **`--round-done` exits 3.** That is `rounds_since_gain` reaching
   `STOP_ROUNDS_SINCE_GAIN`, or `rounds_total` reaching `STOP_ROUNDS_TOTAL`.
   Both live in `scripts/progress.py`. Raising either is a decision to make
   awake, not mid-loop.
-- **Three failed fixes on one hypothesis.** Already a rule below. It is an
-  architecture problem, not a fourth attempt.
+- **Three failed fixes on one hypothesis.** It is an architecture problem, not a
+  fourth attempt.
 
 On any stop, leave the tree committed and the queue rewritten, so whoever reads
 this next starts from a true statement rather than a half-finished round.
@@ -96,25 +184,34 @@ this next starts from a true statement rather than a half-finished round.
 1. **Read the queue.** `ghpc/BACKLOG.md`, the `Now` section. That is the target.
 2. **Pre-declare the metric.** Before building or running anything, write down
    what result means pass, what means fail, and what you will do in each case.
-   This is not ceremony. Three build-and-run cycles were lost in one session to
-   runs that ended in "it did not finish, I do not know why".
 
    **The metric must not be downstream of the change.** If you traced a gate and
    then wrote the value that gate compares against, measuring the gate proves
-   nothing: you have measured your own edit. A round lost to exactly this on
-   2026-09-10, in detail in `notes/song-load-crash.md`. Before you build, say
-   out loud which outcome the change makes impossible. If the answer is "the
-   failing one", the metric is wrong, not the hypothesis.
+   nothing: you have measured your own edit. Before you build, say out loud
+   which outcome the change makes impossible. If the answer is "the failing
+   one", the metric is wrong, not the hypothesis.
+
+   **A derived number is not a measurement.** A round on 2026-09-10 reported
+   that cut-off microprograms ate 89% of VU1 time. That number was computed as
+   (cut-off runs x cycle budget) because the census only recorded a total. It is
+   a cycle budget, and a stalled run burns cycles without retiring instructions,
+   so the figure was an assumption wearing a measurement's clothes. Count the
+   thing you intend to report.
 3. **Change one thing.** One hypothesis, one variable.
 4. **Measure, with a control.** `python3 ghpc/scripts/progress.py`
 
    Run it **both ways on the same build**, with the change active and inactive.
    A verdict against the stored mark is not a control: the mark came from a
-   different build at a different time. Without the off arm you cannot tell your
-   change from anything else that moved in between.
+   different build at a different time.
+
+   **Check the two arms are the same regime.** The same round compared a census
+   at one budget against a census at another and read a difference off them. One
+   of those runs never reached `game_screen`, so it described menus while the
+   other described gameplay. Two numbers from two populations are not a control.
+   Confirm both arms got where you think they got before comparing them.
 5. **Act on the verdict**, which is one of exactly four:
 
-       PROGRESSED          rung went up. Record it, update the queue, pick the next target.
+       PROGRESSED          it went up. Record it, update the queue, pick the next target.
        SAME                nothing broke, nothing advanced. Form a new hypothesis.
        REGRESSED           you broke something. Revert before doing anything else.
        MEASUREMENT_FAILED  the run told you nothing. Do NOT conclude. Fix the measurement.
@@ -122,12 +219,11 @@ this next starts from a true statement rather than a half-finished round.
    Exit codes are 0, 0, 1, 2 in that order.
 6. **Record.** On `PROGRESSED`, run `progress.py --record --render`, rewrite the
    `Now` section of `BACKLOG.md`, and add findings to the topic note. Rewrite
-   those files; never append to them. `BACKLOG.md` rotted once by being appended
-   to until a stale header sat on 1570 lines of findings.
-7. **Close the round.** Commit, then run `progress.py --round-done`. It counts
-   the round and tells you whether to stop. Run it exactly once per round, after
-   the commit, whatever the verdict was: it counts rounds, not measurements, and
-   a round has several measurements in it because of the control arm.
+   those files; never append to them.
+7. **Close the round.** Commit, then run `progress.py --round-done`. Run it
+   exactly once per round, after the commit, whatever the verdict was: it counts
+   rounds, not measurements, and a round has several measurements in it because
+   of the control arm.
 
 ## Rules that hold every round
 
@@ -135,49 +231,38 @@ this next starts from a true statement rather than a half-finished round.
   reasoning from a symptom that the runtime manufactured rather than the game
   producing it.
 - **Three outcomes, never two.** Never let "no change" and "the run told me
-  nothing" collapse into one bucket. That distinction is why the oracle has a
-  separate exit code for it.
+  nothing" collapse into one bucket.
 - **A screen only counts if it holds.** `progress.py --hold` (default 60s) scores
   the highest rung the run stayed on, not the highest it touched. Touch-and-fall
-  prints `BOUNCED` and is refused for `--record`. The oracle used to stop reading
-  the moment it saw the top rung, so it observed zero frames afterwards and
-  scored a bounce as a win. It now always runs to `--secs`.
+  prints `BOUNCED` and is refused for `--record`.
 - **A mark carries its probes.** Any `GHPC_*` set for a run is stored with the
-  mark and rendered above. A floor set with a probe on is not a floor for a stock
-  build, and a run whose probes differ from the mark's prints `ENV MISMATCH`.
-- **A stray runner invalidates the run, and the oracle now refuses it.** Every
-  rung is scored on wall clock against a guest at about 39% of realtime, so a
-  second `ps2EntryRunner` eating a core changes what "held for 60s" means. One
-  was found on 2026-09-10 orphaned to PID 1 at 117% CPU after 103 minutes,
-  launched by hand rather than by either script. `progress.py` now scores that
-  `MEASUREMENT_FAILED` instead of returning a number, so it cannot be mistaken
-  for "no change". This is a candidate confound for the unmeasured boot
-  reliability below, not a proven cause of it.
+  mark and rendered above, except the four reporters `progress.py` sets itself
+  (`GHPC_HIDE_WINDOW`, `GHPC_PAD_DRIVE`, `GHPC_FPS`, `GHPC_EERATE`), which read
+  a clock and change no guest behaviour. A run whose probes differ from the
+  mark's prints `ENV MISMATCH`.
+- **A stray runner invalidates the run, and the oracle refuses it.** Every rung
+  is scored on wall clock, so a second `ps2EntryRunner` eating a core changes
+  what "held for 60s" means. Check `pgrep -f ps2EntryRunner` before starting
+  anything long.
 - **Check `python3 ghpc/scripts/bootskip.py --status` before trusting a repro.**
   When it is `on`, boot skips `bootup_load`, the intro video and both logo
-  screens, halving time to `loading_screen`. It is usually left on for speed. It
-  also means anything `bootup_load` initialises never happens, so **re-run under
-  `--off` before believing a new audio or song-load finding.**
-- **Pick the cheapest build that answers the question.** Measured 2026-09-09:
+  screens. It is usually left on for speed. Anything `bootup_load` initialises
+  never happens, so **re-run under `--off` before believing a new audio or
+  song-load finding.**
+- **Pick the cheapest build that answers the question.**
 
-       build-debug     ~152s to build   diagnostics, the default
-       build-calls     ~197s to build   call histogram, about 6x slower at runtime
-       build (release) fastest runtime, no diagnostics
+       build-debug     ~110s to build   diagnostics, the default
+       build-calls     ~200s to build   call histogram, about 6x slower at runtime
+       build (release) ~170s to build   2.5 to 4x faster at runtime, no diagnostics
 
-  The call histogram answers "is it looping" and nothing else. It is the wrong
-  default.
-- **If three fixes have failed, stop fixing.** That is an architecture problem,
-  not a failed hypothesis. Write down what you tried and what each attempt ruled
-  out, then move to a different target rather than attempting a fourth.
+  **Every speed number must come from the release build.** Debug runs 2.5 to 4x
+  slower and writes ~100k log lines per 600s. Diagnostics were suspected of
+  being the frame cost and measuring release is what ruled that out; do not let
+  a debug number back into a speed claim.
+- **If three fixes have failed, stop fixing.** Write down what each attempt
+  ruled out, then move to a different target rather than attempting a fourth.
 - **Never claim done without evidence.** A render, a log line, a verdict. Not an
   argument that it should work.
-- **A result nobody can look at is half a result, and a result that took two
-  hours to see is worse.** 2026-09-10 ended with two real fixes, a rung, and no
-  picture of the game: the frame dumper had spent all 20 of its dumps during
-  boot, and reaching gameplay cost 85 minutes, so nothing downstream of it could
-  be checked at all. The chart advancing rests on **one run and two sample
-  points**. Prefer the round that makes the next ten rounds cheap over the round
-  that adds one more finding to the notes.
 - **Reaching a state faster is the most dangerous kind of shortcut here.**
   `GHPC_STREAM_READY` reached `game_screen` sooner and produced a *deader* guest
   than leaving the gate shut, and it poisoned three rounds before a control arm
@@ -186,82 +271,21 @@ this next starts from a true statement rather than a half-finished round.
   (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll` 0x117dd0) rather than just
   that a screen appeared.
 
-## Current target
-
-**Make gameplay reachable in minutes. Nothing else until that is done.**
-
-The song load is finished and rung 9 is the floor, held 300s on a stock build
-with `env: {}`. But the project is now in a state where its own goal cannot be
-measured: gameplay is 85 minutes of wall clock away, so no 300s round can see
-the chart, take a picture of it, hear it, or catch it regressing. Every question
-worth asking is stuck behind that wall. Knock the wall down first.
-
-1. **Shorten the count-in.** It is ten guest seconds (`offset78 = -10.0`) and
-   the threshold is at 0x10723c, with `StartGame` at 0x1070f8. `GamePanel` has
-   `mSkipIntro` at +0x60, `mStartPaused` at +0x64 and `mFastIntro` at +0x68, and
-   `fast_intro` is one of the properties `SyncProperty` (0x10a038) can **set**,
-   not only get. Find out whether any of those legitimately shortens it. This
-   is a test harness, so a `GHPC_*` knob is expected and fine here; it is a
-   probe, so it stays out of any run that touches the recorded mark. Read the
-   shortcut rule above before starting: this is exactly the shape of change
-   that poisoned three rounds.
-
-2. **Screenshot gameplay.** The frame dumper (`ps2_runtime.cpp`, near line 540,
-   gated by `GHPC_FRAME_MIN`, writes `/tmp/ghpc_frame_N.ppm`) caps at 20 dumps
-   and spends all of them during boot, which is why no picture of this game
-   running has ever existed. Trigger it on `game_screen` after `StartGame`
-   instead. Convert to PNG and commit it under `notes/evidence/`.
-
-3. **Reproduce the chart result densely.** `song_tick_advanced: yes` rests on
-   one run and two samples, because the `[ghpc/song]` hook prints call #1 then
-   every 120th. Lower that heartbeat and show the tick advancing across many
-   samples, on two separate runs.
-
-4. **Measure audio.** Nothing has ever checked whether one sample reaches the
-   SPU. A yes/no counter is more than exists today.
-
-Once gameplay is cheap to reach, the **`Rnd` seam** is the real work and the
-only thing between here and playable: the guest runs about 0.16 fps at
-`game_screen` and the cost is VU1 interpretation, confirmed by volume
-(1,905,500 VU1 stores per game frame against 4,289 per menu frame) and by a live
-profile. `GSCpuBackend::WritePixel` sits well below it, so the rasteriser alone
-was never the target. **Do not start it this round, and measure a release build
-before sizing it**: every throughput number here is `build-debug`, and the
-profile shows `fwrite` plus iostream formatting taking a real slice.
-
-`GHPC_STREAM_READY` is retired and removed from the path. Do not reach for it.
-
-The sibling repo `~/Code/personal/games/gh2-decomp` is a **reference clone, never
-a drop-in**. It named `mUnk70` as `SetRealtime`'s argument, which turned the last
-blocker from a mystery word into an understood count-in, and it is where the
-`mSkipIntro` / `mFastIntro` offsets above come from. Do not build a sync
-mechanism.
-
 ## Known gaps
 
-- **The ladder still saturates at `game_screen`, but no longer scores it as a
-  win on its own.** `progress.py` now carries a `song_tick` sub-rung read from
-  `PlayerMatcher::Poll` (0x117dd0) via the `[ghpc/song]` hook, reporting
-  `song_tick`, `song_tick_from` and `song_tick_advanced`. Rung 9 with
-  `song_tick_advanced=no`, or with no `song_tick` at all, is the screen without
-  the song. Extending `LADDER` past rung 9 is still open; the sub-rung buys the
-  next few rounds, not the ones after. Do not set a stop condition at the top of
-  a saturating ladder; it guarantees the loop ends after one success with no
-  second round to catch an error in the first.
-- **Audio is still unmeasured.** Nothing scores whether a sample ever reaches
-  the SPU. `song_tick` says the chart is running, not that it is audible.
-- **No picture of this game in gameplay has ever been captured.** The only
-  images that exist are boot and menu screens, because the frame dumper caps at
-  20 and spends them all before `game_screen`. Rendering is known to work (the
-  setlist screen renders correctly) and 183 frames were produced after
-  `StartGame` with only 2 magenta sentinels, so something is being drawn. What
-  it looks like is unknown.
-- **The chart result is n=1.** `song_tick` 0.000 -> 737.085 comes from a single
-  7200s run sampled at exactly two points. It has never been reproduced. Treat
-  it as a promising single observation, not an established fact.
-- **Boot reliability is not established.** `BACKLOG.md` cites 6 of 6 runs
-  reaching `loading_screen` on 2026-09-09. A run on 2026-09-10 stalled before
-  `main_screen` and the runtime's thread census killed it. `progress.py` scores
-  that `MEASUREMENT_FAILED` and retries up to `--attempts`, so it is invisible in
-  the verdict unless every attempt fails. Failed attempts now print, but the
-  underlying rate is unmeasured.
+- **The chart result is n=1.** `song_tick` 0.000 to 737.085 comes from a single
+  7200s run sampled at exactly two points, because the `[ghpc/song]` heartbeat
+  prints call #1 then every 120th. With the count-in clamp a dense repro is now
+  cheap and has still not been done. Lower the heartbeat and show it across many
+  samples on two runs.
+- **Audio is unmeasured.** Nothing scores whether a sample ever reaches the SPU.
+- **The picture is captured but unexplained.** `notes/evidence/` holds the first
+  gameplay frames ever taken. They show real geometry and heavy corruption. The
+  VU1 runaway is the leading explanation and is not yet proven to be the cause.
+- **Boot reliability is not established.** A run on 2026-09-10 stalled before
+  `main_screen` and the thread census killed it. `progress.py` scores that
+  `MEASUREMENT_FAILED` and retries, so it is invisible unless every attempt
+  fails. The underlying rate is unmeasured.
+- **`ghpc/config/stub-denylist.txt` carries an uncommitted newlib allocator
+  change** on branch `fix/real-newlib-allocator`. It is already baked into
+  `work/output`, so the current build includes it. Decide whether it lands.

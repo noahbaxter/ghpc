@@ -2128,7 +2128,13 @@ void ghpcMtxWatch(const uint8_t *data, uint32_t size, const char *where, unsigne
     if (corrupt && logs < 24)
     {
         ++logs;
-        std::fprintf(stderr, "[projw] %-10s pc=0x%04x\n            NEW:", where, pc);
+        // Stamped with the MSCAL counter so this can be ordered against the
+        // runaway onset. Without a shared clock the two events can only be
+        // compared by log line, and the census prints every 2000 MSCALs, which
+        // is far too coarse to say which came first.
+        extern unsigned long long g_ghpcVu1Mscals;
+        std::fprintf(stderr, "[projw] %-10s pc=0x%04x mscal=%llu\n            NEW:",
+                     where, pc, g_ghpcVu1Mscals);
         for (int r = 0; r < 4; ++r)
             std::fprintf(stderr, " (%g,%g,%g,%g)",
                          (double)f[r * 4 + 0], (double)f[r * 4 + 1],
@@ -2633,6 +2639,25 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         b.instrs += ghpcInstrs;
         if (ghpcInstrs > b.maxInstrs) b.maxInstrs = ghpcInstrs;
         ++total;
+
+        // The first cut-off run of the whole session, on the same clock as
+        // [projw]. This is what orders "the data went bad" against "the loop
+        // stopped ending", which is the difference between the runaway being
+        // the cause and it being a symptom. Unconditional: it costs one line
+        // per session and it is the line the whole question turns on.
+        if (why == kBudget)
+        {
+            static bool announced = false;
+            if (!announced)
+            {
+                announced = true;
+                extern unsigned long long g_ghpcVu1Mscals;
+                std::fprintf(stderr,
+                             "[vu1/first-runaway] mscal=%llu startPc=0x%x instrs=%llu\n",
+                             g_ghpcVu1Mscals, m_ghpcStartPc,
+                             (unsigned long long)ghpcInstrs);
+            }
+        }
 
         // Dump the visit histogram of a run that was cut off, plus the raw
         // instruction words at the hot addresses so the branch can be decoded
