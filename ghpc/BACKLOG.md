@@ -18,30 +18,33 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The VU1 runaway in 0xcd8, per `NEXT.md`. 0x30b0's is fixed; 0xcd8's is the
-gameplay cost.**
+**The VU1 runaway in 0xcd8, per `NEXT.md`. Its loops are sound and their input
+at gameplay TOPs is bad. Find out whether the gameplay OFFSETs are real.**
 
-`notes/evidence/2026-09-10-vu1-top-clobber.txt`: the vf2 init at VU 0x3730
-never ran, because `PsRnd::Reset` sends it as a normal-mode scratchpad DMA
-(MADR 0x80000020) and the runtime read it from RAM. Fixed, with
-`GHPC_DMA_SPR_LEGACY=1` for the old decode. 0x30b0 now ends 110 of 110.
-Release speed SAME. 0xcd8 still cuts off 13% of its runs, and those burn 187M
-VU1 instructions against 48M for the rest. In order:
+`notes/evidence/2026-09-11-vu1-gameplay-loops.txt`: the first ten gameplay
+cut-offs, all 0xcd8, spread over four loops. Six have a bad count or bound from
+input: a zero header, a y == z header of -31872 at TOP 514, a strip count near
+900. Four spin in 0x30b0's vertex loop with plausible headers and are not
+explained. In order:
 
-1. **Characterize the gameplay cut-offs.** They are the cost, and their headers
-   look sane (w = 0x614, 0x373, 0x3c6, ...). `GHPC_VU1_LOOP` dumps the first N
-   runaways, which are menu ones; add a skip so the dumps land on
-   `game_screen`, then name the loop and its bound as was done for 0x30b0.
-2. **The all-zero header, which is the jump to 0x0000.** 0xcd8 starts with
-   `XTOP vi5; ILW.w vi1, 0(vi5); ... JALR vi2, vi1` (0x0cd8 to 0x0d00): its
-   first call goes to header.w * 8, a per-batch routine selector (0x614 is the
-   `JR vi2` stub at 0x30a0; 0x373/0x3c6/0x369/0x394 point into loaded
-   overlays). A zero header sends it to 0x0000, where no MPG ever loads code
-   (MPG ranges start at 0x9c8). So the menu runaways (mscal 3363 onward) are
-   the zero headers. Find that UNPACK and where its source came from.
-3. **Other bit-31 DMA addresses.** The chain tag walker masks bit 31 off the tag
-   ADDR (`ps2_memory.cpp:215`), so a chain REF into scratchpad would be read
-   from RAM the same way. Check whether GH2 issues any.
+1. **Are OFFSET 514 and 515 real?** Gameplay TOPs come from OFFSET VIFcodes
+   carrying NUM 2 or 3. At the first few, dump the last parsed commands with
+   their consumed sizes (the `g_hist` ring behind `dumpHist`, whose own cap is
+   already spent at boot, so give this its own) and the raw words around the
+   code. A real OFFSET sits exactly where the previous command's payload ends;
+   a misparsed one sits inside a payload. If misparsed, name the command whose
+   size is wrong.
+2. **If they are real**, the second input half at qw 514 overlaps the constants
+   at 680 and the outputs at 704 and 849, so something else has to keep batches
+   small or move those. Check the projection matrix going bad at the start of
+   gameplay against unpacks landing past qw 680.
+3. **0x30b0's vertex loop inside 0xcd8** (dumps 7 to 10): back edges taken ~800
+   times against vi3 moving 15 to 20. Decode 0x31b0 to 0x3730 and follow the
+   unconditional B at 0x3700.
+4. **Left over.** The UNPACK behind the menu zero headers (mscal 3363 onward),
+   and the chain tag walker masking bit 31 off the tag ADDR
+   (`ps2_memory.cpp:215`), which would read a chain REF into scratchpad from
+   RAM the same way.
 
 VU code is readable offline. `work/GH2_debug.elf` has a `.DVP.overlay..<addr>`
 section per overlay naming its VU load address and size, and the code itself

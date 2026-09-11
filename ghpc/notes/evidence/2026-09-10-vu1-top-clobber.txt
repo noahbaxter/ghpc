@@ -221,6 +221,26 @@ sits at 0x9c8. The zero header and the jump to 0 are one bug. Gameplay
 cut-off headers seen so far have nonzero w, so the gameplay runaways are not
 this.
 
+WHY A ZERO HEADER CAN NEVER FINISH
+
+The full VU code image rebuilt from all 18 MPG VIFcodes in .vutext (each
+matched to a runtime MPG range, three runtime-confirmed words reproduced):
+
+  0x0a00  XTOP   vi3
+  0x0a08  ILW.y  vi4, 0(vi3)        count = header.y
+  0x0a28  IADD   vi4, vi4, vi3      bound = TOP + y
+  0x0a30  IADDIU vi3, vi3, 1        counter = TOP + 1
+  0x0a38  IADDIU vi4, vi4, 4        bound = TOP + y + 4
+  0x0b88  IADDIU vi3, vi3, 4        step 4 per pass
+  0x0bc0  IBNE   vi3, vi4, 0x0b10   exit on exact equality only
+
+The gap starts at y + 3 and closes by 4, so the loop ends only when
+y = 1 (mod 4). Every header y observed is: 0x11, 0x41, 0xc1, 0xc5, 0x115,
+0x119, 0x11d, 0x121, 0x125, 0x129. A zero header leaves a gap of 3 that never
+closes, which is the provenance round's counter 5, 9, 13 against bound 4. The
+game never sends a zero header on hardware, so the zero is ours, upstream in
+delivery.
+
 RULED OUT: THE BASE GUARD
 
 The BASE handler rejects BASE VIFcodes with NUM != 0 or high immediate bits,

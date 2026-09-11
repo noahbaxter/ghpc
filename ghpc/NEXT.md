@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `0.6` |
 | fps | `0.25` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 4 of 6 |
-| rounds total | 10 of 14 |
+| rounds since gain | 5 of 6 |
+| rounds total | 11 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -161,7 +161,18 @@ once at boot and **0x30b0 no longer runs away: 110 ended, 0 cut off.** Release
 speed is SAME, 2.53 against 2.57 Mcycles/sec with `GHPC_DMA_SPR_LEGACY=1`,
 because 0x30b0 was never the gameplay cost. **0xcd8 is:** 13% of its runs are
 still cut off and they burn 187M VU1 instructions against 48M for the rest.
-Its runaway is a different mechanism. That is the target now.
+Its runaway is a different mechanism.
+
+**Gameplay runaways are sound loops fed bad input.** Measured in
+`notes/evidence/2026-09-11-vu1-gameplay-loops.txt`: the first ten gameplay
+cut-offs, all 0xcd8, spread over four loops. In six the loop is sound and its
+count or bound is not: a zero header (the jump to 0x0000), a header with
+y == z at -31872 (the vertex loop increments past its bound), a strip count
+near 900. The other four spin inside 0x30b0's vertex loop with plausible
+headers and are not explained. The bad headers sit at gameplay TOPs, which come
+from OFFSET 514 and 515 VIFcodes carrying NUM 2 or 3, and a second input half at
+qw 514 overlaps the constants at 680 and the output buffers at 704 and 849.
+**Next: are those OFFSETs real, or read out of a payload?**
 
 **A VIF1 desync was found and fixed, and it did not move speed.** A command
 whose payload straddled two DMA chunks was dropped, so the next chunk parsed

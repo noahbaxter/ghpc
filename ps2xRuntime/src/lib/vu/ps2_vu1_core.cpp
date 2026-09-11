@@ -2334,8 +2334,17 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         return e ? std::atoi(e) : 0;
     }();
     static int ghpcLoopDumped = 0;
+    // The first N runaways are always menu ones. GHPC_VU1_LOOP_FROM holds the
+    // probe off until the MSCAL counter passes a gameplay point, so the dumps
+    // describe the runaways that actually cost the frame.
+    static const unsigned long long ghpcLoopFrom = []() -> unsigned long long {
+        const char *e = std::getenv("GHPC_VU1_LOOP_FROM");
+        return e ? std::strtoull(e, nullptr, 0) : 0ull;
+    }();
+    extern unsigned long long g_ghpcVu1Mscals;
     const bool ghpcLoopProbe = (ghpcLoopDumps > 0 && m_unit == Unit::VU1 &&
-                                ghpcLoopDumped < ghpcLoopDumps);
+                                ghpcLoopDumped < ghpcLoopDumps &&
+                                g_ghpcVu1Mscals >= ghpcLoopFrom);
     if (ghpcLoopProbe)
     {
         m_ghpcPcHits.assign(PS2_VU1_CODE_SIZE / 8u, 0u);
