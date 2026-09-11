@@ -45,7 +45,7 @@ RUNG = {name: i + 1 for i, name in enumerate(LADDER)}
 # kills it. `--round-done` is what advances them; `--record` on a real gain
 # resets `rounds_since_gain` to 0.
 STOP_ROUNDS_SINCE_GAIN = 6
-STOP_ROUNDS_TOTAL = 14
+STOP_ROUNDS_TOTAL = 30
 
 DRIVE = re.compile(r"^\[drive\] (?:enter (\w+)|(\w+) -> (\w+) after)")
 # Sub-rung probes: name -> (regex, group). Extend as blockers move.

@@ -24,22 +24,24 @@ read). Same binary: cut-off microprograms 2331 -> 0, release gameplay
 4.13 -> 14.75 Mcycles/sec. `notes/evidence/2026-09-11-mfifo-drain-wrap.txt`
 and the third MFIFO section of `notes/boot-sequence-reference.md`.
 
-Loose ends from it, in order:
+Closed the same day: the rarer junk source was the same bug (a cnt tag in the
+ring's last quadword puts its payload at exactly ring end; the wrap range is
+now inclusive), and the picture is confirmed sane
+(`notes/evidence/2026-09-11-gameplay-frame-*.png`: venue, fretboard, gems).
 
-1. **A second, rarer junk source survives the fix.** 13 OFFSETs with NUM != 0
-   per 130s debug run, in two gameplay chunks (mscal 14929 and 36983) that
-   both open `BASE 0 -> 99` at pos 12 and then the same packed-byte stretch.
-   No invalid opcode and no runaway followed them in that run. Dump them:
-   `GHPC_VIF1_DUMPCHUNK=<dir>` fires on the first NUM != 0 OFFSET of a chunk,
-   `scripts/vifwalk.py` walks the dump with piece boundaries. Same method as
-   the fix, so it should be one round.
-2. **Confirm the picture.** The corrupted gameplay frames in `notes/evidence/`
-   were blamed on the runaway. Capture new ones on the fixed build and say
-   whether the geometry is now sane, before anything downstream is built on
-   the assumption.
-3. **The `Rnd` seam.** Gameplay is at 5% of realtime on release, so the
-   remaining 20x is VU1 interpretation and the software GS, and the runaway
-   no longer poisons a native backend built above them.
+**Next: the `Rnd` seam.** Gameplay is at 5% of realtime on release, so the
+remaining 20x is VU1 interpretation and the software GS. The map is
+`notes/rnd-seam.md`: hierarchy, the hook set (`PsRnd::BeginDrawing`
+0x1bfed0, `EndDrawing` 0x1c0070, `FlushPacket` 0x43e400, `PsMesh::DrawFaces`
+0x43eea0, `PsMat::Select` 0x43ea70, `PsTex::Select` 0x43f490, `PsCam::Select`
+0x1c1770), the data shapes that are known, and what is not. Hand-written
+bodies now survive a build through `ghpc/override/` (`scripts/overlay.sh`,
+proof override `EIntr_0x3518c8`), so the seam has somewhere to live.
+
+First seam round, small: hook `PsMesh::DrawFaces` in an override that calls
+the generated original and logs the packet it built (quadword count, the
+VIFcodes, the first vertices), so the undecompiled packet format gets read
+from the running game rather than guessed. Same-build control arm.
 
 Ruled out this round: VIF command sizing (PCSX2 rules agree with the runtime
 on every command before the ring end), TTE tag splicing (2 tags total), and
@@ -55,13 +57,6 @@ Cheap and still pending: cache three `getenv` calls in the VIF1 hot path
 samples.
 
 ## Next
-
-**Override layer.** No hand-written function body can survive a build today:
-staging does `rsync --delete` from generated output into a gitignored
-`ps2xRuntime/src/runner/`. This is very likely what produced the `DataArray`
-workaround that existed only as a stale object file with no source. Design in
-`.planning/2026-09-09-work-spine-design.md`. Must fail the build, not warn, when
-an override's target no longer exists.
 
 **Rnd seam.** Playback is at 39.2% of realtime (23.5 vblanks/sec vs 60,
 `GHPC_EERATE=60`) because rasterisation runs on the EE thread and guest time is

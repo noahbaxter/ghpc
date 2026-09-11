@@ -39,14 +39,14 @@ supersede earlier ones and topic notes supersede both.
 |---|---|
 | furthest screen | `game_screen` |
 | rung | 9 of 9 |
-| recorded | 2026-09-11 12:15:53 |
+| recorded | 2026-09-11 13:10:35 |
 | build | `build` |
 | held for | 60s |
-| eerate pct | `5.1` |
-| fps | `0.56` |
+| eerate pct | `4.7` |
+| fps | `2.89` |
 | probes | `GHPC_COUNTIN=0.5` |
 | rounds since gain | 1 of 6 |
-| rounds total | 13 of 14 |
+| rounds total | 14 of 30 |
 
 <!-- PROGRESS:END -->
 
@@ -406,15 +406,11 @@ this next starts from a true statement rather than a half-finished round.
 
 ## Known gaps
 
-- **The chart result is n=1.** `song_tick` 0.000 to 737.085 comes from a single
-  7200s run sampled at exactly two points, because the `[ghpc/song]` heartbeat
-  prints call #1 then every 120th. With the count-in clamp a dense repro is now
-  cheap and has still not been done. Lower the heartbeat and show it across many
-  samples on two runs.
 - **Audio is unmeasured.** Nothing scores whether a sample ever reaches the SPU.
-- **The picture is captured but unexplained.** `notes/evidence/` holds the first
-  gameplay frames ever taken. They show real geometry and heavy corruption. The
-  VU1 runaway is the leading explanation and is not yet proven to be the cause.
+- **The picture is only known to be sane early in the song.** The frames in
+  `notes/evidence/2026-09-11-gameplay-frame-*.png` are the first 60 distinct
+  presents after StartGame; no scrolling notes are in them yet. The chart
+  result is n=2 (`GHPC_SONG_HEARTBEAT=10`, 19 and 29 monotonic samples).
 - **Boot reliability is not established.** A run on 2026-09-10 stalled before
   `main_screen` and the thread census killed it. `progress.py` scores that
   `MEASUREMENT_FAILED` and retries, so it is invisible unless every attempt
