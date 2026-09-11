@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `0.6` |
 | fps | `0.25` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 1 of 6 |
-| rounds total | 7 of 14 |
+| rounds since gain | 2 of 6 |
+| rounds total | 8 of 14 |
 
 <!-- PROGRESS:END -->
 
@@ -126,13 +126,31 @@ evidence, in `notes/evidence/2026-09-10-vu1-loop-bound-provenance.txt`:
 The base register comes from XTOP, which returned 330 healthy and 0 in every
 runaway dumped. 0xcd8 shows the same signature through different code. It is
 not the ITOP mask. **TOP=0 is not garbage either:** boot sets BASE=0 and
-OFFSET=330, so TOP legitimately alternates 0 and 330. The open question is
-upstream of the VU: whether the input for a TOP=0 MSCAL was ever unpacked to
-address 0.
+OFFSET=330, so TOP legitimately alternates 0 and 330. That the input for a
+TOP=0 MSCAL was never delivered is ruled out, below.
 
 Those dumps cover the first ten runaways, which were on `qp_selsong_screen`
 (0xcd8) and `loading_screen` (0x30b0). None was on `game_screen`, so that
 gameplay's runaways are the same mechanism is not shown.
+
+**TOP is not the variable, and the input is always delivered.** Measured in
+`notes/evidence/2026-09-10-vu1-top-census.txt`. 0x30b0 at TOP=0 ends normally
+283 times and is cut off 114. Every cut-off in 66,000 runs had a qw[TOP] freshly
+unpacked since the previous MSCAL, zero stale. The 0x30b0 cut-offs start with
+a header byte-identical to healthy runs (`4, 0x11, 0x12, 0x614`). **Same input
+at entry, different outcome.** So the difference arises inside the run: either
+qw[TOP] is overwritten before the bound ILW reads it (the provenance round saw
+1042 read where the entry header holds 18), or state carried in from the
+previous run (VI registers, an MSCNT resuming a cut-off program mid-loop)
+differs.
+
+**A VIF1 desync was found and fixed, and it did not move speed.** A command
+whose payload straddled two DMA chunks was dropped, so the next chunk parsed
+from mid-payload. At gameplay that produced 1305 junk OFFSETs and TOPs of
+514/515/610. It now carries into the next chunk. Invalid opcodes fell 118,798
+to 1,018 and OFFSETs 1305 to 75, but release `eerate` is 2.15 against 2.13
+Mcycles/sec with `GHPC_VIF1_NO_RESIDUAL=1` on the same binary. SAME. The
+runaway survives a clean stream: cut-offs still retire 66% of VU1 instructions.
 
 **A retracted claim, and an unexplained discrepancy that goes with it.** An
 earlier round reported "everything is healthy until `game_screen`, the first
@@ -165,6 +183,11 @@ the mass of them at `game_screen`. Do not assume one explanation covers both.
     GHPC_VU1_LOOP=N      dump pc histogram, back edges, VI regs and exit-branch
                          VI provenance for the first N runaways
     GHPC_VU1_BUDGET=N    the per-MSCAL cycle budget, default 65536
+    GHPC_VIF1_NO_RESIDUAL=1  drop a VIF1 command that straddles two chunks, as
+                         before the fix. Control arm only.
+
+`eerate_pct` rounds to 0.1, which cannot separate gameplay arms at 0.7%. Compare
+the `Mcycles/sec` figure on the `[eerate]` line instead.
 
 **`GHPC_COUNTIN` is a probe and every gameplay-speed mark carries it.** That is
 fine and it is the honest way round: compare like for like, always with the same

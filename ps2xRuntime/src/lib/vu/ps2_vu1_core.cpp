@@ -2694,6 +2694,40 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         if (ghpcInstrs > b.maxInstrs) b.maxInstrs = ghpcInstrs;
         ++total;
 
+        // Split by TOP, the double-buffer half the program reads, and by
+        // whether qw[TOP] was unpacked for this MSCAL (fresh) or is left over.
+        // Kind 0 is an unpack, anything else a VU store.
+        extern int g_ghpcMscalInKind;
+        extern unsigned long long g_ghpcMscalInAge;
+        extern unsigned g_ghpcMscalInWords[4];
+        struct TopBucket { uint64_t n[2][2]; };  // [fresh][cut off]
+        static std::map<uint64_t, TopBucket> byPcTop;
+        const bool inFresh = (g_ghpcMscalInKind == 0 && g_ghpcMscalInAge == 0ull);
+        if (why == kEnded || why == kBudget)
+        {
+            const uint64_t key = ((uint64_t)m_ghpcStartPc << 16) | (m_state.top & 0x3FFu);
+            ++byPcTop[key].n[inFresh ? 1 : 0][why == kBudget ? 1 : 0];
+            static std::map<uint64_t, int> shown;
+            static uint64_t cut = 0ull;
+            const bool isCut = (why == kBudget);
+            if (isCut) ++cut;
+            const bool show = isCut ? (cut <= 40ull || (cut % 500ull) == 0ull)
+                                    : (shown[key]++ < 2);
+            if (show)
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                std::fprintf(stderr,
+                             "[vu1/topin] %s mscal=%llu startPc=0x%x top=%u in=%s age=%llu"
+                             " qw[top]=%08x %08x %08x %08x\n",
+                             isCut ? "CUT " : "ebit", g_ghpcVu1Mscals, m_ghpcStartPc,
+                             (unsigned)(m_state.top & 0x3FFu),
+                             g_ghpcMscalInKind == 0 ? "unpack" : "vustore",
+                             g_ghpcMscalInAge,
+                             g_ghpcMscalInWords[0], g_ghpcMscalInWords[1],
+                             g_ghpcMscalInWords[2], g_ghpcMscalInWords[3]);
+            }
+        }
+
         // The first cut-off run of the whole session, on the same clock as
         // [projw]. This is what orders "the data went bad" against "the loop
         // stopped ending", which is the difference between the runaway being
@@ -2890,6 +2924,18 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
                               (unsigned long long)(v.n[1] ? v.instrsBy[1] / v.n[1] : 0ull),
                               (unsigned long long)v.maxInstrs);
                 (void)runs;
+                line += buf;
+            }
+            line += "\n[vu1/topcensus] total=" + std::to_string(total);
+            for (const auto &kv : byPcTop)
+            {
+                const TopBucket &t = kv.second;
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              " pc0x%x/top%u{fresh ebit=%llu cut=%llu | stale ebit=%llu cut=%llu}",
+                              (unsigned)(kv.first >> 16), (unsigned)(kv.first & 0xFFFFu),
+                              (unsigned long long)t.n[1][0], (unsigned long long)t.n[1][1],
+                              (unsigned long long)t.n[0][0], (unsigned long long)t.n[0][1]);
                 line += buf;
             }
             line += "\n";

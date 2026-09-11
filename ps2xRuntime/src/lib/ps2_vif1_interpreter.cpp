@@ -535,6 +535,7 @@ unsigned long long g_ghpcMscalCount = 0ull;
 unsigned long long g_truncDirect = 0ull;
 unsigned long long g_truncUnpack = 0ull;
 unsigned long long g_truncMpg = 0ull;
+unsigned long long g_vif1Carried = 0ull;
 unsigned long long g_chunks = 0ull;
 unsigned long long g_chunksEndingTruncated = 0ull;
 unsigned long long g_bytesDiscarded = 0ull;
@@ -652,6 +653,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                       << " truncDirect=" << g_truncDirect
                       << " truncUnpack=" << g_truncUnpack
                       << " truncMpg=" << g_truncMpg
+                      << " carried=" << g_vif1Carried
                       << " bytesDiscarded=" << g_bytesDiscarded
                       << " | dirtyChunks=" << g_dirtyChunks
                       << " dirtyAfterTrunc=" << g_dirtyAfterTrunc
@@ -697,6 +699,30 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
     }
 
 #endif
+    // VIF state persists across DMA transfers, so a command whose payload runs
+    // past the end of this chunk continues in the next one. Its bytes, from the
+    // VIFcode on, are kept and parsed ahead of the next chunk. Dropping them made
+    // the next chunk parse from mid-payload, which is where the junk OFFSETs that
+    // wreck TOP at gameplay came from.
+    static const bool s_noResidual = std::getenv("GHPC_VIF1_NO_RESIDUAL") != nullptr;
+    std::vector<uint8_t> joined;
+    if (!m_vif1Residual.empty())
+    {
+        joined.reserve(m_vif1Residual.size() + sizeBytes);
+        joined.assign(m_vif1Residual.begin(), m_vif1Residual.end());
+        joined.insert(joined.end(), data, data + sizeBytes);
+        m_vif1Residual.clear();
+        data = joined.data();
+        sizeBytes = static_cast<uint32_t>(joined.size());
+    }
+    auto carry = [&](uint32_t from)
+    {
+#if GHPC_DIAG
+        ++g_vif1Carried;
+#endif
+        m_vif1Residual.assign(data + from, data + sizeBytes);
+    };
+
     uint32_t pos = 0;
 
     while (pos + 4 <= sizeBytes)
@@ -732,6 +758,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             continue;
         }
 
+        const uint32_t cmdStart = pos;
         uint32_t cmd;
         memcpy(&cmd, data + pos, 4);
         pos += 4;
@@ -1091,6 +1118,20 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             extern unsigned long long g_ghpcVu1Top, g_ghpcVu1Mscals;
             g_ghpcVu1Top = runTop;
             ++g_ghpcVu1Mscals;
+            // The runaways read their loop bound from qw[TOP]. Was it unpacked
+            // for this MSCAL? Unpacks are stamped with the count before this
+            // increment, so age 0 means written since the previous MSCAL.
+            {
+                extern int g_ghpcLastWriter[1024];
+                extern unsigned long long g_ghpcLastWriterMs[1024];
+                extern int g_ghpcMscalInKind;
+                extern unsigned long long g_ghpcMscalInAge;
+                extern unsigned g_ghpcMscalInWords[4];
+                g_ghpcMscalInKind = g_ghpcLastWriter[runTop];
+                g_ghpcMscalInAge = (g_ghpcVu1Mscals - 1ull) - g_ghpcLastWriterMs[runTop];
+                if (m_vu1Data)
+                    std::memcpy(g_ghpcMscalInWords, m_vu1Data + runTop * 16u, 16u);
+            }
             // One frame's geometry pass reads the buffer at TOP=49 and comes
             // out corrupt; the next reads TOP=192 and is correct. Map which
             // quadwords of each half actually hold data at MSCAL time.
@@ -1153,7 +1194,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STMASK)
         {
             if (pos + 4 > sizeBytes)
+            {
+                if (!s_noResidual)
+                    carry(cmdStart);
                 break;
+            }
             uint32_t maskValue = 0;
             std::memcpy(&maskValue, data + pos, sizeof(maskValue));
             vif1_regs.mask = maskValue;
@@ -1163,7 +1208,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STROW)
         {
             if (pos + 16 > sizeBytes)
+            {
+                if (!s_noResidual)
+                    carry(cmdStart);
                 break;
+            }
             std::memcpy(vif1_regs.row, data + pos, 16);
             pos += 16;
             continue;
@@ -1171,7 +1220,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         else if (opcode == VIF_STCOL)
         {
             if (pos + 16 > sizeBytes)
+            {
+                if (!s_noResidual)
+                    carry(cmdStart);
                 break;
+            }
             std::memcpy(vif1_regs.col, data + pos, 16);
             pos += 16;
             continue;
@@ -1183,6 +1236,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             // MPG payload is instruction-packed and should not be QW-aligned.
             const uint32_t instructionCount = (num == 0u) ? 256u : static_cast<uint32_t>(num);
             const uint32_t mpgBytes = instructionCount * 8u;
+            if (!s_noResidual && pos + mpgBytes > sizeBytes)
+            {
+                carry(cmdStart);
+                break;
+            }
 #if GHPC_DIAG
             {
                 // Track which micro memory ranges actually received code, so an
@@ -1220,6 +1278,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 qwCount = 65536;
             const uint32_t availableQw = (sizeBytes - pos) / 16u;
             const bool truncated = qwCount > availableQw;
+            if (truncated && !s_noResidual)
+            {
+                carry(cmdStart);
+                break;
+            }
             if (qwCount > availableQw)
                 qwCount = availableQw;
 
@@ -1309,6 +1372,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             uint32_t totalBytes = sourceVectorCount * bytesPerVector;
             totalBytes = (totalBytes + 3) & ~3u;
+            if (!s_noResidual && pos + totalBytes > sizeBytes)
+            {
+                carry(cmdStart);
+                break;
+            }
 
             uint32_t vuAddr = (uint32_t)imm & 0x3FFu;
             if ((imm & 0x8000u) != 0u)

@@ -18,33 +18,33 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The VU1 runaway, per `NEXT.md`. The bound is named; find why TOP=0 input is
-wrong.**
+**The VU1 runaway, per `NEXT.md`. Same input at entry, different outcome: find
+what differs inside the run.**
 
-`notes/evidence/2026-09-10-vu1-loop-bound-provenance.txt` names it: in
-microprogram 0x30b0, `ILW vi12, 0(vi5)` at pc 0x31b8 loads the loop bound from
-VU1 address 0 (1042) instead of 0x14a0 (18), because its base came from XTOP
-and TOP was 0. Boot sets BASE=0, OFFSET=330, so TOP=0 is the real other half of
-the double buffer. The fault is upstream of the VU. In order:
+`notes/evidence/2026-09-10-vu1-top-census.txt`: TOP is not the variable and
+qw[TOP] is always freshly unpacked. 0x30b0 cut-offs start with a header
+byte-identical to healthy runs, yet the provenance round saw its bound ILW
+(`0x31b8`) read 1042 where that header holds 18. In order:
 
-1. **Split the census by TOP.** Per (startPc, TOP), count E-bit ends against
-   cut-offs. If every TOP=0 run of 0x30b0 is cut off and every TOP=330 run
-   ends, the buffer half is the variable. If not, it is not.
-2. **Find what is at qw 0 when a TOP=0 MSCAL reads it.** `ghpcLogQwWrite`
-   logs UNPACK, store and read events per quadword, windowed by
-   `GHPC_RW_FROM` and `GHPC_RW_SPAN` (`gs_cpu_backend.cpp:1173`). Aim it at
-   qw 0 and qw 330 around a runaway. Either the input was unpacked to 0 and is
-   wrong, or it went to 330 while TOP said 0, which is a VIF1 double-buffer
-   bug (`ps2_vif1_interpreter.cpp:959`).
+1. **Watch qw[TOP] during the run.** For 0x30b0 at TOP=0, record every VU store
+   and XGKICK touching qw[TOP] between MSCAL entry and the ILW at 0x31b8, and
+   the value the ILW gets. Cut-off vs ended, same run. If a store lands first,
+   name its pc; if nothing writes and the ILW still reads something else, the
+   ILW's address or field decode is wrong.
+2. **Diff the state carried in.** VI registers at entry, and whether the run is
+   a fresh MSCAL or an MSCNT resuming a cut-off program. 18 cut-offs shared one
+   mscal at 8393, so MSCNT resumes a stuck program mid-loop and multiplies the
+   cost. Split the census by MSCAL vs MSCNT.
 3. **Dump gameplay runaways, not the first ten.** `GHPC_VU1_LOOP` dumps the
-   first N, which were all on `qp_selsong_screen` and `loading_screen`. Add a
-   skip so the dumps land on `game_screen`, and confirm the same instruction
-   is at fault there before assuming it.
+   first N. Add a skip so dumps land on `game_screen`.
 
-Side leads, not this bug: 1015 of 1016 OFFSET VIFcodes in a 300s run carry
-NUM != 0, the shape the BASE handler rejects as desync
-(`ps2_vif1_interpreter.cpp:873`); they start at mscal 8597, after the runaways
-above. And the 0xcd8 runaway path enters through a jump from 0x0d00 to 0x0000.
+Done this round: the VIF1 residual fix. Commands straddling two DMA chunks are
+now carried, not dropped (`GHPC_VIF1_NO_RESIDUAL=1` for the old behaviour).
+Invalid opcodes 118,798 to 1,018, speed unchanged. Still open from that thread:
+the 0xcd8 menu runaways whose freshly unpacked header is all zeros (mscal 3363
+onward), 6 dirty chunks with no truncation behind them, and whether TOP
+514/515/753/768 at gameplay are offsets the game really sets. The 0xcd8 runaway
+path also enters through a jump from 0x0d00 to 0x0000.
 
 **Then the `Rnd` seam.** Not before the runaway: a native backend built on top
 of a runaway inherits it. The cost is VU1 interpretation, not the GS

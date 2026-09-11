@@ -1151,6 +1151,11 @@ GhpcQwWrite g_ghpcQwLog[65536] = {};
 int g_ghpcLastWriter[1024] = {};
 unsigned long long g_ghpcLastWriterMs[1024] = {};
 unsigned long long g_ghpcQwLogN = 0ull;
+// Who last wrote qw[TOP] when the current MSCAL was issued, and how many MSCALs
+// before it. Captured at issue, before the program's own stores land.
+int g_ghpcMscalInKind = 0;
+unsigned long long g_ghpcMscalInAge = 0ull;
+unsigned g_ghpcMscalInWords[4] = {};
 void ghpcLogQwWrite(unsigned long long ms, int writer, unsigned qw,
                     const unsigned *before, const unsigned *after)
 {
