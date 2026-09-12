@@ -149,6 +149,15 @@ that cache at DrawFaces with the owner's cached world transform (+0xa0).
 Meshes with `+0x140 & 0x1f` set keep their verts (mutable geometry, the
 fretboard presumably) and can be read at draw time.
 
+The cache exists: the Sync override copies `Vert[]` and `Face[]` into a host
+map keyed by guest address when the owner is `this`, the mutable bits are
+clear and verts > 0; the DrawFaces override looks `this` up and counts.
+Release, 150s to and on `game_screen`: hits 115314, misses 1024
+(`[ghpc/mesh/cache]`). So at draw time the backend has the geometry for
+99% of draws host-side, with no guest behaviour change (rung 9, speed same).
+The misses are the mutable meshes and instances whose owner Synced before
+the run's first log; whether the fretboard is among them is unmeasured.
+
 ## What the runtime already does
 
 - No Rnd-level hooks exist. Everything under `ps2xRuntime/src/runner/` is

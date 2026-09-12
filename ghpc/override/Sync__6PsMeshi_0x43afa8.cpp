@@ -28,14 +28,18 @@
 // free striper/stack buffers with strides 4, 2, 2 and 16, never the 6-byte
 // faces. So an entry hook here sees the vectors intact on the Load call.
 //
-// This override keeps the generated body verbatim and, when GHPC_MESH_LOG is
-// set, prints the same RndMesh block DrawFaces prints (offsets pinned in
-// DrawFaces__6PsMesh_0x43eea0.cpp) at entry, plus the Sync flags in $a1.
+// This override keeps the generated body verbatim and, at entry, does two
+// things: always, it copies Vert[] and Face[] into the host mesh cache keyed
+// by `this` (ghpcMeshCacheStore below, consumed by DrawFaces); and when
+// GHPC_MESH_LOG is set, prints the same RndMesh block DrawFaces prints
+// (offsets pinned in DrawFaces__6PsMesh_0x43eea0.cpp), plus the Sync flags in $a1.
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <type_traits>
+#include <unordered_map>
+#include <vector>
 #include "ps2_runtime_macros.h"
 #include "ps2_runtime.h"
 #include "ps2_recompiled_functions.h"
@@ -48,10 +52,73 @@
 #include "ps2_log.h"
 #endif
 
+// Host-side mesh cache. overlay.sh only maps .cpp files onto generated ones, so
+// there is no header to share; these two functions are the whole interface and
+// DrawFaces__6PsMesh_0x43eea0.cpp redeclares them. Non-static and non-inline
+// on purpose: the runner is a unity build, and if both overrides land in the
+// same batch a second definition of anything here would collide. The map is a
+// function-local static so it needs no init order. Helper names in the
+// anonymous namespace below are suffixed Sync for the same reason.
+namespace ghpc_mesh_cache_detail {
+struct Entry {
+    std::vector<uint8_t> verts;   // vertCnt * 64 bytes, guest layout
+    std::vector<uint8_t> faces;   // faceCnt * 6 bytes, three u16 each
+    uint32_t vertCnt = 0;
+    uint32_t faceCnt = 0;
+};
+std::unordered_map<uint32_t, Entry>& ghpcMeshCacheMap() {
+    static std::unordered_map<uint32_t, Entry> s_map;
+    return s_map;
+}
+// Copy [addr, addr+bytes) out of guest RAM through the same mask the fast
+// path uses, refusing scratchpad/MMIO addresses and any range that would wrap.
+bool ghpcMeshCacheCopy(const uint8_t* rdram, uint32_t addr, uint32_t bytes, std::vector<uint8_t>& out) {
+    if (addr == 0 || bytes == 0 || PS2Runtime::isSpecialAddress(addr)) return false;
+    const uint32_t off = addr & PS2_RAM_MASK;
+    if (bytes > PS2_RAM_SIZE - off) return false;
+    out.assign(rdram + off, rdram + off + bytes);
+    return true;
+}
+} // namespace ghpc_mesh_cache_detail
+
+// Replace the entry for `self`. Counts come from the guest vectors at +0x100..
+// +0x10c; sizes are capped so a garbage pointer cannot make us copy megabytes.
+void ghpcMeshCacheStore(const uint8_t* rdram, uint32_t self, uint32_t vertPtr, uint32_t vertCnt, uint32_t faceBeg, uint32_t faceEnd) {
+    using namespace ghpc_mesh_cache_detail;
+    const uint32_t faceCnt = (faceEnd >= faceBeg) ? (faceEnd - faceBeg) / 6u : 0u;
+    if (vertCnt == 0 || vertCnt > (1u << 20) || faceCnt > (1u << 20)) return;
+    Entry e;
+    if (!ghpcMeshCacheCopy(rdram, vertPtr, vertCnt * 64u, e.verts)) return;
+    if (faceCnt != 0 && !ghpcMeshCacheCopy(rdram, faceBeg, faceCnt * 6u, e.faces)) return;
+    e.vertCnt = vertCnt;
+    e.faceCnt = faceCnt;
+    ghpcMeshCacheMap()[self] = std::move(e);
+}
+
+// Returns true on a hit. Out pointers may be null. Data pointers stay valid
+// until the next store for the same `self`.
+bool ghpcMeshCacheLookup(uint32_t self, uint32_t* vertCnt, uint32_t* faceCnt, const uint8_t** verts, const uint8_t** faces) {
+    using namespace ghpc_mesh_cache_detail;
+    auto& m = ghpcMeshCacheMap();
+    auto it = m.find(self);
+    if (it == m.end()) {
+        if (vertCnt) *vertCnt = 0;
+        if (faceCnt) *faceCnt = 0;
+        if (verts) *verts = nullptr;
+        if (faces) *faces = nullptr;
+        return false;
+    }
+    if (vertCnt) *vertCnt = it->second.vertCnt;
+    if (faceCnt) *faceCnt = it->second.faceCnt;
+    if (verts) *verts = it->second.verts.data();
+    if (faces) *faces = it->second.faces.data();
+    return true;
+}
+
 namespace {
 
 // Guest float through the same masked path the generated code uses.
-inline float ghpcMeshF32(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t addr) {
+inline float ghpcMeshF32Sync(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t addr) {
     const uint32_t bits = READ32(addr);
     float f;
     std::memcpy(&f, &bits, sizeof(f));
@@ -81,11 +148,11 @@ void ghpcMeshLog(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_
         const uint32_t v = vertPtr + (uint32_t)i * 64u;
         std::fprintf(stderr,
             "[ghpc/mesh/sync-in]   v%d pos=(%g %g %g) norm=(%g %g %g) uv=(%g %g) color=(%g %g %g %g)\n", i,
-            ghpcMeshF32(rdram, ctx, runtime, v + 0x00u), ghpcMeshF32(rdram, ctx, runtime, v + 0x04u), ghpcMeshF32(rdram, ctx, runtime, v + 0x08u),
-            ghpcMeshF32(rdram, ctx, runtime, v + 0x10u), ghpcMeshF32(rdram, ctx, runtime, v + 0x14u), ghpcMeshF32(rdram, ctx, runtime, v + 0x18u),
-            ghpcMeshF32(rdram, ctx, runtime, v + 0x30u), ghpcMeshF32(rdram, ctx, runtime, v + 0x34u),
-            ghpcMeshF32(rdram, ctx, runtime, v + 0x20u), ghpcMeshF32(rdram, ctx, runtime, v + 0x24u),
-            ghpcMeshF32(rdram, ctx, runtime, v + 0x28u), ghpcMeshF32(rdram, ctx, runtime, v + 0x2cu));
+            ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x00u), ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x04u), ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x08u),
+            ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x10u), ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x14u), ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x18u),
+            ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x30u), ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x34u),
+            ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x20u), ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x24u),
+            ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x28u), ghpcMeshF32Sync(rdram, ctx, runtime, v + 0x2cu));
     }
 
     const uint32_t nf = faceCnt < 4u ? faceCnt : 4u;
@@ -101,10 +168,10 @@ void ghpcMeshLog(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_
     std::fprintf(stderr,
         "[ghpc/mesh/sync-in]   world dirty=%u x=(%g %g %g) y=(%g %g %g) z=(%g %g %g) v=(%g %g %g)\n",
         READ32(self + 0xe0u),
-        ghpcMeshF32(rdram, ctx, runtime, w + 0x00u), ghpcMeshF32(rdram, ctx, runtime, w + 0x04u), ghpcMeshF32(rdram, ctx, runtime, w + 0x08u),
-        ghpcMeshF32(rdram, ctx, runtime, w + 0x10u), ghpcMeshF32(rdram, ctx, runtime, w + 0x14u), ghpcMeshF32(rdram, ctx, runtime, w + 0x18u),
-        ghpcMeshF32(rdram, ctx, runtime, w + 0x20u), ghpcMeshF32(rdram, ctx, runtime, w + 0x24u), ghpcMeshF32(rdram, ctx, runtime, w + 0x28u),
-        ghpcMeshF32(rdram, ctx, runtime, w + 0x30u), ghpcMeshF32(rdram, ctx, runtime, w + 0x34u), ghpcMeshF32(rdram, ctx, runtime, w + 0x38u));
+        ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x00u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x04u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x08u),
+        ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x10u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x14u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x18u),
+        ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x20u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x24u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x28u),
+        ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x30u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x34u), ghpcMeshF32Sync(rdram, ctx, runtime, w + 0x38u));
 }
 
 } // namespace
@@ -130,6 +197,20 @@ void Sync__6PsMeshi_0x43afa8(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runt
     // Fresh entry only (a resume above jumps past this). $a0 is `this`, $a1
     // the Sync flags. The vectors are still intact here: the first store that
     // zeroes them is 0x43b040, after UpdateFacePacket returns.
+    //
+    // Cache the geometry under the same gates the body uses to free it: this
+    // is the owner (0x43afc4) and +0x140 & 0x1f is clear (0x43b100), so the
+    // verts are about to be resized to 0. Always on, no logging here.
+    {
+        const uint32_t self = GPR_U32(ctx, 4);
+        if (READ32(self + 0x138u) == self && (READ32(self + 0x140u) & 0x1fu) == 0) {
+            const uint32_t vertCnt = READ32(self + 0x104u);
+            if ((int32_t)vertCnt > 0) {
+                ghpcMeshCacheStore(rdram, self, READ32(self + 0x100u), vertCnt,
+                                   READ32(self + 0x108u), READ32(self + 0x10cu));
+            }
+        }
+    }
     {
         static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
         if (s_log) {

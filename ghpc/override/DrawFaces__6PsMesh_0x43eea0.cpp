@@ -47,7 +47,37 @@
 #include "ps2_log.h"
 #endif
 
+// Host mesh cache, defined in Sync__6PsMeshi_0x43afa8.cpp (overlay.sh maps
+// only .cpp files, so there is no header). Filled at PsMesh::Sync entry, the
+// last moment the guest still holds Vert[]/Face[]; probed here by `this`,
+// which is the owner mesh (see +0x138 above).
+void ghpcMeshCacheStore(const uint8_t* rdram, uint32_t self, uint32_t vertPtr, uint32_t vertCnt, uint32_t faceBeg, uint32_t faceEnd);
+bool ghpcMeshCacheLookup(uint32_t self, uint32_t* vertCnt, uint32_t* faceCnt, const uint8_t** verts, const uint8_t** faces);
+
 namespace {
+
+// Hit/miss census for the cache. Prints under GHPC_MESH_LOG on the first 40
+// calls and every 500th, and unconditionally whenever the miss count reaches
+// a power of two, so a plain run still shows the miss rate in a few lines.
+void ghpcMeshCacheProbe(uint32_t self) {
+    static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
+    static uint64_t s_calls = 0, s_hits = 0, s_misses = 0;
+    uint32_t verts = 0, faces = 0;
+    const bool hit = ghpcMeshCacheLookup(self, &verts, &faces, nullptr, nullptr);
+    const uint64_t n = ++s_calls;
+    bool print;
+    if (hit) {
+        ++s_hits;
+        print = s_log && (n <= 40 || (n % 500) == 0);
+    } else {
+        ++s_misses;
+        print = (s_log && (n <= 40 || (n % 500) == 0)) || (s_misses & (s_misses - 1)) == 0;
+    }
+    if (print) {
+        std::fprintf(stderr, "[ghpc/mesh/cache] hits=%llu misses=%llu thisHit=%d verts=%u faces=%u\n",
+            (unsigned long long)s_hits, (unsigned long long)s_misses, hit ? 1 : 0, verts, faces);
+    }
+}
 
 // Guest float through the same masked path the generated code uses.
 inline float ghpcMeshF32(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t addr) {
@@ -130,6 +160,7 @@ void DrawFaces__6PsMesh_0x43eea0(uint8_t* rdram, R5900Context* ctx, PS2Runtime *
     }
 
     // Fresh entry only (a resume above jumps past this). $a0 is `this`.
+    ghpcMeshCacheProbe(GPR_U32(ctx, 4));
     {
         static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
         if (s_log) {
