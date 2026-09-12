@@ -99,8 +99,30 @@ Do it after this, not instead of it.
 **Every input that draw needs is already captured and named**, in
 `notes/rnd-seam.md`: the class hierarchy, the hook addresses, the geometry
 cache, the eight camera quadwords, the material and texture state. Read that
-note before writing code. Six overrides under `ghpc/override/` do the
+note before writing code. Seven overrides under `ghpc/override/` do the
 logging; `GHPC_MESH_LOG=1` turns it on.
+
+**The transform is measured, not guessed**
+(`notes/evidence/2026-09-11-vertex-transform-calibration.txt`):
+
+    clip = (pos * World) * M    M = qw700..703 as rows, row vectors
+    q    = 1 / clip.w
+    x    = clip.x * q * qw696.x + qw697.x     y and z the same
+    s,t  = uv * q               the submit is fst=0, PRIM 4, iip=1
+
+qw698, the camera position, is not subtracted: M carries the view transform.
+x lands to a median 0.56 px and q to 0.74% on the sample mesh.
+
+**One thing blocks the draw: where `World` comes from.** y is off by a
+near-constant 4 px, and the obvious source is wrong. `PsMesh::DrawShowing` at
+0x43f2d0 calls `WorldXfm` on the instance and uploads it to VU1 qw676, but
+capturing that puts the mesh 21 px off in x and 19 in y, and the instance it
+names owns a different mesh: the draw arrived through DrawShowing's second
+`DrawFaces` call site at 0x43f434 without passing 0x43f2ec. The owner's cached
+`this+0xa0` fits far better but is stale (dirty word at +0xe0 reads 1 on every
+gameplay draw), which is the likely 4 px. Find the writer the 0x43f434 path
+uses. Do not re-capture at 0x43f2f4, and do not read the cursor back at
+DrawFaces: the packet is already flushed.
 
 Pass is `eerate_pct` up on the same binary with the rung still 9, the
 gameplay chain alive (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll`
@@ -143,8 +165,14 @@ future round sees a census that will not reproduce, this is prior art.
 ## Knobs this work needs
 
     GHPC_COUNTIN=0.5     clamp the count-in so gameplay arrives in ~1 min
-    GHPC_MESH_LOG=1      the six seam overrides log mesh, material, texture,
+    GHPC_MESH_LOG=1      the seam overrides log mesh, material, texture,
                          camera and cache hit rate. Debug and release both.
+    GHPC_TL_CAL=N        print the first N primitives the PS2 path submits,
+                         tagged with the mesh that produced them, next to that
+                         mesh's cached object-space verts. GHPC_TL_CAL_DRAWS
+                         caps the draws (default 3), GHPC_TL_CAL_ANY drops the
+                         wait for StartGame. This is how the transform above
+                         was measured; use it to check a candidate formula.
     GHPC_FRAME_AFTER_START=1  hold frame dumps until StartGame, so the budget
                          lands on gameplay. Needs GHPC_COUNTIN set too.
     GHPC_FRAME_ONCHANGE=1 dump only when the picture differs from the last
@@ -348,6 +376,13 @@ this next starts from a true statement rather than a half-finished round.
   runtime; one 0x5000-byte sample chunk reaches the IOP synth service per
   run and is dropped. `[ghpc/spu2] chunks=` now counts them and `progress.py`
   scores the span as `spu_chunks`; baseline is 1, flat.
+- **The stored 4.7 mark does not reproduce.** 2026-09-11, release: the tree as
+  of the previous round measures `eerate_pct` 3.0, `fps` 1.85, and so does the
+  same tree with this round's taps added. Two arms agreeing at 3.0 means the
+  gap is not a regression from either. Either the mark is optimistic or the
+  host was quieter when it was taken. Re-measure the mark's own tree before
+  claiming a speed win against 4.7, and before reading the 15% stop condition
+  as reachable from where the number actually sits.
 - **`fps` is noisy.** Identical release runs have reported 0.56 and 2.95 at
   the same `eerate_pct`. Treat `eerate_pct` as the speed metric and `fps` as
   a smoke test until someone explains the spread.

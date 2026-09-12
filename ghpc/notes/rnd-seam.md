@@ -209,6 +209,50 @@ With these and the mesh cache, every input a native `DrawFaces` needs is
 available host-side: geometry, world transform, projection, blend and
 texture state.
 
+## The vertex transform, measured
+
+Read off matched pairs rather than from the microcode, which is not
+decompiled: the object-space vert the cache holds against the screen-space
+vert the PS2 path submits for the same mesh. Full method, numbers and control
+in `evidence/2026-09-11-vertex-transform-calibration.txt`.
+
+    world = pos * World      row vector; World rows 0..2 the Matrix3,
+                             row 3 the translation
+    clip  = world * M        M = qw700..703 as rows, implied pos.w of 1
+    q     = 1 / clip.w
+    x     = clip.x * q * qw696.x + qw697.x    GS pixels, 2048-centred
+    y     = clip.y * q * qw696.y + qw697.y
+    z     = clip.z * q * qw696.z + qw697.z
+    s,t   = uv * q           the submit is fst=0, so ST/Q not UV
+
+The camera position at qw698 is **not** subtracted before M: M already carries
+the view transform. Meshes submit as PRIM 4 (tristrip), iip=1 tme=1 abe=0.
+
+On the sample mesh this lands x to a median 0.56 px and q to 0.74%. y is off
+by a near-constant 4 px, and that is the one loose end.
+
+**The object matrix source is still open, and it is not the obvious one.**
+`PsMesh::DrawShowing` at 0x43f2d0 calls `WorldXfm` on the instance
+(`$s2+0x40`) and copies the result to VU1 qw676 behind a `0x6C0402A4` header
+(V4-32, NUM 4, ADDR 676). Capturing that puts the mesh 21 px off in x and 19
+in y, and the instance it names owns a different mesh than the one drawing:
+the draw arrived through DrawShowing's second `DrawFaces` call site at
+0x43f434 without passing 0x43f2ec. The owner's cached `this+0xa0` fits far
+better but its dirty word at +0xe0 reads 1 on every gameplay draw, so it is a
+stale copy, which is the likely source of the 4 px. Find the writer the
+second path uses; do not re-capture at 0x43f2f4, and do not read the cursor
+back at DrawFaces, where the packet has already been flushed.
+
+## Calibrating again
+
+`GHPC_TL_CAL=N` prints the first N primitives the PS2 path submits, tagged
+with the mesh that produced them; `GHPC_TL_CAL_DRAWS` caps the draws (default
+3) and `GHPC_TL_CAL_ANY` drops the wait for `GamePanel::StartGame`. The
+pairing is exact because DMA, VIF1, VU1 and GIF all run inline on the guest
+thread inside the store to D1_CHCR (`ps2_memory.cpp:2094`), so a tag set at
+DrawFaces entry covers exactly that draw's submits. The tap is
+`ghpcTlCalNoteSubmit` in `gs_frontend.cpp`, off unless the mesh tag is set.
+
 ## What the runtime already does
 
 - No Rnd-level hooks exist. Everything under `ps2xRuntime/src/runner/` is

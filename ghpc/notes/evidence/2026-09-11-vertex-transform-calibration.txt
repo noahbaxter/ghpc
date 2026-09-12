@@ -1,0 +1,90 @@
+The VU1 vertex transform, read off matched pairs, 2026-09-11, release build.
+
+A native DrawFaces has to reproduce what VU1 does to a vertex, and the
+microcode is not decompiled. So the convention was measured instead of
+guessed: the object-space vert the host mesh cache holds, paired with the
+screen-space vert the PS2 path submits for the same mesh.
+
+How the pairing is exact. Everything under the guest's store to D1_CHCR runs
+inline on the same thread: writeIORegister walks the DMA tag chain, calls
+processPendingTransfers (ps2_memory.cpp:2094), which parses VIF1, which runs
+the VU1 microprogram, which XGKICKs into the GS frontend. No DMA thread, no
+deferral. So the DrawFaces override setting g_ghpcTlCalMesh before the body
+and the frontend printing every primitive while it is set attributes each
+submitted triangle to one mesh with no ambiguity. GHPC_TL_CAL=N turns it on,
+GHPC_TL_CAL_DRAWS caps the draws, and it waits for GamePanel::StartGame so it
+lands on venue geometry rather than a menu quad.
+
+Sample: mesh 0x007efce0, the first gameplay draw with cached geometry.
+76 object verts, 101 faces, 68 distinct submitted verts, 28 matched by uv.
+Submitted as PRIM 4 (tristrip), iip=1 tme=1 fst=0 abe=0, into a 128-pixel
+render target (fbp=176 fbw=2, ofx 31744, ofy 30720).
+
+    owner world (this+0xa0)   rows (1 0 0) (0 1 0) (0 0 1)
+                              translation (-0.595181 -0.161027 4.56073)
+    qw696 scale               (2007.84 2007.84 -32767.5 -)
+    qw697 offset              (2048 2048 32767.5 -)
+    qw698 camera position     (55.5907 -164.858 3.83131 -)
+    qw700..703 (M rows)       (0.228383 -0.0177929 -0.310548 -0.309928)
+                              (0.0767571 0.0558995 0.92146 0.919619)
+                              (0.000961572 -0.233682 0.243944 0.243457)
+                              (-0.0456751 11.0999 148.219 167.903)
+
+CONFIRMED, the convention:
+
+    world = pos * World                 row vector, World rows 0..2 the
+                                        Matrix3, row 3 the translation
+    clip  = world * M                   M = qw700..703 as rows, w term from
+                                        row 3, so an implied pos.w of 1
+    q     = 1 / clip.w
+    x     = clip.x * q * qw696.x + qw697.x     GS pixels, 2048-centred
+    y     = clip.y * q * qw696.y + qw697.y
+    z     = clip.z * q * qw696.z + qw697.z
+    s,t   = uv * q                      fst=0, so ST/Q not UV
+
+qw698, the camera position, is NOT subtracted before M: doing so puts every
+vertex off screen. M already carries the view transform (PsCam::Select builds
+it as Multiply2(this+0xc0, m, m)).
+
+Residual with the owner's cached transform, over the 28 matched verts:
+
+    dx median  -0.56 px      dy median  -4.01 px      q median +0.74%
+
+x and q land; y is off by a near-constant 4 pixels. The dx and dy ranges are
+wider (-23..18, -10..-2) but that is uv aliasing: 76 object verts share 68
+distinct uvs, so some pairs are mismatched. Verts with a globally unique uv
+sit at the median.
+
+RULED OUT, the instance transform. PsMesh::DrawShowing at 0x43f2d0 takes
+$s2+0x40, the RndTransformable of the instance, calls WorldXfm (0x43f768) and
+copies the four quadwords it returns into the DMA cursor behind a 0x6C0402A4
+VIF header: V4-32, NUM 4, VU1 address 676. That reads like the object matrix,
+and it is not the one this draw used:
+
+    instance WorldXfm         dx median 21.08 px   dy median 19.44 px   q +3.60%
+
+An override on DrawShowing capturing $v0 right after WorldXfm returns names
+instance 0x008dca90 whose mOwner is 0x008aad10, while the mesh being drawn is
+its own owner, 0x007efce0. So the tagged DrawFaces was reached without passing
+0x43f2ec -- DrawShowing has a second DrawFaces call site at 0x43f434 -- and
+the capture belongs to a different chain. Scanning the DMA cursor backwards
+512 quadwords for the 0x6C0402A4 header finds nothing, so the packet holding
+it was already flushed by the time DrawFaces runs. The matrix has to be
+captured at whichever writer the second path uses, not read back.
+
+The residual 4 pixels and the wrong-instance capture are probably one fact.
+`this+0xa0` has its dirty word at +0xe0 reading 1 on every gameplay draw, so
+it is a stale copy, and a frame-late transform on an object moving mostly
+vertically on screen is exactly a small rigid dy with dx near zero. Finding
+the real writer should close both at once.
+
+Control. The taps cost nothing. Same tree with and without them, release,
+progress.py with GHPC_COUNTIN=0.5:
+
+    with taps      rung 9  eerate_pct 3.0  fps 1.85  song_tick 1486.651
+    without taps   rung 9  eerate_pct 3.0  fps 1.85  song_tick 1486.619
+
+Both arms are well under the 4.7 stored in the mark from earlier the same day,
+and the arm without any of this round's changes is one of them, so the gap is
+not this round's. Either the mark is optimistic or the host is loaded; a speed
+claim against 4.7 should re-measure the mark's own tree first.

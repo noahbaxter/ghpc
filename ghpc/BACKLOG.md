@@ -18,73 +18,57 @@ that gets thrown away. Reaching gameplay is not the end goal.
 
 ## Now
 
-**The VU1 runaway is fixed.** The MFIFO drain read a `cnt` payload linearly
-past the ring end; it now wraps (`GHPC_MFIFO_NOWRAP_LEGACY=1` for the old
-read). Same binary: cut-off microprograms 2331 -> 0, release gameplay
-4.13 -> 14.75 Mcycles/sec. `notes/evidence/2026-09-11-mfifo-drain-wrap.txt`
-and the third MFIFO section of `notes/boot-sequence-reference.md`.
+**The `Rnd` seam, first native draw.** Gameplay is ~5% of realtime and VU1
+interpretation is ~80% of the busy thread
+(`notes/evidence/2026-09-11-vu1-profile.txt`). The win is to stop running VU1
+for mesh draws: at `PsMesh::DrawFaces`, for a mesh whose geometry the host
+cache holds, transform the cached verts and hand triangles to `GSCpuBackend`
+directly. About 4x, so 5% toward 20%. The map is `notes/rnd-seam.md`.
 
-Closed the same day: the rarer junk source was the same bug (a cnt tag in the
-ring's last quadword puts its payload at exactly ring end; the wrap range is
-now inclusive), and the picture is confirmed sane
-(`notes/evidence/2026-09-11-gameplay-frame-*.png`: venue, fretboard, gems).
+Done: the vertex transform, measured rather than guessed
+(`notes/evidence/2026-09-11-vertex-transform-calibration.txt`). Pairing the
+cached object-space verts against the screen-space verts the PS2 path submits
+for the same mesh pins the convention:
 
-**Next: the `Rnd` seam.** Gameplay is at 5% of realtime on release, so the
-remaining 20x is VU1 interpretation and the software GS. The map is
-`notes/rnd-seam.md`: hierarchy, the hook set (`PsRnd::BeginDrawing`
-0x1bfed0, `EndDrawing` 0x1c0070, `FlushPacket` 0x43e400, `PsMesh::DrawFaces`
-0x43eea0, `PsMat::Select` 0x43ea70, `PsTex::Select` 0x43f490, `PsCam::Select`
-0x1c1770), the data shapes that are known, and what is not. Hand-written
-bodies now survive a build through `ghpc/override/` (`scripts/overlay.sh`,
-proof override `EIntr_0x3518c8`), so the seam has somewhere to live.
+    clip = (pos * World) * M    M = qw700..703 as rows, row vectors
+    q    = 1 / clip.w
+    x    = clip.x * q * qw696.x + qw697.x     y and z the same
+    s,t  = uv * q               the submit is fst=0, PRIM 4, iip=1
 
-Done: `PsMesh::DrawFaces` and `PsMesh::Sync` overrides log the engine-level
-mesh under `GHPC_MESH_LOG`. Geometry is empty at draw time and present at
-Sync entry; the contract and the addresses where it is freed are in the
-seam note. Rung and speed unchanged with both overrides in.
+qw698, the camera position, is not subtracted: M carries the view transform.
+On the sample mesh this lands x to a median 0.56 px and q to 0.74%.
 
-Done: the host-side mesh cache. 99% of draws on `game_screen` find their
-geometry host-side (`[ghpc/mesh/cache] hits=115314 misses=1024`).
+The pairing is exact because DMA, VIF1, VU1 and GIF all run inline on the
+guest thread inside the store to D1_CHCR (`ps2_memory.cpp:2094`), so a mesh
+tag set at DrawFaces entry covers exactly that draw's submits. `GHPC_TL_CAL=N`
+turns it on. The taps cost nothing: same tree with and without, rung 9,
+eerate_pct 3.0 and fps 1.85 on both.
 
-**Where the time goes**, `notes/evidence/2026-09-11-vu1-profile.txt`: VU1
-interpretation is ~80% of the busy thread, the software GS under 20%, VIF1
-nothing. Inside VU1 the pipeline model is two thirds. An early-out on the
-pipeline commit was tried and reverted: something is due every cycle, so it
-never fires. A ready-ordered queue rewrite is worth ~1.25x at best. The
-seam is the 20x.
+**Next, and the one thing blocking the draw: where the object matrix comes
+from.** y is off by a near-constant 4 px, and the obvious source is wrong.
+`PsMesh::DrawShowing` at 0x43f2d0 calls `WorldXfm` on the instance and uploads
+it to VU1 qw676, but capturing that puts the mesh 21 px off in x and 19 in y,
+and the instance it names owns a different mesh: the draw arrived through
+DrawShowing's second `DrawFaces` call site at 0x43f434 without passing
+0x43f2ec. The owner's cached `this+0xa0` fits much better but its dirty word
+at +0xe0 reads 1 on every gameplay draw, so it is stale, which is the likely
+4 px. Find the writer the 0x43f434 path uses. Do not re-capture at 0x43f2f4,
+and do not read the cursor back at DrawFaces: the packet is already flushed.
 
-Done: all four backend inputs are captured host-side and named in the seam
-note. Geometry (cache, 99% hit), camera (8 quadwords, both VIF headers
-verified on all 56 selects), material (blend, colour, five GS register
-images), texture (size, depth, bitmap, TEX0/TEX1). The 1024 misses are three
-meshes; the biggest is mutable geometry that keeps its verts and so needs no
-cache. Six overrides in, speed unchanged.
+Then the draw itself. Keep the PS2 path for cache misses and behind an env
+knob so both arms are the same binary. Pass is `eerate_pct` up on that binary
+with the rung still 9 and the gameplay chain alive (`BeatMatch::Poll`
+0x1259c0, `PlayerMatcher::Poll` 0x117dd0), plus a frame capture that still
+shows the venue.
 
-**Next: the first native draw.** At `DrawFaces`, for a cache hit, transform
-the cached verts by the owner's world transform (+0xa0) and the last
-camera's projection, and hand triangles to `GSCpuBackend` directly instead
-of building the packet and kicking it. Keep the PS2 path for misses and
-behind an env knob, so the arms are the same binary.
+**The stored mark of 4.7 does not reproduce.** The tree as of the previous
+round measures 3.0 on this host. Re-measure the mark's own tree before
+claiming a speed win against it.
 
-Sizing, from `notes/evidence/2026-09-11-vu1-profile.txt`: this skips VU1,
-which is ~80% of the busy thread, and keeps the software rasteriser. About
-4x, so 5% to roughly 20%. A native GL backend takes the rasteriser's share
-too and is a much larger piece of work; do it after, not instead.
-
-Pass is `eerate_pct` up on the same binary with the rung still 9 and the
-gameplay chain alive (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll`
-0x117dd0), plus a frame capture that still shows the venue. Fail is a
-picture that loses geometry: then compare the native triangles against the
-packet the PS2 path would have kicked, on one mesh, before going further.
-
-Ruled out this round: VIF command sizing (PCSX2 rules agree with the runtime
-on every command before the ring end), TTE tag splicing (2 tags total), and
-the STCYCL WL=0 words as a GH2 behaviour (they were bytes past the ring end;
-the decode stays because it matches hardware).
-
-Done earlier in the same thread: the VIF1 residual fix
-(`GHPC_VIF1_NO_RESIDUAL=1`), the scratchpad DMA decode (0x30b0 runaway), and
-the STCYCL WL=0 decode (`GHPC_VIF_STCYCL_LEGACY=1`).
+Also done and still standing: the host mesh cache (99% of gameplay draws find
+their geometry host-side, `[ghpc/mesh/cache] hits=115314 misses=1024`) and all
+four backend inputs captured and named in the seam note. Six overrides in,
+speed unchanged.
 
 Cheap and still pending: cache three `getenv` calls in the VIF1 hot path
 (`ps2_vif1_interpreter.cpp:947` per MSCAL, plus 816 and 901), 45 profile

@@ -31,6 +31,7 @@
 //   Vert stride 64: VertVector::resize 0x1f1d94 `sll $a0, $s1, 6`; layout
 //   pos@0 norm@0x10 color@0x20 uv@0x30 is the decomp's (RndMesh.h:279), pinned
 //   by which words resize's initialiser writes.
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -53,6 +54,28 @@
 // which is the owner mesh (see +0x138 above).
 void ghpcMeshCacheStore(const uint8_t* rdram, uint32_t self, uint32_t vertPtr, uint32_t vertCnt, uint32_t faceBeg, uint32_t faceEnd);
 bool ghpcMeshCacheLookup(uint32_t self, uint32_t* vertCnt, uint32_t* faceCnt, const uint8_t** verts, const uint8_t** faces);
+
+// The camera the last PsCam::Select staged, from Select__5PsCam_0x1c1770.cpp.
+extern float g_ghpcCamQw[8][4];
+extern uint32_t g_ghpcCamThis;
+extern uint64_t g_ghpcCamSelects;
+
+// The calibration tag the GS frontend reads (gs_frontend.cpp). Set to the
+// mesh about to be drawn, so every primitive the PS2 path submits for it is
+// printed next to the object-space verts printed here. Everything downstream
+// of the DMA kick runs synchronously on this thread, so the pairing is exact.
+extern uint32_t g_ghpcTlCalMesh;
+
+// GamePanel::StartGame has run (ps2_runtime.cpp:409). Same gate
+// GHPC_FRAME_AFTER_START uses, so the calibration lands on gameplay.
+extern std::atomic<bool> g_ghpcGameStarted;
+
+// The world transform of the instance that is drawing, captured by the
+// DrawShowing override right after WorldXfm returns. This is the matrix VU1
+// gets (qw676..679); the owner's cached one at this+0xa0 is stale.
+extern float g_ghpcInstWorld[4][4];
+extern uint32_t g_ghpcInstThis;
+extern uint32_t g_ghpcInstOwner;
 
 namespace {
 
@@ -146,6 +169,101 @@ void ghpcMeshLog(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_
         ghpcMeshF32(rdram, ctx, runtime, w + 0x30u), ghpcMeshF32(rdram, ctx, runtime, w + 0x34u), ghpcMeshF32(rdram, ctx, runtime, w + 0x38u));
 }
 
+// One matched pair for the transform calibration: everything a native draw
+// would read (cached object-space verts, the owner's world transform, the
+// staged camera) printed just before the PS2 path runs, so the screen-space
+// verts the frontend prints under the same mesh tag can be checked against a
+// candidate formula. GHPC_TL_CAL=N enables it and caps the primitives the
+// frontend prints; GHPC_TL_CAL_DRAWS caps the draws tagged here, default 3.
+// Returns the mesh to tag, or 0.
+uint32_t ghpcMeshTlCal(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
+    static const bool s_on = std::getenv("GHPC_TL_CAL") != nullptr;
+    if (!s_on) return 0u;
+    static const long s_maxDraws = []() {
+        const char* e = std::getenv("GHPC_TL_CAL_DRAWS");
+        return (e != nullptr) ? std::strtol(e, nullptr, 0) : 3l;
+    }();
+    // The draws before StartGame are menu and loading-screen quads under a 2D
+    // camera, which pin none of the perspective terms. Wait for gameplay, the
+    // same instant GHPC_FRAME_AFTER_START waits for. GHPC_TL_CAL_ANY takes
+    // whatever draws first instead, for a run that will not reach gameplay.
+    static const bool s_any = std::getenv("GHPC_TL_CAL_ANY") != nullptr;
+    static long s_draws = 0;
+    if (s_draws >= s_maxDraws) return 0u;
+    if (!s_any && !g_ghpcGameStarted.load(std::memory_order_relaxed)) return 0u;
+
+    uint32_t vertCnt = 0, faceCnt = 0;
+    const uint8_t* verts = nullptr;
+    const uint8_t* faces = nullptr;
+    if (!ghpcMeshCacheLookup(self, &vertCnt, &faceCnt, &verts, &faces)) return 0u;
+    if (vertCnt == 0 || faceCnt == 0) return 0u;
+    ++s_draws;
+
+    std::fprintf(stderr,
+        "[ghpc/tlcal] --- draw %ld mesh=0x%08x verts=%u faces=%u packetQw=%u flags140=0x%08x"
+        " cam=0x%08x camSelects=%llu worldDirty=%u\n",
+        s_draws, self, vertCnt, faceCnt, (unsigned)READ16(self + 0x154u),
+        READ32(self + 0x140u), g_ghpcCamThis, (unsigned long long)g_ghpcCamSelects,
+        READ32(self + 0xe0u));
+
+    const uint32_t w = self + 0xa0u;
+    for (int r = 0; r < 4; ++r) {
+        std::fprintf(stderr, "[ghpc/tlcal]   ownerworld%d=(%g %g %g %g)\n", r,
+            ghpcMeshF32(rdram, ctx, runtime, w + (uint32_t)r * 0x10u + 0x0u),
+            ghpcMeshF32(rdram, ctx, runtime, w + (uint32_t)r * 0x10u + 0x4u),
+            ghpcMeshF32(rdram, ctx, runtime, w + (uint32_t)r * 0x10u + 0x8u),
+            ghpcMeshF32(rdram, ctx, runtime, w + (uint32_t)r * 0x10u + 0xcu));
+    }
+    std::fprintf(stderr, "[ghpc/tlcal]   inst=0x%08x instOwner=0x%08x selfOwner=0x%08x\n",
+        g_ghpcInstThis, g_ghpcInstOwner, READ32(self + 0x138u));
+
+    // The object matrix VU1 actually received, read out of the packet rather
+    // than inferred from a call path. PsMesh::DrawShowing writes it at
+    // 0x43f308..0x43f32c as four quadwords behind a 0x6C0402A4 VIF header
+    // (V4-32, NUM 4, VU1 address 676), and material and texture registers are
+    // appended after it, so it sits a bounded distance below the cursor.
+    {
+        const uint32_t cur = runtime->Load32(rdram, ctx, 0x70000008u);
+        uint32_t hdr = 0u;
+        for (uint32_t back = 1; back <= 512u; ++back) {
+            const uint32_t a = cur - back * 0x10u;
+            if (READ32(a + 0xcu) == 0x6C0402A4u) { hdr = a; break; }
+        }
+        std::fprintf(stderr, "[ghpc/tlcal]   qw676hdr=0x%08x cursor=0x%08x\n", hdr, cur);
+        for (uint32_t r = 0; r < 4u && hdr != 0u; ++r) {
+            const uint32_t q = hdr + 0x10u + r * 0x10u;
+            std::fprintf(stderr, "[ghpc/tlcal]   vuworld%u=(%g %g %g %g)\n", r,
+                ghpcMeshF32(rdram, ctx, runtime, q + 0x0u), ghpcMeshF32(rdram, ctx, runtime, q + 0x4u),
+                ghpcMeshF32(rdram, ctx, runtime, q + 0x8u), ghpcMeshF32(rdram, ctx, runtime, q + 0xcu));
+        }
+    }
+    for (int r = 0; r < 4; ++r) {
+        std::fprintf(stderr, "[ghpc/tlcal]   world%d=(%g %g %g %g)\n", r,
+            g_ghpcInstWorld[r][0], g_ghpcInstWorld[r][1],
+            g_ghpcInstWorld[r][2], g_ghpcInstWorld[r][3]);
+    }
+    for (int i = 0; i < 8; ++i) {
+        std::fprintf(stderr, "[ghpc/tlcal]   qw%d=(%g %g %g %g)\n", 696 + i,
+            g_ghpcCamQw[i][0], g_ghpcCamQw[i][1], g_ghpcCamQw[i][2], g_ghpcCamQw[i][3]);
+    }
+
+    const uint32_t nv = vertCnt < 256u ? vertCnt : 256u;
+    for (uint32_t i = 0; i < nv; ++i) {
+        float f[16];
+        std::memcpy(f, verts + (size_t)i * 64u, sizeof(f));
+        std::fprintf(stderr,
+            "[ghpc/tlcal]   ov%u pos=(%g %g %g) norm=(%g %g %g) color=(%g %g %g %g) uv=(%g %g)\n",
+            i, f[0], f[1], f[2], f[4], f[5], f[6], f[8], f[9], f[10], f[11], f[12], f[13]);
+    }
+    const uint32_t nf = faceCnt < 256u ? faceCnt : 256u;
+    for (uint32_t i = 0; i < nf; ++i) {
+        uint16_t idx[3];
+        std::memcpy(idx, faces + (size_t)i * 6u, sizeof(idx));
+        std::fprintf(stderr, "[ghpc/tlcal]   of%u %u %u %u\n", i, idx[0], idx[1], idx[2]);
+    }
+    return self;
+}
+
 } // namespace
 
 // Function: DrawFaces__6PsMesh
@@ -173,6 +291,11 @@ void DrawFaces__6PsMesh_0x43eea0(uint8_t* rdram, R5900Context* ctx, PS2Runtime *
 
     // Fresh entry only (a resume above jumps past this). $a0 is `this`.
     ghpcMeshCacheProbe(rdram, ctx, runtime, GPR_U32(ctx, 4));
+    // Tag stays set through the body: the DMA kick and everything under it
+    // run inline, so the frontend's submits land while this is current. It is
+    // cleared by the next fresh entry rather than at the return, because the
+    // body has a dozen yield points and none of them is the only exit.
+    g_ghpcTlCalMesh = ghpcMeshTlCal(rdram, ctx, runtime, GPR_U32(ctx, 4));
     {
         static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
         if (s_log) {

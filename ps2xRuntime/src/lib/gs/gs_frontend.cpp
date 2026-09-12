@@ -1871,6 +1871,46 @@ void ghpcNoteSubmit(const GSPrimitiveBatch &b)
 unsigned long long g_ghpcKickDraw = 0ull, g_ghpcKickAdc = 0ull;
 #endif
 
+// Transform calibration tap for the Rnd seam. A native DrawFaces has to
+// reproduce what VU1 does to a vertex, and the microcode is not decompiled,
+// so the convention has to be read off matched pairs: the object-space vert
+// the mesh cache holds against the screen-space vert the PS2 path submits.
+// The DrawFaces override sets g_ghpcTlCalMesh to the mesh it is about to
+// draw and everything submitted until the next draw belongs to it, because
+// DMA, VIF1, VU1 and GIF all run synchronously inside the guest's store to
+// D1_CHCR on this thread (ps2_memory.cpp:2094 processPendingTransfers).
+// Zero when off, so the cost is one predictable branch per primitive.
+uint32_t g_ghpcTlCalMesh = 0u;
+
+void ghpcTlCalNoteSubmit(const GSPrimitiveBatch &b)
+{
+    static const long cap = []() {
+        const char *e = std::getenv("GHPC_TL_CAL");
+        return (e != nullptr) ? std::strtol(e, nullptr, 0) : 0l;
+    }();
+    static long shown = 0;
+    if (shown >= cap)
+        return;
+    ++shown;
+    const GSContext &c = b.state.context;
+    std::fprintf(stderr,
+        "[ghpc/tlcal] mesh=0x%08x prim=%u n=%u iip=%u tme=%u fst=%u abe=%u ctxt=%u"
+        " ofx=%u ofy=%u fbp=%u fbw=%u tbp0=%u tw=%u th=%u\n",
+        g_ghpcTlCalMesh, (unsigned)b.state.prim.type, (unsigned)b.vertexCount,
+        (unsigned)b.state.prim.iip, (unsigned)b.state.prim.tme, (unsigned)b.state.prim.fst,
+        (unsigned)b.state.prim.abe, (unsigned)b.state.prim.ctxt,
+        (unsigned)c.xyoffset.ofx, (unsigned)c.xyoffset.ofy, c.frame.fbp, c.frame.fbw,
+        c.tex0.tbp0, (unsigned)c.tex0.tw, (unsigned)c.tex0.th);
+    for (unsigned i = 0u; i < b.vertexCount; ++i)
+    {
+        const GSVertex &v = b.vertices[i];
+        std::fprintf(stderr,
+            "[ghpc/tlcal]   v%u xy=(%g %g) z=%g q=%g st=(%g %g) uv=(%u %u) rgba=(%u %u %u %u)\n",
+            i, v.x, v.y, (double)v.z, v.q, v.s, v.t, (unsigned)v.u, (unsigned)v.v,
+            (unsigned)v.r, (unsigned)v.g, (unsigned)v.b, (unsigned)v.a);
+    }
+}
+
 void GS::vertexKick(bool drawing)
 {
 #if GHPC_DIAG
@@ -1949,6 +1989,8 @@ void GS::vertexKick(bool drawing)
             ghpcNoteSubmit(batch);
         }
 #endif
+        if (g_ghpcTlCalMesh != 0u)
+            ghpcTlCalNoteSubmit(batch);
         updatePreferredDisplaySourceForDraw(batch);
         m_backend->Submit(batch);
         recordDrawDebugEventUnlocked(needed);

@@ -48,6 +48,16 @@
 #include "ps2_log.h"
 #endif
 
+// The last camera staged, kept host-side for the seam. A native DrawFaces
+// needs the projection this call just built, and this is the only place it
+// exists in a readable form: qw700..703 are the rows, 696/697 the viewport
+// scale and offset, 698 the camera position. Captured on every call, not
+// just the logged ones, and only when both VIF headers check out, so a
+// reader never sees a half-built packet. Consumed by the DrawFaces override.
+float g_ghpcCamQw[8][4] = {};
+uint32_t g_ghpcCamThis = 0u;      // the PsCam that staged them
+uint64_t g_ghpcCamSelects = 0ull; // total selects with a good packet
+
 namespace {
 
 // Guest float through the same masked path the generated code uses; READ32
@@ -57,6 +67,19 @@ inline float ghpcCamF32(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, 
     float f;
     std::memcpy(&f, &bits, sizeof(f));
     return f;
+}
+
+void ghpcCamCapture(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
+    const uint32_t cur = runtime->Load32(rdram, ctx, 0x70000008u);
+    if (READ32(cur - 0xa0u + 0xcu) != 0x7C0202B8u) return;
+    if (READ32(cur - 0x70u + 0xcu) != 0x6C0602BAu) return;
+    for (uint32_t i = 0; i < 8; ++i) {
+        const uint32_t q = (i < 2) ? (cur - 0x90u + i * 0x10u) : (cur - 0x60u + (i - 2) * 0x10u);
+        for (uint32_t k = 0; k < 4; ++k)
+            g_ghpcCamQw[i][k] = ghpcCamF32(rdram, ctx, runtime, q + k * 4u);
+    }
+    g_ghpcCamThis = self;
+    ++g_ghpcCamSelects;
 }
 
 void ghpcCamLog(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self, uint64_t n) {
@@ -1977,6 +2000,7 @@ label_1c1ec0:
     // above (the only `jr $ra` is at 0x1c1f10). $s0 is still `this` here;
     // the next instruction restores it. The packet cursor already points
     // past qw703.
+    ghpcCamCapture(rdram, ctx, runtime, GPR_U32(ctx, 16));
     {
         static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
         if (s_log) {
