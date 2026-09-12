@@ -53,18 +53,29 @@ pipeline commit was tried and reverted: something is due every cycle, so it
 never fires. A ready-ordered queue rewrite is worth ~1.25x at best. The
 seam is the 20x.
 
-Next seam round: the other three inputs. Log at `PsMat::Select` 0x43ea70
-and `PsTex::Select` 0x43f490 what material and texture state a draw carries
-(blend, the texture's `RndBitmap` at +0x28, width/height/bpp at +0x4c..),
-and at `PsCam::Select` 0x1c1770 the matrices it uploads (qw696-703), each
-as an override that keeps the generated body. With those and the mesh
-cache, the first native draw is: at DrawFaces, transform the cached verts by
-the owner's world xfm (+0xa0) and the last camera, and rasterise on the host
-instead of kicking the packet. Same-build control arm, and the guest must
-still run `BeatMatch::Poll` and `PlayerMatcher::Poll`.
+Done: all four backend inputs are captured host-side and named in the seam
+note. Geometry (cache, 99% hit), camera (8 quadwords, both VIF headers
+verified on all 56 selects), material (blend, colour, five GS register
+images), texture (size, depth, bitmap, TEX0/TEX1). The 1024 misses are three
+meshes; the biggest is mutable geometry that keeps its verts and so needs no
+cache. Six overrides in, speed unchanged.
 
-Also open: the 1024 cache misses. Say which meshes they are (owner, flags)
-before the fretboard turns out to be one of them.
+**Next: the first native draw.** At `DrawFaces`, for a cache hit, transform
+the cached verts by the owner's world transform (+0xa0) and the last
+camera's projection, and hand triangles to `GSCpuBackend` directly instead
+of building the packet and kicking it. Keep the PS2 path for misses and
+behind an env knob, so the arms are the same binary.
+
+Sizing, from `notes/evidence/2026-09-11-vu1-profile.txt`: this skips VU1,
+which is ~80% of the busy thread, and keeps the software rasteriser. About
+4x, so 5% to roughly 20%. A native GL backend takes the rasteriser's share
+too and is a much larger piece of work; do it after, not instead.
+
+Pass is `eerate_pct` up on the same binary with the rung still 9 and the
+gameplay chain alive (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll`
+0x117dd0), plus a frame capture that still shows the venue. Fail is a
+picture that loses geometry: then compare the native triangles against the
+packet the PS2 path would have kicked, on one mesh, before going further.
 
 Ruled out this round: VIF command sizing (PCSX2 rules agree with the runtime
 on every command before the ring end), TTE tag splicing (2 tags total), and

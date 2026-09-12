@@ -59,7 +59,11 @@ namespace {
 // Hit/miss census for the cache. Prints under GHPC_MESH_LOG on the first 40
 // calls and every 500th, and unconditionally whenever the miss count reaches
 // a power of two, so a plain run still shows the miss rate in a few lines.
-void ghpcMeshCacheProbe(uint32_t self) {
+// The first 24 misses also get a `[ghpc/mesh/miss]` line under GHPC_MESH_LOG
+// naming the mesh (owner, +0x140 flags, live vector sizes, packet size) so
+// the misses can be classified: mutable geometry keeps verts > 0, an
+// instance has owner != this, a pre-log Sync shows verts=0 with a packet.
+void ghpcMeshCacheProbe(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
     static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
     static uint64_t s_calls = 0, s_hits = 0, s_misses = 0;
     uint32_t verts = 0, faces = 0;
@@ -76,6 +80,14 @@ void ghpcMeshCacheProbe(uint32_t self) {
     if (print) {
         std::fprintf(stderr, "[ghpc/mesh/cache] hits=%llu misses=%llu thisHit=%d verts=%u faces=%u\n",
             (unsigned long long)s_hits, (unsigned long long)s_misses, hit ? 1 : 0, verts, faces);
+    }
+    if (!hit && s_log && s_misses <= 24) {
+        const int32_t  vertCnt  = (int32_t)READ32(self + 0x104u);
+        const uint32_t faceBeg  = READ32(self + 0x108u);
+        const uint32_t faceEnd  = READ32(self + 0x10cu);
+        const uint32_t faceCnt  = (faceEnd >= faceBeg) ? (faceEnd - faceBeg) / 6u : 0u;
+        std::fprintf(stderr, "[ghpc/mesh/miss] this=0x%08x owner=0x%08x flags140=0x%08x verts=%d faces=%u packetQw=%u\n",
+            self, READ32(self + 0x138u), READ32(self + 0x140u), vertCnt, faceCnt, (unsigned)READ16(self + 0x154u));
     }
 }
 
@@ -160,7 +172,7 @@ void DrawFaces__6PsMesh_0x43eea0(uint8_t* rdram, R5900Context* ctx, PS2Runtime *
     }
 
     // Fresh entry only (a resume above jumps past this). $a0 is `this`.
-    ghpcMeshCacheProbe(GPR_U32(ctx, 4));
+    ghpcMeshCacheProbe(rdram, ctx, runtime, GPR_U32(ctx, 4));
     {
         static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
         if (s_log) {

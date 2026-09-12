@@ -155,8 +155,59 @@ clear and verts > 0; the DrawFaces override looks `this` up and counts.
 Release, 150s to and on `game_screen`: hits 115314, misses 1024
 (`[ghpc/mesh/cache]`). So at draw time the backend has the geometry for
 99% of draws host-side, with no guest behaviour change (rung 9, speed same).
-The misses are the mutable meshes and instances whose owner Synced before
-the run's first log; whether the fretboard is among them is unmeasured.
+The misses are three meshes, not a class of them. Release, 150s, the first
+24 named by `[ghpc/mesh/miss]`:
+
+    16   flags140=0x1f  verts=4  faces=0   packetQw=12   one mesh
+     8   flags140=0     verts=0  faces=0   packetQw=19   two meshes
+
+The 0x1f one is mutable geometry, which the cache skips on purpose because
+Sync leaves its verts alone. Those verts are therefore still there at draw
+time and a backend reads them directly, so that mesh needs no cache. The
+other two were converted before the first Sync this run observed. Nothing
+in the miss set is a class the cache cannot reach.
+
+## The other three inputs, measured
+
+Three more overrides log at `PsMat::Select`, `PsTex::Select` and
+`PsCam::Select` under `GHPC_MESH_LOG`. Release, 150s: 407 material selects,
+212 texture selects, 56 camera selects. Speed unchanged with all six
+overrides in (4.9 to 5.1%).
+
+**Camera.** All 56 calls verified both VIF headers (`0x7C0202B8` then
+`0x6C0602BA`), so the 8 quadwords are read where the game finished building
+them, in the DMA cursor at scratchpad 0x70000008. They decode as:
+
+    qw696  viewport scale       (2007.84 2007.84 -29490.8 0)
+    qw697  viewport offset      (2048 2048 29490.8 0)
+    qw698  camera position      = WorldXfm(this)->v
+    qw699  guard band scale
+    qw700..703  projection rows, far and near patched in, then
+                Multiply2(this+0xc0, m, m)
+
+2048 is the centre of the GS 4096 coordinate space, and the W lanes of 696
+and 697 are stale buffer content because STMASK 0xC0C0C0C0 protects them.
+Frustum fields at +0x2c0 near, +0x2c4 far, +0x2c8 y_fov, +0x2cc z_range.
+The menus use near 1 far 1000, gameplay near 400 far 1060, both y_fov
+0.6024 radians. y_fov 0 takes the orthographic branch.
+
+**Material.** Per draw: blend mode at +0x2c (1 and 3 dominate, 4 modes seen),
+`mColor` RGBA at +0x30, and ready-made GS register images for ALPHA_1
+(+0x138), DIMX (+0x140), TEST_1 (+0x148), CLAMP_1 (+0x150) and ZBUF_1
+(+0x158), each pinned by the `SetRegister` calls in the body. 379 of 407
+draws carry a texture pointer at +0x134; TFX at +0x130 is 0 on all but 6.
+
+**Texture.** Dimensions and depth at +0x4c/+0x50/+0x54, the `RndBitmap` at
++0x28, and PS2 register images TEX0_1 (+0x70), TEX1_1 (+0x78) and the two
+MIPTBP words. Sizes run 32x64 to 512x256 at 4, 8 and 16 bpp. Caveat on
+format: TEX0 is logged as read at entry, before the body patches TBP0 and
+TFX, so the PSM histogram (0, 2, 19, 20) includes uninitialised first
+selects and is not a reliable format census yet. Read it after the patch
+if the format matters.
+
+With these and the mesh cache, every input a native `DrawFaces` needs is
+available host-side: geometry, world transform, projection, blend and
+texture state.
 
 ## What the runtime already does
 
