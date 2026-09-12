@@ -1,0 +1,62 @@
+VU1 is the gameplay cost, 2026-09-11, release build (build/), `sample` of
+ps2EntryRunner for 15s on game_screen, GHPC_COUNTIN=0.5 bootskip on. The
+eerate line during the sample read 20.90 Mcycles/sec at t~45s; steady-state
+gameplay runs on this build are 14.7 to 15.4.
+
+Top of stack, samples, all threads. The kernel wait entries are idle worker
+and audio threads and are not cost. Everything below them is the EE thread.
+
+   4063  VU1Interpreter::commitReadyPipelines() 
+   1515  VU1Interpreter::calculatePairReadyCycle(VU1Interpreter::DecodedInstructionPair const&) const 
+    852  GSCpuBackend::SampleTexture(GSDrawState const&, float, float, float, unsigned short, unsigned short)::$_0::operator()(int, int) const 
+    788  VU1Interpreter::run(unsigned char*, unsigned int, unsigned char*, unsigned int, GS&, PS2Memory*, unsigned int) 
+    712  VU1Interpreter::execUpper(unsigned int) 
+    592  VU1Interpreter::calculateFmacExactResult(unsigned int, long double&) const 
+    421  VU1Interpreter::markPairWrites(VU1Interpreter::DecodedInstructionPair const&) 
+    415  GSCpuBackend::WritePixel(GSDrawState const&, int, int, int, unsigned char, unsigned char, unsigned char, unsigned char, unsigned char) 
+    390  VU1Interpreter::updateFmacFlags(unsigned char const*, unsigned char, unsigned int) 
+    323  VU1Interpreter::execLower(unsigned int, unsigned char*, unsigned int, GS&, PS2Memory*, unsigned int) 
+    305  VU1Interpreter::calculateFmacProductSticky(unsigned char) const 
+    276  GSCpuBackend::Submit(GSPrimitiveBatch const&) 
+    228  VU1Interpreter::queueVfWrite(unsigned char, unsigned char, float const*, unsigned int) 
+    213  VU1Interpreter::normalizeFmacResult(float*, unsigned char, unsigned char*) 
+    208  VU1Interpreter::progressXgkick() 
+    173  GSCpuBackend::SampleTexture(GSDrawState const&, float, float, float, unsigned short, unsigned short) 
+     65  __bzero 
+     47  _platform_memmove 
+     46  PS2Memory::processVIF1Data(unsigned char const*, unsigned int) 
+     34  VU1Interpreter::applyFmacDestAcc(float*, unsigned char) 
+     32  iokit_user_client_trap 
+     32  objc_msgSend 
+
+Grouped: VU1Interpreter ~9,600 samples, GSCpuBackend and GSMem ~1,900,
+VIF1 46. VU1 interpretation is about 80% of the busy thread, the software
+rasteriser under 20%. Inside VU1 the pipeline model (commitReadyPipelines,
+calculatePairReadyCycle, markPairWrites) is about 6,000 and the exact-FMAC
+arithmetic (calculateFmacExactResult, ProductSticky, updateFmacFlags,
+normalizeFmacResult) about 1,500. long double is 64-bit on arm64 macOS, so
+the exact path is not paying for extended precision.
+
+ATTEMPT, SAME: skip commitReadyPipelines when nothing is due
+
+Tracked a pending count and the minimum readyCycle across the seven
+pipeline arrays, early-out on `pending == 0 || nextReady > cycle`, recount
+after each commit pass. Debug build: zero bookkeeping mismatches over 84,000
+MSCALs, zero cut-offs, rung 9. Release, same binary:
+
+    early-out on        15.39 / 15.29 / 14.66 Mcycles/sec
+    GHPC_VU1_PIPE_LEGACY 11.41 / 10.93 / 10.95
+
+The legacy arm is not a control: it still pays the recount after every
+commit, which is a second full scan, and that is what it lost. Against the
+previous binary (14.75, 14.88, 14.66) the early-out arm is unchanged. The
+early-out rarely fires: FMAC latency is 4 and the stream issues one upper
+per cycle, so one entry becomes ready every cycle and the scan runs anyway.
+Reverted.
+
+What would work instead: the scan itself is the cost, not the empty case.
+Per-pipeline queues kept in ready order (constant latency per pipeline makes
+issue order ready order, except vf writes from loads) with head-pop commits
+would make a commit O(ready entries) instead of O(51 slots). Estimated 20 to
+30% of VU1 time, so ~1.25x gameplay at best. The seam removes VU1 entirely
+and is where the 20x is.

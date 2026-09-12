@@ -43,14 +43,28 @@ mesh under `GHPC_MESH_LOG`. Geometry is empty at draw time and present at
 Sync entry; the contract and the addresses where it is freed are in the
 seam note. Rung and speed unchanged with both overrides in.
 
-Next seam round: a host-side mesh cache. At Sync entry copy `Vert[]` and
-`Face[]` keyed by mesh address (only when `+0x140 & 0x1f == 0`, since those
-are the ones that get freed); at DrawFaces look the owner up and log a hit
-or miss. Pass is every DrawFaces hitting the cache on `game_screen`. Then
-the same logging pass for `PsMat::Select` 0x43ea70 and `PsTex::Select`
-0x43f490 (what material and texture state a draw carries) and
-`PsCam::Select` 0x1c1770 (the matrices), so the backend's other three
-inputs are read from the running game the same way.
+Done: the host-side mesh cache. 99% of draws on `game_screen` find their
+geometry host-side (`[ghpc/mesh/cache] hits=115314 misses=1024`).
+
+**Where the time goes**, `notes/evidence/2026-09-11-vu1-profile.txt`: VU1
+interpretation is ~80% of the busy thread, the software GS under 20%, VIF1
+nothing. Inside VU1 the pipeline model is two thirds. An early-out on the
+pipeline commit was tried and reverted: something is due every cycle, so it
+never fires. A ready-ordered queue rewrite is worth ~1.25x at best. The
+seam is the 20x.
+
+Next seam round: the other three inputs. Log at `PsMat::Select` 0x43ea70
+and `PsTex::Select` 0x43f490 what material and texture state a draw carries
+(blend, the texture's `RndBitmap` at +0x28, width/height/bpp at +0x4c..),
+and at `PsCam::Select` 0x1c1770 the matrices it uploads (qw696-703), each
+as an override that keeps the generated body. With those and the mesh
+cache, the first native draw is: at DrawFaces, transform the cached verts by
+the owner's world xfm (+0xa0) and the last camera, and rasterise on the host
+instead of kicking the packet. Same-build control arm, and the guest must
+still run `BeatMatch::Poll` and `PlayerMatcher::Poll`.
+
+Also open: the 1024 cache misses. Say which meshes they are (owner, flags)
+before the fretboard turns out to be one of them.
 
 Ruled out this round: VIF command sizing (PCSX2 rules agree with the runtime
 on every command before the ring end), TTE tag splicing (2 tags total), and
