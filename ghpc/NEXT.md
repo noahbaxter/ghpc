@@ -79,174 +79,98 @@ Sizing it honestly, so no round oversells its result:
 
 ## Current target
 
-**The VU1 runaway is fixed, and the 5% win landed. See `BACKLOG.md` `Now`
-for what follows.** The mechanism: the MFIFO drain copied a `cnt` tag's
-payload linearly from RAM, and a payload starting in the last quadwords of
-the ring (end 0xb80000) handed VIF1 whatever sits past it. The fill side
-already wrapped. Fixed in `appendData` by address, as PCSX2 does;
-`GHPC_MFIFO_NOWRAP_LEGACY=1` is the control arm. Measured on one binary:
-cut-off microprograms 2331 -> 0 in 74,000 MSCALs, release gameplay 4.13 ->
-14.75 Mcycles/sec (1.4% -> 5.0%). Full table in
-`notes/evidence/2026-09-11-mfifo-drain-wrap.txt`. Every "STCYCL 0x0011" and
-"0xffff0000" word chased in earlier rounds was memory past the ring end.
+**The `Rnd` seam. Write the first native draw.**
 
-The history below is kept because its ruled-out list is still the ruled-out
-list. Read it as how the bug was cornered, not as open work.
+Gameplay is ~5% of realtime and a profile says why
+(`notes/evidence/2026-09-11-vu1-profile.txt`): VU1 interpretation is about
+80% of the busy thread, the software rasteriser under 20%, VIF1 nothing.
+Inside VU1 the cycle-accurate pipeline model is two thirds of it.
 
-A third of GH2's VU1 microprograms never reached their end bit. They burned
-the whole cycle budget and got cut off mid-flight, which both cost the frame
-and left half-written geometry to be kicked at the GS.
+So the win is to stop running VU1 for mesh draws, not to make it faster. At
+`PsMesh::DrawFaces`, for a mesh whose geometry is in the host cache,
+transform the cached verts by the owner's world transform and the last
+camera's projection and hand triangles to `GSCpuBackend` directly, instead
+of building the PS2 packet and kicking it. Keep the PS2 path for cache
+misses and behind an env knob so both arms are the same binary. That skips
+VU1 and keeps the rasteriser: about 4x, so 5% toward 20%. A native GL or
+Vulkan backend takes the rasteriser's share too and is much larger work.
+Do it after this, not instead of it.
 
-What was established, all of it measured:
+**Every input that draw needs is already captured and named**, in
+`notes/rnd-seam.md`: the class hierarchy, the hook addresses, the geometry
+cache, the eight camera quadwords, the material and texture state. Read that
+note before writing code. Six overrides under `ghpc/override/` do the
+logging; `GHPC_MESH_LOG=1` turns it on.
 
-    healthy invocation      2296 instructions
-    cut-off invocation      285786 instructions, 124x
-    share of runs cut off   8.6%
-    share of VU1 instrs     92%
-    offend=0 everywhere     the pc never leaves code memory
+Pass is `eerate_pct` up on the same binary with the rung still 9, the
+gameplay chain alive (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll`
+0x117dd0), and a frame capture that still shows the venue. Fail is a picture
+that loses geometry: then compare the native triangles against the packet
+the PS2 path would have kicked, for one mesh, before going further.
 
-`pc0x30b0`'s cut-off runs average *exactly* whatever cap they are given, so they
-are unbounded rather than merely long, and `pc0x30b0` starts running away before
-`pc0xcd8` does. Different runs stall in different loops (0x0b10, 0x32b0, 0x0e98,
-0x15c0), so this is not one mis-decoded branch.
+## Solved, do not re-chase
 
-**The runaway comes first, and it starts in the menus. Confirmed on two runs.**
-Both events are stamped with `g_ghpcVu1Mscals`, so they order directly rather
-than by log line:
+Each of these cost at least a round. The evidence files hold the detail.
 
-    run 1   [vu1/first-runaway] mscal=963  startPc=0xcd8   [projw] mscal=8570
-    run 2   [vu1/first-runaway] mscal=961  startPc=0xcd8   [projw] mscal=8378
+- **The VU1 runaway.** The MFIFO drain read a `cnt` tag's payload linearly
+  past the ring end (0xb80000) while the fill side wrapped, so VIF1 was
+  handed whatever sat past the ring. Fixed in `appendData` by address, both
+  the range and its inclusive end.
+  `GHPC_MFIFO_NOWRAP_LEGACY=1` is the control arm. Cut-off microprograms
+  2331 to 0 in 74,000 MSCALs; release gameplay 4.13 to 14.75 Mcycles/sec.
+  `notes/evidence/2026-09-11-mfifo-drain-wrap.txt`.
+- **Everything that looked like a VIF1 parser bug was that same ring read.**
+  The "STCYCL 0x0011", the `0xffff0000` UNPACK, the gameplay OFFSETs at 514,
+  515 and 768: all bytes past the ring end. VIF command sizing agrees with
+  PCSX2 on every command before it. Three fixes made along the way are kept
+  because they match hardware and each has a legacy knob, but none of them
+  was the cause: the residual carry, the scratchpad DMA decode, the STCYCL
+  WL=0 decode.
+- **The corrupted picture was the runaway.** Gameplay frames on the fixed
+  build show the venue, fretboard and gems
+  (`notes/evidence/2026-09-11-gameplay-frame-*.png`).
+- **An early-out on the VU1 pipeline commit.** Correct and worth nothing:
+  an entry becomes ready almost every cycle, so it never fires. Reverted.
+- **`PsCam::Select`'s VIF path.** Probed and cleared; the packet is right.
 
-Both land between `enter main_screen` and `main_screen -> qp_selsong_screen`, so
-the first microprogram to run away does it on a menu, roughly 7500 MSCALs before
-the projection matrix goes bad. **The runaway is the cause and the corruption is
-downstream of it.** Chase the loop bound, not the bad write.
-
-The two runs agree to within 2 MSCALs, and their census at `total=2000` is
-identical to the instruction (`budget=5 avgBudget=62917 maxInstr=62928`). This
-is deterministic, not a race.
-
-**The bound is loaded from VU1 address 0, because TOP is 0.** Named, with
-evidence, in `notes/evidence/2026-09-10-vu1-loop-bound-provenance.txt`:
-
-    microprogram 0x30b0  pc 0x31b8  ILW vi12, 0(vi5)   the loop bound
-    healthy   reads 0x14a0, gets 18    bound 330+18 = 348, loop ends
-    runaway   reads 0x0,    gets 1042  bound 0+1042, counter never equals it
-
-The base register comes from XTOP, which returned 330 healthy and 0 in every
-runaway dumped. 0xcd8 shows the same signature through different code. It is
-not the ITOP mask. **TOP=0 is not garbage either:** boot sets BASE=0 and
-OFFSET=330, so TOP legitimately alternates 0 and 330. That the input for a
-TOP=0 MSCAL was never delivered is ruled out, below.
-
-Those dumps cover the first ten runaways, which were on `qp_selsong_screen`
-(0xcd8) and `loading_screen` (0x30b0). None was on `game_screen`, so that
-gameplay's runaways are the same mechanism is not shown.
-
-**TOP is not the variable, and the input is always delivered.** Measured in
-`notes/evidence/2026-09-10-vu1-top-census.txt`. 0x30b0 at TOP=0 ends normally
-283 times and is cut off 114. Every cut-off in 66,000 runs had a qw[TOP] freshly
-unpacked since the previous MSCAL, zero stale. The 0x30b0 cut-offs start with
-a header byte-identical to healthy runs (`4, 0x11, 0x12, 0x614`). **Same input
-at entry, different outcome.**
-
-**The program overwrites its own input header.** Measured in
-`notes/evidence/2026-09-10-vu1-top-clobber.txt`. In all 66 cut-off 0x30b0 runs
-a VU store lands on qw[TOP] and a later header load returns a changed value;
-1 of 302 ended runs shows that. The store is `SQI vf1, (vi4++)` at 0x3170,
-writing a GIFtag (`00008000 300e4000 00000412`, z = the 1042) to qw 0. Its
-pointer vi4 comes from `MTIR vi4, vf2.x` at 0x3148, and vf2.x is 0. So the
-output buffer sits at qw 0, which only collides when the input half is TOP=0.
-TOP=0 is legitimate (BASE really is 0, the guard rejected nothing), so on
-hardware vf2.x must point clear of both halves.
-
-**Found and fixed: the vf2 init call was read from the wrong memory.** A
-six-instruction VU program at 0x3730 sets vf2 = (704, 849, 704, 849), two
-output buffers above the constants. `PsRnd::Reset` sends `MSCAL 0x6e6` for it
-at boot as a normal-mode VIF1 DMA from scratchpad, with MADR in the DMAC's own
-SPR form, bit 31 over an offset (0x80000020). The runtime did not decode that
-form and read the packet from RAM at 0x20, so the init never ran. Normal-mode
-DMA sources now decode it (PCSX2 `dmaGetAddr` does the same). The init runs
-once at boot and **0x30b0 no longer runs away: 110 ended, 0 cut off.** Release
-speed is SAME, 2.53 against 2.57 Mcycles/sec with `GHPC_DMA_SPR_LEGACY=1`,
-because 0x30b0 was never the gameplay cost. **0xcd8 is:** 13% of its runs are
-still cut off and they burn 187M VU1 instructions against 48M for the rest.
-Its runaway is a different mechanism.
-
-**Gameplay runaways are sound loops fed bad input.** Measured in
-`notes/evidence/2026-09-11-vu1-gameplay-loops.txt`: the first ten gameplay
-cut-offs, all 0xcd8, spread over four loops. In six the loop is sound and its
-count or bound is not: a zero header (the jump to 0x0000), a header with
-y == z at -31872 (the vertex loop increments past its bound), a strip count
-near 900. The other four spin inside 0x30b0's vertex loop with plausible
-headers and are not explained. The bad headers sit at gameplay TOPs, which come
-from OFFSET 514 and 515 VIFcodes carrying NUM 2 or 3, and a second input half at
-qw 514 overlaps the constants at 680 and the output buffers at 704 and 849.
-**They are payload.** Measured in
-`notes/evidence/2026-09-11-vif1-offset-misparse.txt`: every NUM != 0 OFFSET
-(`0x02020203` as OFFSET 515, `0x02030000` as OFFSET 0, `0x02020300` as 768)
-sits in a stretch of zero words read as NOPs with packed-byte words at a regular
-28 to 32 byte spacing, all in one 7120-byte chunk at mscal 8467. So the
-gameplay TOPs, and the bad headers the runaways read, come from a VIF1 parser
-that has fallen out of step. STCYCL WL=0 was the first suspect (GH2 sends
-`0x0011` and `0x0016`, and the runtime read WL as 1, not 256). Fixed and kept,
-since it matches hardware, but it is not the cause: the OFFSETs are still there
-with it. **Next: find where the parser falls out of step in that chunk.**
-
-**A VIF1 desync was found and fixed, and it did not move speed.** A command
-whose payload straddled two DMA chunks was dropped, so the next chunk parsed
-from mid-payload. At gameplay that produced 1305 junk OFFSETs and TOPs of
-514/515/610. It now carries into the next chunk. Invalid opcodes fell 118,798
-to 1,018 and OFFSETs 1305 to 75, but release `eerate` is 2.15 against 2.13
-Mcycles/sec with `GHPC_VIF1_NO_RESIDUAL=1` on the same binary. SAME. The
-runaway survives a clean stream: cut-offs still retire 66% of VU1 instructions.
-
-**A retracted claim, and an unexplained discrepancy that goes with it.** An
-earlier round reported "everything is healthy until `game_screen`, the first
-10,000 MSCALs are all clean". That came from one run whose census showed
-`budget=0` through `total=10000`. Both runs on the current build instead show
-`budget=5` by `total=2000`, on `main_screen`, so the claim is withdrawn.
-
-**Why that older run differed is not understood.** It was a different build
-(before the per-reason instruction split and the first-runaway stamp), and
-nothing in those changes should affect whether a microprogram terminates. Either
-the early runaway is sensitive to timing in a way the current build happens to
-pin, or something in that run was genuinely different. It is logged here rather
-than explained, because an unexplained non-reproduction is exactly the kind of
-thing that later turns out to matter. Do not build on the current numbers
-without re-checking the census at `total=2000`.
-
-A third data point, same class: on the provenance round's builds the first
-runaway landed at mscal 963 once and 3363 twice (on `qp_selsong_screen`), with
-only the diagnostic dump differing between them. Still unexplained.
-
-The degradation at `game_screen` is progressive rather than a switch: `maxInstr`
-climbs 2456, then 25568, then 1000000. Early menu runaways are few and then it
-goes quiet, so the handful on `main_screen` may be a different phenomenon from
-the mass of them at `game_screen`. Do not assume one explanation covers both.
+Two things from that thread stayed unexplained, and both are about
+determinism rather than the bug. An older build's census showed no runaway
+where later builds showed one at the same MSCAL, and the first runaway
+landed at mscal 963 on one build and 3363 on two others that differed only
+in a diagnostic dump. Neither was chased once the cause was found. If a
+future round sees a census that will not reproduce, this is prior art.
 
 ## Knobs this work needs
 
     GHPC_COUNTIN=0.5     clamp the count-in so gameplay arrives in ~1 min
-    GHPC_VU1_CENSUS=N    census of why microprograms stopped, every N MSCALs
-    GHPC_VU1_LOOP=N      dump pc histogram, back edges, VI regs and exit-branch
-                         VI provenance for the first N runaways
-    GHPC_VU1_BUDGET=N    the per-MSCAL cycle budget, default 65536
-    GHPC_VIF1_NO_RESIDUAL=1  drop a VIF1 command that straddles two chunks, as
-                         before the fix. Control arm only.
-    GHPC_DMA_SPR_LEGACY=1  read a bit-31 scratchpad DMA source from RAM, as
-                         before the fix. Control arm only.
-    GHPC_VIF_STCYCL_LEGACY=1  read STCYCL WL=0 as 1 and CL=0 as 1, as before
-                         the fix. Control arm only.
-    GHPC_MFIFO_NOWRAP_LEGACY=1  read an MFIFO drain payload linearly past the
-                         ring end, as before the fix. Control arm only.
+    GHPC_MESH_LOG=1      the six seam overrides log mesh, material, texture,
+                         camera and cache hit rate. Debug and release both.
+    GHPC_FRAME_AFTER_START=1  hold frame dumps until StartGame, so the budget
+                         lands on gameplay. Needs GHPC_COUNTIN set too.
+    GHPC_FRAME_ONCHANGE=1 dump only when the picture differs from the last
+                         one. GHPC_FRAME_BURST=N raises the 20 file cap.
+                         Frames land in /tmp as ghpc_frame_N.ppm and a second
+                         run overwrites them, so copy them out.
+    GHPC_SONG_HEARTBEAT=N print the song tick every Nth poll, default 120.
+    GHPC_VU1_CENSUS=N    census of why microprograms stopped, every N MSCALs.
+                         Every run should still show zero cut-offs.
     GHPC_VIF1_DUMPCHUNK=<dir>  write the first eight chunks that go wrong
                          (invalid opcode, or OFFSET with NUM != 0) as .bin plus
                          a .txt of tags, chain pieces and the parsed commands.
                          Walk one with scripts/vifwalk.py.
 
-`eerate_pct` rounds to 0.1, which cannot separate gameplay arms at 0.7%. Compare
-the `Mcycles/sec` figure on the `[eerate]` line instead.
+Control arms, each restoring one pre-fix behaviour. Use them to make an A/B
+on one binary, never to fix anything:
+
+    GHPC_MFIFO_NOWRAP_LEGACY=1   drain payload read linearly past the ring end
+    GHPC_VIF1_NO_RESIDUAL=1      drop a command straddling two DMA chunks
+    GHPC_DMA_SPR_LEGACY=1        bit-31 scratchpad DMA source read from RAM
+    GHPC_VIF_STCYCL_LEGACY=1     STCYCL WL=0 read as 1 and CL=0 as 1
+    GHPC_VU1_BUDGET=N            per-MSCAL cycle budget, default 65536
+
+`eerate_pct` rounds to 0.1 and gameplay runs vary by about that much between
+identical runs. Compare the `Mcycles/sec` figure on the `[eerate]` line, over
+several lines, not one.
 
 **`eerate_pct` and `fps` only count lines printed on `game_screen`.** They used
 to keep the last value seen, and a gameplay run can go minutes without an
@@ -260,10 +184,10 @@ value, and let `ENV MISMATCH` catch a run that does not. A "stock build" mark
 cannot reach gameplay in a measurable time, so demanding one would mean not
 measuring the goal at all.
 
-**`GHPC_VU1_BUDGET` is a trap above its default.** Raising it makes the guest
-slower and get less far, because the runaways simply run longer. It exists to
-answer one question (is this a runaway or an undersized budget) and that
-question is answered. Leave it alone.
+**`GHPC_VU1_BUDGET` is a trap above its default.** It existed to answer one
+question, whether a microprogram was running away or the budget was too small,
+and that question is answered: no microprogram is cut off any more. Leave it
+alone.
 
 ## When to stop
 
@@ -276,10 +200,15 @@ one number.
 
 Stop when any of these is true:
 
-- **The win.** `eerate_pct` at `game_screen` reaches 5% with the rung still at 9
-  and `GHPC_COUNTIN` the only probe. The floor is 0.7% and fixing the runaway
-  predicts ~8%, so 5% confirms the fix landed without demanding perfection.
-  Record it, render, and stop.
+- **The win.** `eerate_pct` at `game_screen` reaches 15% with the rung still at
+  9 and `GHPC_COUNTIN` the only probe. The floor is 5% and a native draw that
+  skips VU1 predicts ~20%, so 15% confirms it landed without demanding
+  perfection. Record it, render, and stop.
+
+  This is the second win this file has carried. The first was 5%, set when the
+  floor was 0.7% and the VU1 runaway was the target; it fired on 2026-09-11.
+  Set the next one the same way: the predicted result, discounted enough that
+  a real fix cannot miss it.
 
   The win used to be a held rung. That was wrong twice over: the ladder
   saturates at `game_screen`, and a saturating ladder cannot report progress on
@@ -419,3 +348,10 @@ this next starts from a true statement rather than a half-finished round.
   runtime; one 0x5000-byte sample chunk reaches the IOP synth service per
   run and is dropped. `[ghpc/spu2] chunks=` now counts them and `progress.py`
   scores the span as `spu_chunks`; baseline is 1, flat.
+- **`fps` is noisy.** Identical release runs have reported 0.56 and 2.95 at
+  the same `eerate_pct`. Treat `eerate_pct` as the speed metric and `fps` as
+  a smoke test until someone explains the spread.
+- **The branch.** Work sits on `fix/real-newlib-allocator`, whose name stopped
+  describing it many commits ago. Local `main` is at 219268e and the default
+  remote branch is `dev`. Landing it with a merge commit is a decision to
+  make awake.
