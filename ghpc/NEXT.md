@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `4.7` |
 | fps | `2.89` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 5 of 6 |
-| rounds total | 18 of 30 |
+| rounds since gain | 6 of 6 |
+| rounds total | 19 of 30 |
 
 <!-- PROGRESS:END -->
 
@@ -87,10 +87,10 @@ Gameplay is ~5% of realtime and a profile says why
 Inside VU1 the cycle-accurate pipeline model is two thirds of it.
 
 So the win is to stop running VU1 for mesh draws, not to make it faster. At
-`PsMesh::DrawFaces`, for a mesh whose geometry is in the host cache,
-transform the cached verts by the owner's world transform and the last
-camera's projection and hand triangles to `GSCpuBackend` directly, instead
-of building the PS2 packet and kicking it. Keep the PS2 path for cache
+`PsMesh::DrawFaces`, for a mesh whose geometry is in the host cache, skin the
+cached verts against the bone palette, project by the last camera, and hand
+triangles to `GSCpuBackend` directly, instead of building the PS2 packet and
+kicking it. Keep the PS2 path for cache
 misses and behind an env knob so both arms are the same binary. That skips
 VU1 and keeps the rasteriser: about 4x, so 5% toward 20%. A native GL or
 Vulkan backend takes the rasteriser's share too and is much larger work.
@@ -102,27 +102,31 @@ cache, the eight camera quadwords, the material and texture state. Read that
 note before writing code. Seven overrides under `ghpc/override/` do the
 logging; `GHPC_MESH_LOG=1` turns it on.
 
-**The transform is measured, not guessed**
-(`notes/evidence/2026-09-11-vertex-transform-calibration.txt`):
+**The transform is solved to GS subpixel, and nothing blocks the draw**
+(`notes/evidence/2026-09-12-bone-palette.txt`):
 
-    clip = (pos * World) * M    M = qw700..703 as rows, row vectors
-    q    = 1 / clip.w
-    x    = clip.x * q * qw696.x + qw697.x     y and z the same
-    s,t  = uv * q               the submit is fst=0, PRIM 4, iip=1
+    world = sum over b of weight[b] * (pos * Bone[b])   b = 0..3
+    clip  = world * M           M = qw700..703 as rows, row vectors
+    q     = 1 / clip.w
+    x     = clip.x * q * qw696.x + qw697.x    y and z the same
+    s,t   = uv * q              the submit is fst=0, PRIM 4, iip=1
 
-qw698, the camera position, is not subtracted: M carries the view transform.
-x lands to a median 0.56 px and q to 0.74% on the sample mesh.
+Gameplay meshes are skinned. `Bone[0..3]` is the palette `DrawShowing` uploads
+at VU1 qw660..675 behind `0x6C140294`; the weights are the Vert's four
+`Hmx::Color` floats at +0x20, summing to 1.0. qw698 is not subtracted: M
+carries the view transform. Six meshes, 171 pairs, dx and dy medians 0.03 to
+0.04 px with the whole range inside [0.00, 0.07] and q at -0.000%. A sixteenth
+of a pixel is 0.0625, so that is quantisation and nothing else.
 
-**One thing blocks the draw: where `World` comes from.** y is off by a
-near-constant 4 px, and the obvious source is wrong. `PsMesh::DrawShowing` at
-0x43f2d0 calls `WorldXfm` on the instance and uploads it to VU1 qw676, but
-capturing that puts the mesh 21 px off in x and 19 in y, and the instance it
-names owns a different mesh: the draw arrived through DrawShowing's second
-`DrawFaces` call site at 0x43f434 without passing 0x43f2ec. The owner's cached
-`this+0xa0` fits far better but is stale (dirty word at +0xe0 reads 1 on every
-gameplay draw), which is the likely 4 px. Find the writer the 0x43f434 path
-uses. Do not re-capture at 0x43f2f4, and do not read the cursor back at
-DrawFaces: the packet is already flushed.
+The earlier hunt for a missing `World` writer is over: there was none. The
+skinned paths branch past 0x43f2ec because they write qw676 themselves, and
+0x43f434 is the only `jal DrawFaces` in the function, sitting in a
+per-material loop. A rigid matrix fit to a few pixels and could never close
+because it was approximating a weighted blend.
+
+**Watch the lifetime.** The palette is uploaded once in `DrawShowing` and the
+per-material loop calls `DrawFaces` several times against it. A native draw
+must use the palette for the draw it is in, not the last one captured.
 
 Pass is `eerate_pct` up on the same binary with the rung still 9, the
 gameplay chain alive (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll`
@@ -169,10 +173,13 @@ future round sees a census that will not reproduce, this is prior art.
                          camera and cache hit rate. Debug and release both.
     GHPC_TL_CAL=N        print the first N primitives the PS2 path submits,
                          tagged with the mesh that produced them, next to that
-                         mesh's cached object-space verts. GHPC_TL_CAL_DRAWS
-                         caps the draws (default 3), GHPC_TL_CAL_ANY drops the
-                         wait for StartGame. This is how the transform above
-                         was measured; use it to check a candidate formula.
+                         mesh's cached object-space verts, the bone palette and
+                         the camera quadwords. GHPC_TL_CAL_DRAWS caps the draws
+                         (default 3), GHPC_TL_CAL_ANY drops the wait for
+                         StartGame. This is how the transform above was
+                         measured; use it to check a candidate formula. N is a
+                         cap on primitives, not per draw, so a single mesh will
+                         eat it: budget a few hundred to see six draws.
     GHPC_FRAME_AFTER_START=1  hold frame dumps until StartGame, so the budget
                          lands on gameplay. Needs GHPC_COUNTIN set too.
     GHPC_FRAME_ONCHANGE=1 dump only when the picture differs from the last

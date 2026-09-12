@@ -1,19 +1,28 @@
 // Override of work/output/DrawShowing__6PsMeshQ211RndDrawable8DrawType_0x43f038.cpp
 // (PsMesh::DrawShowing, 0x43f038 - 0x43f490).
 //
-// Why: this is where the per-draw world transform comes from, and DrawFaces
-// cannot see it. At 0x43f2d0 the body takes `$s2 + 0x40`, the RndTransformable
-// of the INSTANCE being drawn, calls WorldXfm (0x43f768) on it, and at
-// 0x43f308..0x43f32c copies the four quadwords it returns into the DMA cursor
-// behind a `0x6C0402A4` VIF header: V4-32, NUM 4, VU1 address 676. So the
-// object matrix VU1 uses is WorldXfm(instance), not the owner's cached
-// `this+0xa0` that DrawFaces can reach. Reading the owner's is wrong twice
-// over: `this` in DrawFaces is the owner (+0x138), and the owner's cached
-// matrix is stale, its dirty word at +0xe0 reading 1 on every gameplay draw.
+// Why: this is where the per-draw object transform comes from, and DrawFaces
+// cannot see it. There are two shapes, chosen at 0x43f098 on `mBones`
+// (+0x13c), and the unskinned one is the rarer of the two on gameplay
+// geometry:
 //
-// The body is the generated translation verbatim plus one capture at
-// label_43f2f4, the instruction after WorldXfm returns, where $v0 is the
-// Transform it returned and $s2 is the instance. Nothing is written back.
+//   mBones == 0: 0x43f2d0 takes `$s2 + 0x40`, the RndTransformable of the
+//     instance, calls WorldXfm (0x43f768), and 0x43f308..0x43f32c copies the
+//     four quadwords into the DMA cursor behind a `0x6C0402A4` header (V4-32,
+//     NUM 4, VU1 address 676).
+//   mBones != 0: 0x43f0a4 uploads a 20-quadword bone palette at VU1 660
+//     behind `0x6C140294`, and the vertex is skinned against it by weight.
+//     qw676 is written by this path too, as the palette's tail, and is
+//     identity whenever more than one bone is in play.
+//
+// So there is no single world matrix for a skinned mesh, which is why the
+// owner's cached `this+0xa0` fits to a few pixels and never closes: it is a
+// rigid approximation of a weighted blend, not a stale copy. Measured to GS
+// subpixel over six meshes; see notes/evidence/2026-09-12-bone-palette.txt.
+//
+// The body is the generated translation verbatim plus two read-only captures,
+// both gated on GHPC_TL_CAL: one at label_43f2f4 for the unskinned matrix, one
+// at label_43f330 where all paths converge. Nothing is written back.
 #include <stdexcept>
 #include <cstdlib>
 #include <cstring>
@@ -38,6 +47,15 @@ uint32_t g_ghpcInstThis = 0u;
 uint32_t g_ghpcInstOwner = 0u;
 uint64_t g_ghpcInstDraws = 0ull;
 
+// Which of the three blocks wrote qw676 for this draw, and the bone list that
+// decided it. -1 until the first capture. See ghpcCaptureObjXfm.
+int32_t g_ghpcInstPath = -1;
+uint32_t g_ghpcInstBones = 0u;
+
+// The four bone matrices at qw660..675, same row order as g_ghpcInstWorld.
+// Only meaningful when g_ghpcInstPath is 1 or 2.
+float g_ghpcBoneXfm[4][4][4] = {};
+
 namespace {
 void ghpcCaptureInstWorld(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
                           uint32_t xfm, uint32_t inst) {
@@ -54,6 +72,71 @@ void ghpcCaptureInstWorld(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime
     }
     g_ghpcInstThis = inst;
     g_ghpcInstOwner = READ32(inst + 0x138u);
+    ++g_ghpcInstDraws;
+}
+
+// The object matrix this draw actually hands VU1, read at 0x43f330 where all
+// three paths converge and before either register it needs is clobbered ($s2
+// dies in the delay slot at 0x43f338, $s1 at 0x43f344).
+//
+// There is no missing writer. 0x43f098 branches on mBones at +0x13c:
+//
+//   mBones == 0  -> 0x43f2b8 uploads WorldXfm(this+0x40) behind 0x6C0402A4,
+//                   V4-32 NUM 4 ADDR 0x2a4 = 676. ghpcCaptureInstWorld has it.
+//   mBones != 0  -> 0x43f0a4 uploads ONE 0x6C140294 block, V4-32 NUM 0x14 =
+//                   20 quadwords at ADDR 0x294 = 660, so it spans qw660..679
+//                   and writes qw676 itself. The cursor advances 0x140, which
+//                   is the same 20 quadwords. Bones 0..3 land at $s1+0x00,
+//                   +0x40, +0x80, +0xc0; qw676..679 is $s1+0x100, filled by
+//                   one of two blocks:
+//                     0x43f24c, if any of mBones+0x14/+0x20/+0x2c is set:
+//                       rows (1 0 0) (0 1 0) (0 0 1) and sq $zero at +0x130,
+//                       i.e. exact identity. Skinned verts leave the bone
+//                       palette already in world space, so there is nothing
+//                       left for the object matrix to do.
+//                     0x43f294, only bone 0 in use: copies $s1+0x00..0x30 to
+//                       $s1+0x100..0x130, so qw676 is bone 0's matrix.
+//
+// Both skinned blocks branch straight to 0x43f330 and so never run 0x43f2ec.
+// That is the "reached DrawFaces without passing 0x43f2ec" the calibration
+// round hit. Nothing is recomputed here: this copies the bytes the guest just
+// wrote into the packet.
+void ghpcCaptureObjXfm(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
+                       uint32_t inst, uint32_t palette) {
+    static const bool s_on = std::getenv("GHPC_TL_CAL") != nullptr;
+    if (!s_on) return;
+
+    const uint32_t bones = READ32(inst + 0x13cu);
+    g_ghpcInstBones = bones;
+    g_ghpcInstThis = inst;
+    g_ghpcInstOwner = READ32(inst + 0x138u);
+
+    if (bones == 0u) {
+        // ghpcCaptureInstWorld already filled g_ghpcInstWorld on this path.
+        g_ghpcInstPath = 0;
+        return;
+    }
+
+    g_ghpcInstPath =
+        (READ32(bones + 0x14u) || READ32(bones + 0x20u) || READ32(bones + 0x2cu)) ? 2 : 1;
+
+    const uint32_t src = palette + 0x100u;
+    for (uint32_t r = 0; r < 4u; ++r) {
+        for (uint32_t c = 0; c < 4u; ++c) {
+            const uint32_t bits = READ32(src + r * 0x10u + c * 4u);
+            std::memcpy(&g_ghpcInstWorld[r][c], &bits, sizeof(float));
+        }
+    }
+    // The bone palette itself, qw660..675. qw676 comes back identity on the
+    // multi-bone path, so it cannot be the transform: these are.
+    for (uint32_t b = 0; b < 4u; ++b) {
+        for (uint32_t r = 0; r < 4u; ++r) {
+            for (uint32_t c = 0; c < 4u; ++c) {
+                const uint32_t bits = READ32(palette + b * 0x40u + r * 0x10u + c * 4u);
+                std::memcpy(&g_ghpcBoneXfm[b][r][c], &bits, sizeof(float));
+            }
+        }
+    }
     ++g_ghpcInstDraws;
 }
 } // namespace
@@ -919,6 +1002,9 @@ label_43f308:
     }
     ctx->pc = 0x43F330u;
 label_43f330:
+    // $s2 is still `this` and $s1 still the bone-palette base; the next two
+    // instructions take both.
+    ghpcCaptureObjXfm(rdram, ctx, runtime, GPR_U32(ctx, 18), GPR_U32(ctx, 17));
     // 0x43f330: 0x8cd00008  lw          $s0, 0x8($a2)
     ctx->pc = 0x43f330u;
     SET_GPR_S32(ctx, 16, (int32_t)READ32(ADD32(GPR_U32(ctx, 6), 8)));

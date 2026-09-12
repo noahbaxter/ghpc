@@ -25,41 +25,48 @@ for mesh draws: at `PsMesh::DrawFaces`, for a mesh whose geometry the host
 cache holds, transform the cached verts and hand triangles to `GSCpuBackend`
 directly. About 4x, so 5% toward 20%. The map is `notes/rnd-seam.md`.
 
-Done: the vertex transform, measured rather than guessed
-(`notes/evidence/2026-09-11-vertex-transform-calibration.txt`). Pairing the
-cached object-space verts against the screen-space verts the PS2 path submits
-for the same mesh pins the convention:
+**The vertex transform is solved, to GS subpixel**
+(`notes/evidence/2026-09-12-bone-palette.txt`). Gameplay meshes are skinned,
+which is why no single object matrix ever fit:
 
-    clip = (pos * World) * M    M = qw700..703 as rows, row vectors
-    q    = 1 / clip.w
-    x    = clip.x * q * qw696.x + qw697.x     y and z the same
-    s,t  = uv * q               the submit is fst=0, PRIM 4, iip=1
+    world = sum over b of weight[b] * (pos * Bone[b])   b = 0..3
+    clip  = world * M           M = qw700..703 as rows, row vectors
+    q     = 1 / clip.w
+    x     = clip.x * q * qw696.x + qw697.x    y and z the same
+    s,t   = uv * q              the submit is fst=0, PRIM 4, iip=1
 
-qw698, the camera position, is not subtracted: M carries the view transform.
-On the sample mesh this lands x to a median 0.56 px and q to 0.74%.
+`Bone[0..3]` is the palette `PsMesh::DrawShowing` uploads at VU1 qw660..675
+behind `0x6C140294` (V4-32, NUM 0x14, ADDR 660). The weights are the Vert's
+four `Hmx::Color` floats at +0x20, which sum to 1.0. qw698 is not subtracted:
+M carries the view transform.
+
+Six meshes, 171 matched pairs: dx and dy medians 0.03 to 0.04 px, whole range
+[0.00, 0.07], q at -0.000%. A sixteenth of a pixel is 0.0625, so the residual
+is entirely GS quantisation.
+
+That also closes the earlier "second DrawFaces call site" puzzle. 0x43f434 is
+the only `jal DrawFaces` in the function, inside a per-material loop; the
+skinned paths simply branch past 0x43f2ec because they write qw676 themselves,
+as the palette's tail. Nothing was missing.
 
 The pairing is exact because DMA, VIF1, VU1 and GIF all run inline on the
 guest thread inside the store to D1_CHCR (`ps2_memory.cpp:2094`), so a mesh
 tag set at DrawFaces entry covers exactly that draw's submits. `GHPC_TL_CAL=N`
-turns it on. The taps cost nothing: same tree with and without, rung 9,
-eerate_pct 3.0 and fps 1.85 on both.
+turns it on.
 
-**Next, and the one thing blocking the draw: where the object matrix comes
-from.** y is off by a near-constant 4 px, and the obvious source is wrong.
-`PsMesh::DrawShowing` at 0x43f2d0 calls `WorldXfm` on the instance and uploads
-it to VU1 qw676, but capturing that puts the mesh 21 px off in x and 19 in y,
-and the instance it names owns a different mesh: the draw arrived through
-DrawShowing's second `DrawFaces` call site at 0x43f434 without passing
-0x43f2ec. The owner's cached `this+0xa0` fits much better but its dirty word
-at +0xe0 reads 1 on every gameplay draw, so it is stale, which is the likely
-4 px. Find the writer the 0x43f434 path uses. Do not re-capture at 0x43f2f4,
-and do not read the cursor back at DrawFaces: the packet is already flushed.
+**Next: the draw itself.** Every input is now captured and exact. At
+`PsMesh::DrawFaces`, for a mesh whose geometry the host cache holds, skin the
+cached verts against the palette, project, and hand triangles to
+`GSCpuBackend`. Keep the PS2 path for cache misses and behind an env knob so
+both arms are the same binary. Pass is `eerate_pct` up on that binary with the
+rung still 9 and the gameplay chain alive (`BeatMatch::Poll` 0x1259c0,
+`PlayerMatcher::Poll` 0x117dd0), plus a frame capture that still shows the
+venue.
 
-Then the draw itself. Keep the PS2 path for cache misses and behind an env
-knob so both arms are the same binary. Pass is `eerate_pct` up on that binary
-with the rung still 9 and the gameplay chain alive (`BeatMatch::Poll`
-0x1259c0, `PlayerMatcher::Poll` 0x117dd0), plus a frame capture that still
-shows the venue.
+Watch for: the palette is captured in `DrawShowing`, one draw ahead of the
+`DrawFaces` that consumes it, and the per-material loop calls `DrawFaces`
+several times per upload. A native draw must read the palette for the draw it
+is in, not the last one seen.
 
 **The stored mark of 4.7 does not reproduce.** The tree as of the previous
 round measures 3.0 on this host. Re-measure the mark's own tree before

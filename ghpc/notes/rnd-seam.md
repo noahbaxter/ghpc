@@ -88,7 +88,9 @@ Raw GS packet builders a backend deletes rather than hooks:
   `sll $a0, $s1, 6`): `Vector3 mPos` @0x00, `Vector3 mNorm` @0x10,
   `Hmx::Color` (4 floats) @0x20, `Vector2 mUv` @0x30, two unread floats at
   0x38 and 0x3c (`RndMesh.h:270-289`). `VertVector` is hand-rolled on
-  MemAlloc, not STL.
+  MemAlloc, not STL. **The `Hmx::Color` field is not a colour on skinned
+  meshes**: its four floats are the bone weights, summing to 1.0 and indexing
+  qw660..675 in order (`evidence/2026-09-12-bone-palette.txt`).
 - Index: `RndMesh::Face` is three `unsigned short`, stride 6, triangle list.
   Strips are cached separately (`CreateStrip 0x1f2368`, `CacheStrips
   0x1f2318`), and the PS2 path consumes strips. `PsMesh` keeps the converted
@@ -216,7 +218,8 @@ decompiled: the object-space vert the cache holds against the screen-space
 vert the PS2 path submits for the same mesh. Full method, numbers and control
 in `evidence/2026-09-11-vertex-transform-calibration.txt`.
 
-    world = pos * World      row vector; World rows 0..2 the Matrix3,
+    world = sum over b of weight[b] * (pos * Bone[b])   b = 0..3, skinned
+    world = pos * World      unskinned; World rows 0..2 the Matrix3,
                              row 3 the translation
     clip  = world * M        M = qw700..703 as rows, implied pos.w of 1
     q     = 1 / clip.w
@@ -228,20 +231,33 @@ in `evidence/2026-09-11-vertex-transform-calibration.txt`.
 The camera position at qw698 is **not** subtracted before M: M already carries
 the view transform. Meshes submit as PRIM 4 (tristrip), iip=1 tme=1 abe=0.
 
-On the sample mesh this lands x to a median 0.56 px and q to 0.74%. y is off
-by a near-constant 4 px, and that is the one loose end.
+Over six meshes and 171 matched pairs this lands **inside GS subpixel**: dx
+and dy medians 0.03 to 0.04 px, whole range [0.00, 0.07], q at -0.000%. One
+sixteenth of a pixel is 0.0625, so nothing is left over. Full table in
+`evidence/2026-09-12-bone-palette.txt`.
 
-**The object matrix source is still open, and it is not the obvious one.**
-`PsMesh::DrawShowing` at 0x43f2d0 calls `WorldXfm` on the instance
-(`$s2+0x40`) and copies the result to VU1 qw676 behind a `0x6C0402A4` header
-(V4-32, NUM 4, ADDR 676). Capturing that puts the mesh 21 px off in x and 19
-in y, and the instance it names owns a different mesh than the one drawing:
-the draw arrived through DrawShowing's second `DrawFaces` call site at
-0x43f434 without passing 0x43f2ec. The owner's cached `this+0xa0` fits far
-better but its dirty word at +0xe0 reads 1 on every gameplay draw, so it is a
-stale copy, which is the likely source of the 4 px. Find the writer the
-second path uses; do not re-capture at 0x43f2f4, and do not read the cursor
-back at DrawFaces, where the packet has already been flushed.
+**Gameplay meshes are skinned, and that is why no single matrix ever fit.**
+`PsMesh::DrawShowing` branches at 0x43f098 on `mBones` (+0x13c):
+
+- `mBones == 0`: 0x43f2b8 uploads `WorldXfm(this+0x40)` behind `0x6C0402A4`
+  (V4-32, NUM 4, ADDR 676). This is the only case with a single `World`.
+- `mBones != 0`: 0x43f0a4 uploads one `0x6C140294` block, V4-32 **NUM 0x14 =
+  20 quadwords at ADDR 660**, spanning qw660..679. Bones 0..3 land at
+  qw660..675 as `Multiply(bone.xfm, WorldXfm(bone.obj))`. qw676..679 is the
+  tail: **identity** when more than one bone is in play (0x43f24c), or bone
+  0's matrix when only bone 0 is (0x43f294).
+
+Both skinned blocks jump straight to 0x43f330 and never run 0x43f2ec, which
+is the whole of the earlier "reached DrawFaces without passing 0x43f2ec".
+There was no missing writer. 0x43f434 is also not a second call site: it is
+the only `jal DrawFaces` here, inside a per-material loop (`bnez $16,
+0x43f370` at 0x43f43c) that all three paths fall into.
+
+**The weights are the Vert's four "colour" floats** at +0x20, which the decomp
+names `Hmx::Color`. They sum to 1.0 on every gameplay vert and index the
+palette in order. The owner's cached `this+0xa0` was never stale in a way that
+mattered: it is a rigid approximation of a weighted blend, which is why it
+fit to a few pixels and could not close.
 
 ## Calibrating again
 
@@ -282,5 +298,8 @@ DrawFaces entry covers exactly that draw's submits. The tap is
   unrecovered.
 - Lighting, `PsEnviron`, shadow maps, post-processing and `RndScreenMask`
   are additional seam surface not covered above.
-- Skinning (`RndMesh::mBones` @+0x13c, `ReplaceBones 0x1f1450`): whether it
-  runs on EE or VU1 is unknown and decides the backend's vertex contract.
+- ~~Skinning~~. Settled: it runs on VU1, against a four-matrix palette at
+  qw660..675 weighted by the Vert's `Hmx::Color` floats. The backend's vertex
+  contract therefore needs the weights and the palette, not just pos/norm/uv.
+  Still open is what happens above four bones, since `DrawShowing` only ever
+  builds four slots (`mBones+0x08/+0x14/+0x20/+0x2c`).

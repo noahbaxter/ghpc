@@ -76,6 +76,10 @@ extern std::atomic<bool> g_ghpcGameStarted;
 extern float g_ghpcInstWorld[4][4];
 extern uint32_t g_ghpcInstThis;
 extern uint32_t g_ghpcInstOwner;
+// 0 unskinned (WorldXfm of the instance), 1 bone 0's matrix, 2 identity.
+extern int32_t g_ghpcInstPath;
+extern uint32_t g_ghpcInstBones;
+extern float g_ghpcBoneXfm[4][4][4];
 
 namespace {
 
@@ -235,6 +239,15 @@ uint32_t ghpcMeshTlCal(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, u
             std::fprintf(stderr, "[ghpc/tlcal]   vuworld%u=(%g %g %g %g)\n", r,
                 ghpcMeshF32(rdram, ctx, runtime, q + 0x0u), ghpcMeshF32(rdram, ctx, runtime, q + 0x4u),
                 ghpcMeshF32(rdram, ctx, runtime, q + 0x8u), ghpcMeshF32(rdram, ctx, runtime, q + 0xcu));
+        }
+    }
+    std::fprintf(stderr, "[ghpc/tlcal]   objpath=%d bones=0x%08x inst=0x%08x instowner=0x%08x\n",
+        g_ghpcInstPath, g_ghpcInstBones, g_ghpcInstThis, g_ghpcInstOwner);
+    for (int b = 0; b < 4 && g_ghpcInstPath > 0; ++b) {
+        for (int r = 0; r < 4; ++r) {
+            std::fprintf(stderr, "[ghpc/tlcal]   bone%d_%d=(%g %g %g %g)\n", b, r,
+                g_ghpcBoneXfm[b][r][0], g_ghpcBoneXfm[b][r][1],
+                g_ghpcBoneXfm[b][r][2], g_ghpcBoneXfm[b][r][3]);
         }
     }
     for (int r = 0; r < 4; ++r) {
