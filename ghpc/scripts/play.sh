@@ -8,6 +8,7 @@
 # video and both logo screens.
 #
 #   ./ghpc/scripts/play.sh                 release, straight to the main menu
+#   ./ghpc/scripts/play.sh --ingame        walk the menus and stop in the song
 #   ./ghpc/scripts/play.sh --intro         boot the whole way through the intro
 #   ./ghpc/scripts/play.sh --debug         diagnostics build, 2.5-4x slower
 #   ./ghpc/scripts/play.sh --build         rebuild before launching
@@ -21,6 +22,7 @@ WORK="$ROOT/work"
 BUILD_DIR="build"
 ELF="$WORK/GH2_debug.elf"
 WANT_SKIP=1
+INGAME=0
 DO_BUILD=0
 LOGFILE=""
 COUNTIN=""
@@ -28,6 +30,7 @@ VERBOSE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --ingame)   INGAME=1 ;;
     --intro)    WANT_SKIP=0 ;;
     --debug)    BUILD_DIR="build-debug" ;;
     --calls)    BUILD_DIR="build-calls" ;;
@@ -81,6 +84,14 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+# --ingame walks the three menus and then goes quiet. The "*=none" fallback is
+# what stops it: without it an unlisted screen falls through to cross, and the
+# driver would strum all the way through the song. Explicit rules only.
+if [ "$INGAME" = 1 ]; then
+  export GHPC_PAD_DRIVE="main_screen=cross,qp_selsong_screen=cross,qp_diff_screen=cross,*=none"
+  [ -z "$COUNTIN" ] && COUNTIN=0.5
+fi
 
 [ -n "$COUNTIN" ] && export GHPC_COUNTIN="$COUNTIN"
 

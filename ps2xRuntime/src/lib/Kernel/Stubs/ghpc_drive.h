@@ -47,6 +47,10 @@ namespace ghpc_drive
     constexpr uint16_t kCircle = 1u << 13;
     constexpr uint16_t kCross = 1u << 14;
     constexpr uint16_t kSquare = 1u << 15;
+    // Sentinel, never a button mask. parseRules keeps a rule only when the
+    // name resolves to something nonzero, so "press nothing" cannot be spelled
+    // as 0. ruleFor turns this back into 0.
+    constexpr uint16_t kNoPress = 0xFFFFu;
 
     inline uint16_t buttonByName(const std::string &n)
     {
@@ -62,6 +66,13 @@ namespace ghpc_drive
         if (n == "yellow") return kTriangle;
         if (n == "blue") return kCross;
         if (n == "orange") return kSquare;
+        // "none" is how a rule says press nothing here. It has to be a nonzero
+        // sentinel because parseRules drops a zero as an unknown name, and
+        // ruleFor maps it back to zero. Without it there is no way to drive the
+        // menus and then stop: an unlisted screen falls through to the
+        // fallback, so a run that reaches gameplay keeps strumming through the
+        // song. "*=none" makes the fallback silent and the rules explicit.
+        if (n == "none" || n == "nothing") return kNoPress;
         if (n == "cross" || n == "x") return kCross;
         if (n == "circle" || n == "o") return kCircle;
         if (n == "triangle") return kTriangle;
@@ -233,7 +244,8 @@ namespace ghpc_drive
         uint16_t ruleFor(const std::string &screen) const
         {
             const auto it = m_rules.find(screen);
-            return it != m_rules.end() ? it->second : m_fallback;
+            const uint16_t btn = it != m_rules.end() ? it->second : m_fallback;
+            return btn == kNoPress ? 0u : btn;
         }
 
         static double seconds()
