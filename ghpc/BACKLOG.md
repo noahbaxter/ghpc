@@ -20,6 +20,35 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
+**Save states, in flight and not yet usable.** `ps2xRuntime/src/lib/ghpc_state.cpp`
+writes a chunked file holding RDRAM, the scratchpad, GS VRAM, both VU memory
+banks and the EE context, and saves only at a vblank where
+`EeScheduler::isQuiescentForState()` reports no host callback outstanding.
+
+That gate is the whole design. `GuestThread` carries three `std::function`
+members (`wait.completion`, `resumeCompletion`, and one per queued
+`GuestInvocation`) which cannot be serialised, so a state written while any is
+live would restore a thread waiting on a callback that no longer exists: it
+loads, looks right, and diverges later. `GHPC_STATE_PROBE=N` measured 61
+samples to and on `game_screen`, all quiescent, 3 threads, nothing queued. The
+probe only shows quiescent frames are common; the runtime check is what makes
+a written state trustworthy.
+
+Still missing before a state can be loaded at all:
+
+1. The `EeScheduler` tables: threads (POD fields only), semaphores, event
+   flags, alarms, INTC and DMAC handlers, ready queues, the id counters and
+   the vsync tick.
+2. VU0 and VU1 interpreter registers, not just their memory banks.
+3. GS registers and draw state, plus `PS2Memory`'s IO registers, EE timers,
+   TLB and VIF1 residual.
+4. IOP service state.
+5. A trigger. A hotkey is the right shape, since the point is to capture
+   wherever the player happens to be, and `GHPC_STATE_LOAD=<slot>` to return.
+6. A determinism check as the acceptance gate: save at frame N, run to N+K and
+   save again; separately load N, run K frames, save. The two N+K states must
+   match byte for byte. Anything uncaptured shows up as a diff.
+
 **R0: Vulkan bring-up.** SDL3 window, Vulkan instance, device, swapchain,
 present a cleared frame, behind `GHPC_RENDERER=vulkan` with raylib as the
 default. Both paths build.
