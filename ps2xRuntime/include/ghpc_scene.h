@@ -66,9 +66,13 @@ namespace ghpc
         // silhouette. PsMat::Select's body is the source for every field and
         // its override file pins each offset:
         //
-        //   +0x148  TEST_1   GS test register image, ZTE at bit 16 and ZTST
-        //                    at bits 17..18 (0 never, 1 always, 2 gequal,
-        //                    3 greater)
+        //   +0x148  TEST_1   GS test register image. ZTST is at bits 17..18
+        //                    (0 never, 1 always, 2 gequal, 3 greater). ZTE at
+        //                    bit 16 is NOT in it: the mask the body passes to
+        //                    SetRegister is 0x6FFFF, which leaves bit 16 out,
+        //                    so depth testing is on globally and only ZTST
+        //                    varies per material. Reading bit 16 anyway
+        //                    reports every draw as depth-test-off.
         //   +0x158  ZBUF_1   ZMSK at bit 32: set means do NOT write depth
         //   +0x138  ALPHA_1  the blend equation
         //   +0x2c   mBlend   the engine's own blend mode, 1 meaning opaque
@@ -82,7 +86,7 @@ namespace ghpc
         struct Material
         {
             uint32_t ztst;     // 0 never, 1 always, 2 gequal, 3 greater
-            bool depthTest;    // TEST_1 ZTE
+            bool depthTest;    // always true today, see the ZTE note above
             bool depthWrite;   // ZBUF_1 ZMSK, inverted
             bool blend;        // mBlend != 1
             float color[4];    // mColor

@@ -57,6 +57,7 @@
 
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "ghpc_scene.h"
 
 #ifdef PS2_FUNCTION_LOG_TRACKER
 #include "ps2_log.h"
@@ -110,6 +111,63 @@ void ghpcMatLog(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t
         ghpcMatF32(rdram, ctx, runtime, x + 0x10u), ghpcMatF32(rdram, ctx, runtime, x + 0x14u), ghpcMatF32(rdram, ctx, runtime, x + 0x18u), ghpcMatF32(rdram, ctx, runtime, x + 0x1cu),
         ghpcMatF32(rdram, ctx, runtime, x + 0x20u), ghpcMatF32(rdram, ctx, runtime, x + 0x24u), ghpcMatF32(rdram, ctx, runtime, x + 0x28u), ghpcMatF32(rdram, ctx, runtime, x + 0x2cu),
         ghpcMatF32(rdram, ctx, runtime, x + 0x30u), ghpcMatF32(rdram, ctx, runtime, x + 0x34u), ghpcMatF32(rdram, ctx, runtime, x + 0x38u), ghpcMatF32(rdram, ctx, runtime, x + 0x3cu));
+}
+
+// R2 step 4: hand the material state to a native backend.
+//
+// Separate from ghpcMatLog, which is a census: it is gated on GHPC_MESH_LOG
+// and stops after a few hundred calls. A backend needs every bind, so the
+// only gate here is scene::active().
+//
+// The GS register images are read rather than the engine fields, because they
+// are what the PS2 path actually latches. TEST_1's layout (GS manual, and the
+// mask 0x6FFFF this body passes to SetRegister confirms which bits are live):
+//
+//   bit  0      ATE
+//   bits 1..3   ATST
+//   bits 4..11  AREF
+//   bits 12..13 AFAIL
+//   bit  14     DATE
+//   bit  15     DATM
+//   bit  16     ZTE
+//   bits 17..18 ZTST   0 never, 1 always, 2 gequal, 3 greater
+//
+// and ZBUF_1's ZMSK is bit 32, set meaning do not write depth. That bit is
+// the one that matters most: PS2 overlays are drawn with it set, and a
+// backend that writes depth for them loses the frame behind them.
+static void ghpcSceneMaterial(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
+    if (!ghpc::scene::active()) return;
+
+    const uint64_t test = READ64(self + 0x148u);
+    const uint64_t zbuf = READ64(self + 0x158u);
+
+    ghpc::scene::Material m{};
+    // ZTE is NOT in the material's image, so it is not read from it. The mask
+    // this body passes to SetRegister for TEST_1 is 0x6FFFF, which covers
+    // bits 0..15 and 17..18 and leaves bit 16 out: the material writes ATE,
+    // ATST, AREF, AFAIL, DATE, DATM and ZTST, and ZTE is whatever the register
+    // already held. Reading bit 16 anyway returns 0 on every material and
+    // reports the whole frame as depth-test-off, which measured as
+    // noZTest=531 of 531 draws and is not what the GS is doing.
+    //
+    // So depth testing is on and ZTST alone says how. ZTST is meaningful only
+    // when ZTE is set, and its distribution here is real work (454 greater,
+    // 60 gequal, 17 always in one gameplay frame), which is the other half of
+    // the same evidence.
+    m.depthTest = true;
+    m.ztst = (uint32_t)((test >> 17) & 3ull);
+    m.depthWrite = ((zbuf >> 32) & 1ull) == 0ull;
+    // mBlend 1 is the opaque mode; every other value the census saw (3 and
+    // two others) blends. ALPHA_1 at +0x138 carries the actual equation and
+    // honouring it properly is still ahead.
+    m.blend = (int32_t)READ32(self + 0x2cu) != 1;
+    for (uint32_t k = 0; k < 4u; ++k) {
+        const uint32_t bits = READ32(self + 0x30u + k * 4u);
+        std::memcpy(&m.color[k], &bits, sizeof(float));
+    }
+    m.texKey = READ32(self + 0x134u);
+
+    ghpc::scene::setMaterial(m);
 }
 
 } // namespace
@@ -428,6 +486,19 @@ label_43eb68:
     ctx->pc = 0x43eb68u;
     SET_GPR_S32(ctx, 16, (int32_t)((uint32_t)79 << 16));
 label_43eb6c:
+    // R2: latch the material for the seam, HERE and not at entry.
+    //
+    // This is the first instruction that reads a GS register image off `this`,
+    // and it is downstream of 0x43eb50, where a dirty material goes through
+    // PsMat::Update and its register images are rewritten. Reading at entry
+    // gives the pre-Update values on exactly the selects that changed, which
+    // is the same stale-read the TEX0 census fell into (rnd-seam.md). `this`
+    // is $s1 by 0x43ea80.
+    //
+    // Reached on a resume as well as on fresh flow, which is harmless: the
+    // call only latches, and latching the same material twice is what the
+    // guest's own re-upload fast path does anyway.
+    ghpcSceneMaterial(rdram, ctx, runtime, GPR_U32(ctx, 17));
     // 0x43eb6c: 0xde260138  ld          $a2, 0x138($s1)
     ctx->pc = 0x43eb6cu;
     SET_GPR_U64(ctx, 6, READ64(ADD32(GPR_U32(ctx, 17), 312)));
