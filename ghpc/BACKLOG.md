@@ -20,25 +20,26 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**R1: blit parity.** Present the software GS framebuffer as a Vulkan image, so
-Vulkan owns the window and the picture is identical because nothing about
-drawing changed.
+**R2: the Rnd seam.** Exit criteria in `NEXT.md`. R0 and R1 are done.
 
-`ghpc::HostRenderer::uploadFrame` is already the entry point and the Vulkan
-backend ignores it. The swapchain is created with `TRANSFER_DST`, so the blit
-needs a linear-tiled staging image and `vkCmdBlitImage`, no render pass and no
-shaders. `UploadFrame` in `ps2_runtime.cpp:412` already produces the RGBA8
-buffer both paths want; today the Vulkan branch skips it entirely.
+R1 landed with a different gate than the one written here, deliberately. The
+planned check was the same frame on both renderers by frame signature, and that
+is not measurable: the signature in `gs_cpu_backend.cpp:1211` hashes the GS
+source buffer before either renderer touches it, so it is identical on both
+arms by construction, and this file already says hashes are not stable across
+runs. Neither form of the comparison can fail.
 
-**Exit:** `play.sh --ingame` produces the same frame on both renderers, checked
-by frame signature, not by eye.
+What went in instead reads the presented swapchain back and compares it to the
+bytes handed to `uploadFrame`, on a 1:1 blit so there is no resampling to
+excuse a difference. `GHPC_VK_PARITY=N`, every Nth frame. It caught nothing
+because nothing was wrong, but it can catch the swizzle, the filter and the
+rect, which a source-side hash never could: 10 checks, 0 mismatched pixels out
+of 229k to 287k, 0 validation errors, and no measurable speed cost against
+raylib (43.3% vs 43.5% eerate on the same binary).
 
-Settle here, not before: whether ImGui keeps the raylib path (rlImGui) or moves
-to the Vulkan backend. The Vulkan path has no debug panel at all right now.
-
-## Next
-
-**R2: the Rnd seam.** Exit criteria in `NEXT.md`.
+Still unsettled from R1: whether ImGui keeps the raylib path (rlImGui) or moves
+to the Vulkan backend. The Vulkan path has no debug panel and no pad input at
+all, since both are raylib's and `IsWindowReady()` is false there.
 
 R2 is where the speed arrives, and everything it needs is already measured:
 
