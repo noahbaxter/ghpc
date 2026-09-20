@@ -374,7 +374,53 @@ namespace
         return std::chrono::seconds(wholeSeconds) + std::chrono::nanoseconds(remainingNanoseconds);
     }
 
-    constexpr uint64_t kVBlankPeriodCycles = microsecondsToEeCycles(16667u);
+    constexpr uint64_t kVBlankPeriodCyclesNominal = microsecondsToEeCycles(16667u);
+
+    // GHPC_VBLANK_SCALE multiplies the vblank period, so 2 halves the vblank
+    // rate and leaves everything else alone.
+    //
+    // It separates cost that scales with frames drawn from cost that scales
+    // with cycles executed, which nothing else can: vblank and cop0_count are
+    // both derived from m_eeCycle, so at any single speed they are proportional
+    // and no measurement can tell which one a number follows. Moving one
+    // against the other is the only thing that can.
+    //
+    // It is what showed the menu's speed cap is the software rasteriser rather
+    // than scheduler overhead: at scale 4 the menu reaches 100% of realtime,
+    // and a profile puts ~409 samples in GSCpuBackend against ~23 in vblank
+    // event handling. Fewer vblanks means fewer frames rasterised.
+    //
+    // Diagnostic only. Any value but 1 is a deliberately wrong machine.
+    inline uint64_t vblankPeriodCycles()
+    {
+        static const uint64_t period = []() -> uint64_t {
+            const char *e = std::getenv("GHPC_VBLANK_SCALE");
+            const double scale = e ? std::atof(e) : 1.0;
+            if (scale <= 0.0)
+            {
+                return kVBlankPeriodCyclesNominal;
+            }
+            return static_cast<uint64_t>((double)kVBlankPeriodCyclesNominal * scale);
+        }();
+        return period;
+    }
+
+    // The same scale on the host deadline. Both sites schedule a vblank with a
+    // cycle deadline and a wall-clock one, so scaling only the cycle side would
+    // change two things at once and the experiment would prove nothing.
+    inline std::chrono::microseconds vblankPeriodHost()
+    {
+        static const std::chrono::microseconds period = []() -> std::chrono::microseconds {
+            const char *e = std::getenv("GHPC_VBLANK_SCALE");
+            const double scale = e ? std::atof(e) : 1.0;
+            if (scale <= 0.0)
+            {
+                return kVBlankPeriod;
+            }
+            return std::chrono::microseconds(static_cast<int64_t>(16667.0 * scale));
+        }();
+        return period;
+    }
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
 
@@ -471,8 +517,8 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     main.status = EeThreadStatus::Ready;
     m_threads.emplace(main.id, std::move(main));
     m_readyQueues[0].push_back(kMainThreadId);
-    scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
-                  std::chrono::steady_clock::now() + kVBlankPeriod,
+    scheduleEvent(m_eeCycle + vblankPeriodCycles(),
+                  std::chrono::steady_clock::now() + vblankPeriodHost(),
                   EeEvent{EeEventType::VBlankStart, 0, 0});
     publishSnapshot();
 }
@@ -2384,8 +2430,8 @@ void EeScheduler::processDueDeadlines()
                 scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
                               scheduled.hostDeadline + kVBlankDuration,
                               EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
-                scheduleEvent(scheduled.deadlineCycle + kVBlankPeriodCycles,
-                              scheduled.hostDeadline + kVBlankPeriod,
+                scheduleEvent(scheduled.deadlineCycle + vblankPeriodCycles(),
+                              scheduled.hostDeadline + vblankPeriodHost(),
                               EeEvent{EeEventType::VBlankStart, 0, 0});
             }
             processEvent(scheduled.event);
