@@ -864,13 +864,21 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
 
-    // The EE Count register advances at half the CPU clock. Games busy-wait on
-    // it directly (Timer::Sleep spins on mfc0 $9), and the recompiler lowers
-    // that read to a plain load of ctx->cop0_count, so nothing else would ever
-    // move it and any such loop would never terminate.
+    // COP0 Count advances once per EE cycle, at the full 294.912 MHz clock.
+    // Games busy-wait on it directly (Timer::Sleep spins on mfc0 $9), and the
+    // recompiler lowers that read to a plain load of ctx->cop0_count, so
+    // nothing else would ever move it and any such loop would never terminate.
+    //
+    // This used to shift right by one, on the R4000 convention that Count ticks
+    // at half the CPU clock. That is not what the EE does, and it made every
+    // clock the game derives from Count run at exactly half speed: with the
+    // software rasteriser out of the way the menu reached exactly nominal cycle
+    // rate while TaskMgr's own clock advanced at 0.500 of real time, and
+    // dropping the shift took it to 1.000. An exact factor of two is a shift,
+    // not a shortfall. ps2tek: "Count increments automatically every EE cycle."
     if (GuestThread *running = currentThread())
     {
-        running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle >> 1);
+        running->activeContext().cop0_count = static_cast<uint32_t>(m_eeCycle);
     }
     m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
     if (m_pendingEeTimerInterrupts != 0u)
