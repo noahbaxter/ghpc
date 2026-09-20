@@ -1,0 +1,89 @@
+The object transform is a bone palette, not a matrix. 2026-09-12, release.
+
+The last round measured the vertex transform to 0.56 px in x and left a 4 px
+dy it blamed on a stale object matrix. That diagnosis was wrong. Gameplay
+meshes are skinned, the transform is per-vertex, and once it is applied the
+residual is zero to GS subpixel.
+
+WHERE THE MATRIX COMES FROM, read from the ELF at 0x43f038.
+
+PsMesh::DrawShowing branches at 0x43f098 on mBones (this+0x13c):
+
+  mBones == 0  -> 0x43f2b8. Header 0x6C0402A4, V4-32 NUM 4 ADDR 0x2a4 = 676.
+                  0x43f2ec calls WorldXfm(this+0x40) and the 0x43f308 loop
+                  copies its four quadwords in.
+  mBones != 0  -> 0x43f0a4. ONE header 0x6C140294: V4-32, NUM 0x14 = 20
+                  quadwords, ADDR 0x294 = 660. It spans qw660..679, and the
+                  cursor advances 0x140, the same 20 quadwords. Bone matrices
+                  0..3 land at $s1+0x00/0x40/0x80/0xc0 = qw660..675, each
+                  Multiply(bone.xfm, WorldXfm(bone.obj)). qw676..679 is
+                  $s1+0x100, filled by one of two blocks:
+                    0x43f24c, when any of mBones+0x14/+0x20/+0x2c is set:
+                      rows (1 0 0) (0 1 0) (0 0 1) and sq $zero at +0x130.
+                      Exact identity.
+                    0x43f294, only bone 0 in use: copies $s1+0x00..0x30 to
+                      $s1+0x100..0x130, so qw676 is bone 0's matrix.
+
+Both skinned blocks branch straight to 0x43f330 and never run 0x43f2ec. That
+is the whole of last round's "reached DrawFaces without passing 0x43f2ec".
+There was no missing writer to find. 0x43f434 is also not a second call site:
+it is the only jal DrawFaces in the function, sitting in a per-material loop
+(bnez $16, 0x43f370 at 0x43f43c) that all three paths fall into.
+
+THE WEIGHTS were already in the log and had been read as colours. RndMesh::Vert
+carries four floats at +0x20, named Hmx::Color in the decomp. On every gameplay
+vert they sum to 1.0 and take shapes like (0 0 1 0), (0 0.5 0.5 0), (1 0 0 0).
+They are the four bone weights, indexing the palette in order.
+
+THE TRANSFORM, confirmed:
+
+    world = sum over b of weight[b] * (pos * Bone[b])    b = 0..3
+    clip  = world * M            M = qw700..703 as rows, implied pos.w of 1
+    q     = 1 / clip.w
+    x     = clip.x * q * qw696.x + qw697.x
+    y     = clip.y * q * qw696.y + qw697.y
+    s,t   = uv * q
+
+Bone[b] rows 0..2 are the Matrix3 and row 3 the translation, the same shape a
+Transform has. The w lane of each row is stale packet content (167.903, the
+camera's M row 3 w) because the stores are 3-component.
+
+RESIDUAL, six meshes on the first gameplay frame, 171 unambiguous pairs.
+Pairs are object verts against submitted verts, keyed on uv recovered as st/q
+because fst=0, keeping only matches 10x closer than their runner-up so the uv
+aliasing that widened last round's ranges is excluded rather than averaged in.
+
+  mesh        pairs   identity qw676        owner +0xa0          bone palette
+  0x007efce0   21   dx +1.11 dy  +7.61   dx -0.48 dy -4.04   dx +0.04 dy +0.03
+  0x007ef830   30   dx -3.66 dy  +5.17   dx -5.12 dy -6.52   dx +0.04 dy +0.04
+  0x007ef510   32   dx +8.25 dy +10.63   dx +6.67 dy -1.79   dx +0.03 dy +0.04
+  0x007eed40   27   dx +5.43 dy +13.29   dx +3.74 dy -0.16   dx +0.04 dy +0.03
+  0x007eebb0   30   dx +9.56 dy  +5.27   dx +7.80 dy -6.68   dx +0.03 dy +0.04
+  0x007f1220   31   dx +8.67 dy +10.52   dx +6.98 dy -1.88   dx +0.03 dy +0.03
+
+Medians, in GS pixels. The bone-palette column's full range is [0.00, 0.07] on
+both axes for all six meshes, and q lands at -0.000%. One sixteenth of a pixel
+is 0.0625, so the whole residual is the GS subpixel quantisation. Nothing is
+left over.
+
+Both rigid candidates are worse than the table's medians suggest, because
+their error is not constant: the identity and +0xa0 ranges span 8 to 40 px
+within a single mesh. A rigid matrix cannot fit a weighted blend, and the 4 px
+dy was never evidence of staleness. It was the median of that spread on the
+one mesh that got measured.
+
+This also settles an open question in rnd-seam.md: skinning runs on VU1, not
+the EE, and the backend's vertex contract needs the weights and the palette,
+not just pos/norm/uv.
+
+WHAT THE PRE-DECLARED METRIC SAID. The round predicted that qw676 would be the
+real matrix and that using it would take dy sub-pixel. qw676 is real and was
+captured from the packet, but using it made dy worse, +8.2 against the +0xa0
+arm's -3.5 on the sample mesh. The hypothesis failed on its own metric. The
+reason it failed is what closed the problem.
+
+CAPTURE. ghpcCaptureObjXfm in the DrawShowing override, at label_43f330 where
+all three paths converge and before either register dies ($s2 in the delay
+slot at 0x43f338, $s1 at 0x43f344). It reads mBones and the three bone slots
+to name the path, then copies qw660..679 out of the packet the guest just
+built. It recomputes nothing, so it cannot manufacture agreement.

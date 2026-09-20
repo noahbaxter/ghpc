@@ -579,6 +579,54 @@ namespace
         auto it = g_file_map.find(handle);
         return (it != g_file_map.end()) ? it->second : nullptr;
     }
+
+    // The game statically links newlib, so its stdin/stdout/stderr are FILE
+    // structs inside impure_data and it passes their guest addresses straight
+    // to fprintf and friends. Those never match a handle fopen handed out, so
+    // treating the argument as a handle alone silently drops every write the
+    // game makes to its own stderr, including assert text. Read the fd out of
+    // the FILE struct (newlib keeps _file at +14) and map it to a host stream.
+    FILE *resolve_file_ptr(uint8_t *rdram, uint32_t handle)
+    {
+        if (FILE *fp = get_file_ptr(handle))
+            return fp;
+        if (handle == 0)
+            return nullptr;
+
+        const uint8_t *filePtr = getConstMemPtr(rdram, handle);
+        if (!filePtr)
+        {
+            std::fprintf(stderr, "[libc] FILE* 0x%08x is not mapped guest memory, write dropped\n",
+                         handle);
+            return nullptr;
+        }
+
+        int16_t fd = 0;
+        std::memcpy(&fd, filePtr + 14, sizeof(fd));
+        // Say what was resolved, once per handle. Without this a dropped guest
+        // diagnostic is invisible, which is what hid the lexer fatal error.
+        {
+            static uint32_t seen[8] = {};
+            static int seenCount = 0;
+            bool known = false;
+            for (int i = 0; i < seenCount; ++i)
+                if (seen[i] == handle) { known = true; break; }
+            if (!known && seenCount < 8)
+            {
+                seen[seenCount++] = handle;
+                std::fprintf(stderr, "[libc] guest FILE* 0x%08x has fd %d, struct:", handle, (int)fd);
+                for (int i = 0; i < 20; ++i)
+                    std::fprintf(stderr, " %02x", filePtr[i]);
+                std::fprintf(stderr, "\n");
+            }
+        }
+        // Only output calls reach here, so stdin is never a valid answer.
+        // newlib fills _file lazily in __sinit, so a stream the game never
+        // opened normally reads back as fd 0, and mapping that to stdin
+        // silently discarded the text. Anything that is not clearly stdout
+        // goes to stderr: a misrouted diagnostic beats a lost one.
+        return (fd == 1) ? stdout : stderr;
+    }
 }
 
 namespace

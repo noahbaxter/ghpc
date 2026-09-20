@@ -5,6 +5,7 @@
 #include "game_overrides.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/ghpc_native_draw.h"
 #include "runtime/ee_scheduler.h"
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
@@ -27,6 +28,7 @@
 #include <atomic>
 #include <thread>
 #include <unordered_map>
+#include <mutex>
 #include <sstream>
 
 namespace ps2_stubs
@@ -92,7 +94,29 @@ namespace
     constexpr uint32_t kGuestHeapDefaultBase = 0x00100000u;
     constexpr uint32_t kGuestHeapDefaultAlignment = 16u;
     constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
-    constexpr uint32_t kGuestHeapHardLimit = 0x01F00000u;
+    constexpr uint32_t kGuestHeapHardLimit = PS2_RAM_SIZE - 0x00100000u;
+
+    // The runtime arena and the guest allocator have to live in separate
+    // regions once the game runs real newlib malloc, because sbrk grows the
+    // guest heap upward from the ELF's end with no idea the runtime is also
+    // handing out addresses. Fixed block, so EndOfHeap can name the ceiling
+    // during boot without waiting for the arena to be configured.
+    // Sized off PS2_RAM_SIZE, so the split follows the map instead of pinning
+    // itself to where the top of a 32MB one used to be. At 128MB:
+    //   game    [ELF end .... 0x07D00000)   sbrk, ceiling = EndOfHeap
+    //   runtime [0x07D00000 .. 0x07F00000)  guestMalloc only
+    //   stacks  [0x07F00000 .. 0x08000000)  RPC/TLS pools, callback stacks
+    constexpr uint32_t kRuntimeArenaBase = PS2_RAM_SIZE - 0x00300000u;
+
+    // Guest memory the host layer keeps for itself. A PS2 game may take all
+    // of RAM; a recompiled one may not, because the runtime needs guest
+    // addressable memory the real console never had: GIF packets in GS.cpp,
+    // the glyph and kerning tables in Font.cpp, MPEG callback data, IOP host
+    // buffers, and a stack per guest thread in Thread.cpp. GH2 sizes its own
+    // pools by asking for a huge block and halving until one fits, so without
+    // a reserve it swallows the arena whole and the next allocation of any
+    // size fails. Overridable with GHPC_HEAP_RESERVE for bisecting.
+    constexpr uint32_t kGuestHeapRuntimeReserve = 0x00100000u;
 
     constexpr uint32_t COP0_CAUSE_EXCCODE_MASK = 0x0000007Cu;
     constexpr uint32_t COP0_CAUSE_BD = 0x80000000u;
@@ -375,6 +399,16 @@ namespace
     }
 }
 
+// GHPCSTART: has the chart actually started, as opposed to a screen appearing.
+//
+// GamePanel::StartGame (0x1070f8) is the single instant that separates the
+// count-in from gameplay: it is what SetRealtime(false) runs from, and nothing
+// else calls it. Latching it here gives the frame dumper a gate, which is the
+// difference between twenty pictures of the boot sequence and one picture of
+// the game. The dumper caps at 20 and had always spent all of them before
+// game_screen, which is why no picture of this game in gameplay existed.
+std::atomic<bool> g_ghpcGameStarted{false};
+
 static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
 {
     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
@@ -473,7 +507,11 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
             const char *e = std::getenv("GHPC_FRAME_MIN");
             return e ? (size_t)std::strtoull(e, nullptr, 0) : 1000u;
         }();
-        if (nonBlack > frameMin)
+        // GHPC_FRAME_AFTER_START holds every dump until StartGame has run, so
+        // the budget lands on gameplay instead of on the splashes. It decides
+        // whether a file is written and touches no guest state.
+        static const bool afterStart = std::getenv("GHPC_FRAME_AFTER_START") != nullptr;
+        if (nonBlack > frameMin && (!afterStart || g_ghpcGameStarted.load(std::memory_order_relaxed)))
         {
             static int dumps = 0;
             static auto lastDump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -551,6 +589,28 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
         }
     }
 #endif
+    // Frame pacing, available in every build. GHPC_FPS=N reports every N frames.
+    {
+        static const int fpsEvery = []() {
+            const char *e = std::getenv("GHPC_FPS");
+            return e ? std::atoi(e) : 0;
+        }();
+        if (fpsEvery > 0)
+        {
+            static auto last = std::chrono::steady_clock::now();
+            static int frames = 0;
+            if (++frames >= fpsEvery)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                const double secs = std::chrono::duration<double>(now - last).count();
+                std::fprintf(stderr, "[fps] %.2f frames/sec  %.2f ms/frame  over %d frames\n",
+                             frames / secs, (secs * 1000.0) / frames, frames);
+                last = now;
+                frames = 0;
+            }
+        }
+    }
+
     s_lastDisplayFbp = displayFbp;
     s_lastSourceFbp = sourceFbp;
     s_lastPreferred = usedPreferredDisplaySource;
@@ -612,10 +672,10 @@ PS2Runtime::PS2Runtime()
 
     m_loadedModules.clear();
     m_guestHeapBlocks.clear();
-    m_guestHeapBase = kGuestHeapDefaultBase;
-    m_guestHeapEnd = kGuestHeapDefaultBase;
+    m_guestHeapBase = kRuntimeArenaBase;
+    m_guestHeapEnd = kRuntimeArenaBase;
     m_guestHeapLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-    m_guestHeapSuggestedBase = kGuestHeapDefaultBase;
+    m_guestHeapSuggestedBase = kRuntimeArenaBase;
     m_guestHeapConfigured = false;
     m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
     m_asyncCallbackStackTop = PS2_RAM_SIZE;
@@ -740,9 +800,35 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     // The 65536 was a literal here, and the VU1
+                                     // census shows a third of GH2's microprograms
+                                     // hitting it exactly. That leaves two readings
+                                     // apart: an infinite loop, or a budget too small
+                                     // for honest work. Raising it separates them,
+                                     // because a real runaway does not start
+                                     // terminating when handed more rope.
+                                     static const uint32_t s_vu1Budget = []() -> uint32_t {
+                                         const char *e = std::getenv("GHPC_VU1_BUDGET");
+                                         return e ? (uint32_t)std::strtoul(e, nullptr, 0) : 65536u;
+                                     }();
+                                     // The Rnd seam. When PsMesh::DrawFaces has
+                                     // armed a mesh the host cache holds, the
+                                     // transform runs here instead of the
+                                     // microprogram. Every register this draw
+                                     // needs is already latched: they went out as
+                                     // GIF A+D through VIF1 DIRECT ahead of this
+                                     // MSCAL. Off unless GHPC_NATIVE_DRAW is set.
+                                     if (ghpcNativeDrawMscal(m_gs))
+                                     {
+                                         // No microprogram ran, so neither stop
+                                         // bit can be set. Clear them rather than
+                                         // leaving the previous MSCAL's.
+                                         cpuContext->vu0_vpu_stat &= ~0x0600u;
+                                         return;
+                                     }
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
-                                                   m_gs, &m_memory, startPC, top, itop, 65536);
+                                                   m_gs, &m_memory, startPC, top, itop, s_vu1Budget);
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
@@ -801,7 +887,16 @@ bool PS2Runtime::initialize(const char *title)
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+        unsigned int windowFlags = FLAG_WINDOW_RESIZABLE;
+        // GHPC_NO_FOCUS keeps keyboard focus on the terminal. It does NOT stop
+        // the raise: GLFW's cocoa show path calls orderFront unconditionally and
+        // offers no hint to suppress it, so a visible window always stacks on top.
+        // GHPC_HIDE_WINDOW is the only way to keep an unattended run off screen.
+        if (std::getenv("GHPC_NO_FOCUS") != nullptr)
+            windowFlags |= FLAG_WINDOW_UNFOCUSED;
+        if (std::getenv("GHPC_HIDE_WINDOW") != nullptr)
+            windowFlags |= FLAG_WINDOW_HIDDEN;
+        SetConfigFlags(windowFlags);
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
         InitAudioDevice();
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
@@ -1032,10 +1127,13 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
         std::lock_guard<std::mutex> lock(m_guestHeapMutex);
         if (!m_guestHeapConfigured)
         {
+            // The ELF derived base belongs to the guest allocator, not to us.
+            // Anchoring the arena there puts it directly on top of the region
+            // sbrk is about to grow into.
             const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
-            m_guestHeapSuggestedBase = std::min(suggestedHeapBase, hardLimit);
-            m_guestHeapBase = m_guestHeapSuggestedBase;
-            m_guestHeapEnd = m_guestHeapSuggestedBase;
+            m_guestHeapSuggestedBase = kRuntimeArenaBase;
+            m_guestHeapBase = kRuntimeArenaBase;
+            m_guestHeapEnd = kRuntimeArenaBase;
             m_guestHeapLimit = hardLimit;
         }
     }
@@ -1176,6 +1274,728 @@ bool PS2Runtime::registerFunction(uint32_t address, RecompiledFunction func)
 {
     return replaceFunction(address, func);
 }
+
+#if GHPC_DIAG
+void PS2Runtime::noteProbeEntry(R5900Context *ctx, uint32_t targetPc,
+                                uint32_t sourcePc, const char *via)
+{
+    // Watch list comes from the environment, so changing it needs no rebuild:
+    //   GHPC_PROBE=0x2fcf98,0x24b970 ./scripts/run.sh --quiet --debug
+    static uint32_t s_watch[16];
+    static unsigned s_count = 0u;
+    static uint32_t s_lo = 0xFFFFFFFFu, s_hi = 0u;
+    static unsigned long long s_hits[16] = {0};
+    // After the first 40 the watch prints every Nth call. The default of 1000
+    // is too coarse for the question this probe is most often asked, which is
+    // not "is it called" but "did it stop being called": at 1000 a function
+    // that ran a few hundred times and then died looks the same as one that ran
+    // a few hundred times and kept going. GHPC_PROBE_EVERY=50 turns the same
+    // watch into a timeline without a rebuild.
+    static unsigned long long s_every = 1000ull;
+    static bool s_init = false;
+    if (!s_init)
+    {
+        s_init = true;
+        if (const char *e = std::getenv("GHPC_PROBE_EVERY"))
+        {
+            const unsigned long long v = std::strtoull(e, nullptr, 0);
+            if (v > 0ull) s_every = v;
+        }
+        if (const char *env = std::getenv("GHPC_PROBE"))
+        {
+            const char *p = env;
+            while (*p && s_count < 16u)
+            {
+                char *end = nullptr;
+                const unsigned long v = std::strtoul(p, &end, 0);
+                if (end == p) break;
+                const uint32_t a = static_cast<uint32_t>(v);
+                s_watch[s_count++] = a;
+                if (a < s_lo) s_lo = a;
+                if (a > s_hi) s_hi = a;
+                p = end;
+                while (*p == ',' || *p == ' ') ++p;
+            }
+            std::fprintf(stderr, "[probe] GHPCPROBE watching %u address(es)\n", s_count);
+        }
+    }
+    // Common case with no watch list is two compares.
+    if (s_count == 0u || targetPc < s_lo || targetPc > s_hi)
+    {
+        return;
+    }
+    for (unsigned i = 0; i < s_count; ++i)
+    {
+        if (s_watch[i] != targetPc) continue;
+        const unsigned long long n = ++s_hits[i];
+        if (n <= 40ull || (n % s_every) == 0ull)
+        {
+            std::fprintf(stderr,
+                         "[probe] 0x%x #%llu via=%s a0=0x%x a1=0x%x a2=0x%x a3=0x%x ra=0x%x from=0x%x\n",
+                         targetPc, n, via,
+                         (unsigned)getRegU32(ctx, 4), (unsigned)getRegU32(ctx, 5),
+                         (unsigned)getRegU32(ctx, 6), (unsigned)getRegU32(ctx, 7),
+                         (unsigned)getRegU32(ctx, 31), sourcePc);
+        }
+        return;
+    }
+}
+// GHPCHEAP: the newlib allocator state, read straight out of guest memory.
+//
+// GH2 links newlib's dlmalloc, so __malloc_av_ (0x449188, 1032 bytes = the
+// classic mbinptr av_[NAV*2+2] with NAV=128) is the whole allocator: av_[2] is
+// the top chunk and each bin i is a circular list rooted at a fake chunk at
+// av_ + 8*i. A chunk keeps prev_size at +0, size at +4 (low bits are flags),
+// fd at +8, bk at +12.
+//
+// Addresses are GH2 PS2 Final Debug specific, like the Debug::Fail probe above.
+namespace
+{
+    constexpr uint32_t kMallocAvBase = 0x00449188u;   // __malloc_av_
+    constexpr uint32_t kMallocSbrkBase = 0x004495A0u; // __malloc_sbrk_base
+    constexpr uint32_t kMallocEntry = 0x0035C778u;    // malloc
+    constexpr uint32_t kFlexFatalError = 0x00307CC0u; // yy_fatal_error
+    constexpr unsigned kMallocBinCount = 128u;
+
+    std::atomic<uint32_t> g_lastMallocSize{0u};
+    std::atomic<unsigned long long> g_mallocCalls{0ull};
+    std::atomic<uint32_t> g_lastSbrkOld{0u};
+    std::atomic<uint32_t> g_lastSbrkNew{0u};
+    std::atomic<int32_t> g_lastSbrkIncrement{0};
+    std::atomic<unsigned long long> g_sbrkCalls{0ull};
+    std::atomic<unsigned long long> g_sbrkRefusals{0ull};
+
+    bool guestRead32(const uint8_t *rdram, uint32_t addr, uint32_t &out)
+    {
+        // Strip the kseg segment bits, do NOT mask to a fixed width: a 25 bit
+        // mask silently truncates every address above 32MB, which is most of
+        // the map now that PS2_RAM_SIZE is 128MB.
+        addr &= 0x1FFFFFFFu;
+        if (addr < 0x00100000u || (addr + 4u) > PS2_RAM_SIZE || (addr & 3u) != 0u)
+        {
+            return false;
+        }
+        std::memcpy(&out, rdram + addr, sizeof(out));
+        return true;
+    }
+}
+
+void PS2Runtime::dumpGuestHeapCensus(uint8_t *rdram, const char *why)
+{
+    uint32_t top = 0u;
+    uint32_t sbrkBase = 0u;
+    if (!guestRead32(rdram, kMallocAvBase + 8u, top) ||
+        !guestRead32(rdram, kMallocSbrkBase, sbrkBase))
+    {
+        std::fprintf(stderr, "[ghpc/heap] %s: __malloc_av_ unreadable\n", why);
+        return;
+    }
+
+    uint32_t topSize = 0u;
+    guestRead32(rdram, top + 4u, topSize);
+    topSize &= ~0x3u;
+
+    // Bin 0 is the top chunk, so the free lists start at 1.
+    uint64_t binFree = 0u;
+    uint32_t largest = 0u;
+    unsigned chunks = 0u;
+    bool truncated = false;
+    for (unsigned bin = 1u; bin < kMallocBinCount; ++bin)
+    {
+        const uint32_t root = kMallocAvBase + 8u * bin;
+        uint32_t p = 0u;
+        if (!guestRead32(rdram, root + 8u, p))
+        {
+            continue;
+        }
+        for (unsigned guard = 0u; p != root && guard < 4096u; ++guard)
+        {
+            uint32_t size = 0u;
+            uint32_t next = 0u;
+            if (!guestRead32(rdram, p + 4u, size) || !guestRead32(rdram, p + 8u, next))
+            {
+                truncated = true;
+                break;
+            }
+            size &= ~0x3u;
+            binFree += size;
+            largest = std::max(largest, size);
+            ++chunks;
+            p = next;
+        }
+    }
+
+    // Linear walk of every chunk between sbrk_base and top. A chunk is in use
+    // when the NEXT chunk's size field carries PREV_INUSE, which is the only
+    // record dlmalloc keeps of who is holding memory. This separates the two
+    // ways a full heap gets that way: one huge live chunk is a pool the game
+    // reserved and is not allocating out of, while a flood of small ones means
+    // the memory is genuinely spent.
+    //
+    // newlib nudges the first chunk so the user pointer lands 8 aligned, and
+    // the exact nudge depends on where the ELF ended, so rather than assume it
+    // the walk tries each offset and keeps the one whose chain lands exactly on
+    // top. Landing on top is what proves the walk was reading real chunks.
+    uint32_t walkStart = 0u;
+    uint64_t liveBytes = 0u;
+    uint64_t freeBytes = 0u;
+    unsigned liveCount = 0u;
+    unsigned freeCount = 0u;
+    uint32_t biggestLive = 0u;
+    uint32_t biggestLiveAt = 0u;
+    unsigned liveByBucket[32] = {};
+    for (uint32_t nudge = 0u; nudge < 32u && walkStart == 0u; nudge += 4u)
+    {
+        const uint32_t start = ((sbrkBase + 7u) & ~7u) + nudge;
+        uint32_t p = start;
+        uint64_t live = 0u, dead = 0u;
+        unsigned liveN = 0u, deadN = 0u, big = 0u, bigAt = 0u;
+        unsigned buckets[32] = {};
+        bool sane = true;
+        while (p < top)
+        {
+            uint32_t sizeRaw = 0u;
+            uint32_t nextRaw = 0u;
+            const uint32_t size = (guestRead32(rdram, p + 4u, sizeRaw)) ? (sizeRaw & ~0x3u) : 0u;
+            if (size < 16u || (p + size) > top || !guestRead32(rdram, p + size + 4u, nextRaw))
+            {
+                sane = false;
+                break;
+            }
+            if ((nextRaw & 1u) != 0u)
+            {
+                live += size;
+                ++liveN;
+                unsigned bucket = 0u;
+                while (bucket < 31u && (size >> bucket) > 1u)
+                {
+                    ++bucket;
+                }
+                ++buckets[bucket];
+                if (size > big)
+                {
+                    big = size;
+                    bigAt = p;
+                }
+            }
+            else
+            {
+                dead += size;
+                ++deadN;
+            }
+            p += size;
+        }
+        if (sane && p == top)
+        {
+            walkStart = start;
+            liveBytes = live;
+            freeBytes = dead;
+            liveCount = liveN;
+            freeCount = deadN;
+            biggestLive = big;
+            biggestLiveAt = bigAt;
+            std::memcpy(liveByBucket, buckets, sizeof(buckets));
+        }
+    }
+
+    const uint32_t ceiling = runtimeArenaBase();
+    const uint32_t brk = g_lastSbrkNew.load();
+    std::fprintf(stderr,
+                 "[ghpc/heap] %s req=%u (malloc #%llu)\n"
+                 "[ghpc/heap]   top=0x%08x size=%u (%.1f KB), headroom to ceiling 0x%08x = %d KB\n"
+                 "[ghpc/heap]   bins: %u free chunks, %llu bytes total, largest %u\n"
+                 "[ghpc/heap]   sbrk: base=0x%08x brk=0x%08x calls=%llu refused=%llu last=%+d%s\n",
+                 why, (unsigned)g_lastMallocSize.load(), g_mallocCalls.load(),
+                 top, topSize, (double)topSize / 1024.0, ceiling,
+                 (int)((int64_t)ceiling - (int64_t)(top + topSize)) / 1024,
+                 chunks, (unsigned long long)binFree, largest,
+                 sbrkBase, brk, g_sbrkCalls.load(), g_sbrkRefusals.load(),
+                 (int)g_lastSbrkIncrement.load(), truncated ? " (bin walk truncated)" : "");
+
+    if (walkStart == 0u)
+    {
+        std::fprintf(stderr, "[ghpc/heap]   walk: no chunk chain from 0x%08x lands on top, "
+                             "cannot say who holds the heap\n", sbrkBase);
+        return;
+    }
+
+    std::fprintf(stderr,
+                 "[ghpc/heap]   walk from 0x%08x: %u live chunks holding %llu bytes (%.1f MB), "
+                 "%u free holding %llu\n"
+                 "[ghpc/heap]   biggest live chunk 0x%08x = %u bytes (%.1f MB), %.1f%% of the heap\n",
+                 walkStart, liveCount, (unsigned long long)liveBytes,
+                 (double)liveBytes / (1024.0 * 1024.0), freeCount, (unsigned long long)freeBytes,
+                 biggestLiveAt, biggestLive, (double)biggestLive / (1024.0 * 1024.0),
+                 (liveBytes > 0u) ? (100.0 * (double)biggestLive / (double)liveBytes) : 0.0);
+
+    std::fprintf(stderr, "[ghpc/heap]   live chunks by size:");
+    for (unsigned bucket = 0u; bucket < 32u; ++bucket)
+    {
+        if (liveByBucket[bucket] != 0u)
+        {
+            std::fprintf(stderr, " %u:%u", 1u << bucket, liveByBucket[bucket]);
+        }
+    }
+    std::fprintf(stderr, "\n");
+}
+
+void PS2Runtime::noteHeapCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    if (targetPc == kMallocEntry)
+    {
+        g_lastMallocSize.store(getRegU32(ctx, 4));
+        g_mallocCalls.fetch_add(1ull);
+        return;
+    }
+
+    // flex prints "out of dynamic memory" and exits, so this is the last place
+    // the failing request and the heap that refused it are both still around.
+    dumpGuestHeapCensus(rdram, "yy_fatal_error");
+}
+
+// sbrk computes the new break in the delay slot of its jal to EndOfHeap, so at
+// syscall entry $s0 is that break and $a0 is still the increment. That makes
+// this the exact point where "the heap is full" becomes true or does not.
+void PS2Runtime::noteHeapCeilingCheck(R5900Context *ctx)
+{
+    // Only sbrk sets up those registers; anyone else asking for the ceiling
+    // would report garbage.
+    if (getRegU32(ctx, 31) != 0x0034BA08u)
+    {
+        return;
+    }
+
+    const uint32_t newBreak = getRegU32(ctx, 16);
+    const int32_t increment = (int32_t)getRegU32(ctx, 4);
+    g_lastSbrkNew.store(newBreak);
+    g_lastSbrkOld.store(newBreak - (uint32_t)increment);
+    g_lastSbrkIncrement.store(increment);
+    g_sbrkCalls.fetch_add(1ull);
+
+    const uint32_t ceiling = runtimeArenaBase();
+    const bool refused = newBreak > ceiling;
+    if (refused)
+    {
+        g_sbrkRefusals.fetch_add(1ull);
+    }
+    std::fprintf(stderr, "[ghpc/heap] sbrk %+d: 0x%08x -> 0x%08x ceiling 0x%08x %s\n",
+                 increment, newBreak - (uint32_t)increment, newBreak, ceiling,
+                 refused ? "REFUSED" : "ok");
+}
+
+// GHPCLOAD: name the file the song load is waiting on.
+//
+// LoadMgr::PollUntilLoaded walks the loader list at TheLoadMgr+0x38 and spins
+// until the head reports IsLoaded. FileLoader::IsLoaded is only "the stream at
+// +0x18 is null", and PollLoading nulls it only when the stream's readiness
+// virtual (vtable +0x6c) returns nonzero. So a load that never finishes shows
+// up here as a stream pointer that never clears, and the useful fact is which
+// file it belongs to.
+namespace
+{
+    constexpr uint32_t kLoadMgrGetLoader = 0x0031D6C0u;
+    constexpr uint32_t kLoadMgrAddLoader = 0x0031D7F0u;
+    constexpr uint32_t kFileLoaderPoll = 0x0031E2D8u;
+
+    // FilePath is a String-alike, so the text is either inline or one pointer
+    // away. Try both rather than guessing the layout.
+    void describeGuestPath(const uint8_t *rdram, uint32_t addr, char *out, size_t outSize)
+    {
+        out[0] = '\0';
+        auto readText = [&](uint32_t at) -> bool {
+            if (at < 0x00100000u || at >= PS2_RAM_SIZE) return false;
+            size_t n = 0;
+            while (n + 1 < outSize && (at + n) < PS2_RAM_SIZE)
+            {
+                const uint8_t c = rdram[at + n];
+                if (c == 0u) break;
+                if (c < 0x20u || c >= 0x7Fu) return false;
+                out[n++] = static_cast<char>(c);
+            }
+            out[n] = '\0';
+            return n > 1;
+        };
+        // FilePath derives from String, and String::operator=(const char*)
+        // does strcpy(this + 0x10, src), so the text buffer pointer is at
+        // +0x10. Confirmed against __as__6StringPCc at 0x325a40, not guessed.
+        uint32_t text = 0u;
+        if (guestRead32(rdram, addr + 0x10u, text) && readText(text))
+        {
+            return;
+        }
+        // Layout is a guess, so when the guess fails say so with the bytes
+        // rather than printing whatever printable noise happened to be near.
+        char hex[64];
+        int n = 0;
+        for (uint32_t i = 0u; i < 16u && n < (int)sizeof(hex) - 4; ++i)
+        {
+            const uint32_t at = (addr & 0x1FFFFFFFu) + i;
+            n += std::snprintf(hex + n, sizeof(hex) - n, "%02x",
+                               (at < PS2_RAM_SIZE) ? rdram[at] : 0u);
+        }
+        std::snprintf(out, outSize, "<no text at 0x%08x, bytes %s>", addr, hex);
+    }
+}
+
+void PS2Runtime::noteLoaderCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    if (targetPc == kFileLoaderPoll)
+    {
+        // Report only when the stream pointer changes, so a loader that is
+        // simply pending does not drown the log.
+        static uint32_t s_lastLoader = 0xFFFFFFFFu;
+        static uint32_t s_lastStream = 0xFFFFFFFFu;
+        static unsigned long long s_polls = 0ull;
+        ++s_polls;
+        const uint32_t loader = getRegU32(ctx, 4);
+        uint32_t stream = 0u;
+        guestRead32(rdram, loader + 0x18u, stream);
+        if (loader == s_lastLoader && stream == s_lastStream)
+        {
+            return;
+        }
+        s_lastLoader = loader;
+        s_lastStream = stream;
+        uint32_t vtable = 0u;
+        if (stream != 0u) guestRead32(rdram, stream, vtable);
+        std::fprintf(stderr,
+                     "[ghpc/load] FileLoader 0x%08x stream=0x%08x vt=0x%08x (poll #%llu)%s\n",
+                     loader, stream, vtable, s_polls,
+                     (stream == 0u) ? " LOADED" : "");
+        return;
+    }
+
+    static unsigned long long s_requests = 0ull;
+    const uint32_t pathAddr = getRegU32(ctx, 5);
+    char path[128];
+    describeGuestPath(rdram, pathAddr, path, sizeof(path));
+    if (++s_requests <= 200ull)
+    {
+        std::fprintf(stderr, "[ghpc/load] %s \"%s\" ra=0x%x\n",
+                     (targetPc == kLoadMgrAddLoader) ? "AddLoader" : "GetLoader",
+                     path, (unsigned)getRegU32(ctx, 31));
+    }
+}
+// GHPCBLK: where the ARK read chain stops.
+//
+// ArkFile::ReadDone returns (this+0x14 == 0) and is the only caller of
+// BlockMgr::Poll on the load path, so a loader that never finishes means
+// +0x14 never drains. Either the read was never queued (AddTask never runs)
+// or it was queued and Poll cannot retire it. Counting all four points and
+// watching +0x14 separates those without guessing.
+namespace
+{
+    constexpr uint32_t kArkReadAsync = 0x002F7DE8u;  // ArkFile::ReadAsync
+    constexpr uint32_t kBlockAddTask = 0x002F92D0u;  // BlockMgr::AddTask
+    constexpr uint32_t kBlockPoll = 0x002F9848u;     // BlockMgr::Poll
+    constexpr uint32_t kArkReadDone = 0x002F8128u;   // ArkFile::ReadDone
+    constexpr uint32_t kTheBlockMgr = 0x00524B50u;   // TheBlockMgr, 48 bytes
+
+    std::atomic<unsigned long long> g_readAsync{0ull};
+    std::atomic<unsigned long long> g_addTask{0ull};
+    std::atomic<unsigned long long> g_blockPoll{0ull};
+    std::atomic<unsigned long long> g_readDone{0ull};
+}
+
+void PS2Runtime::noteBlockCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    if (targetPc == kBlockPoll)
+    {
+        g_blockPoll.fetch_add(1ull);
+        return;
+    }
+    if (targetPc == kArkReadAsync)
+    {
+        const unsigned long long n = g_readAsync.fetch_add(1ull) + 1ull;
+        if (n <= 20ull)
+        {
+            std::fprintf(stderr, "[ghpc/blk] ReadAsync #%llu ark=0x%08x buf=0x%08x bytes=%d\n",
+                         n, getRegU32(ctx, 4), getRegU32(ctx, 5), (int)getRegU32(ctx, 6));
+        }
+        return;
+    }
+    if (targetPc == kBlockAddTask)
+    {
+        const unsigned long long n = g_addTask.fetch_add(1ull) + 1ull;
+        if (n <= 20ull)
+        {
+            std::fprintf(stderr, "[ghpc/blk] AddTask #%llu mgr=0x%08x task=0x%08x\n",
+                         n, getRegU32(ctx, 4), getRegU32(ctx, 5));
+        }
+        return;
+    }
+
+    // ReadDone: the pending count is the number that has to reach zero.
+    const unsigned long long n = g_readDone.fetch_add(1ull) + 1ull;
+    const uint32_t ark = getRegU32(ctx, 4);
+    uint32_t pending = 0u;
+    uint32_t got = 0u;
+    guestRead32(rdram, ark + 0x14u, pending);
+    guestRead32(rdram, ark + 0x18u, got);
+
+    static uint32_t s_lastArk = 0xFFFFFFFFu;
+    static uint32_t s_lastPending = 0xFFFFFFFFu;
+    const bool changed = (ark != s_lastArk || pending != s_lastPending);
+    if (!changed && (n % 2000ull) != 0ull)
+    {
+        return;
+    }
+    s_lastArk = ark;
+    s_lastPending = pending;
+
+    char mgr[128];
+    int at = 0;
+    for (uint32_t off = 0u; off < 48u && at < (int)sizeof(mgr) - 10; off += 4u)
+    {
+        uint32_t word = 0u;
+        guestRead32(rdram, kTheBlockMgr + off, word);
+        at += std::snprintf(mgr + at, sizeof(mgr) - at, "%s%x", off ? " " : "", word);
+    }
+    std::fprintf(stderr,
+                 "[ghpc/blk] ReadDone #%llu ark=0x%08x pending=%u got=%u | "
+                 "readAsync=%llu addTask=%llu poll=%llu\n"
+                 "[ghpc/blk]   TheBlockMgr: %s\n",
+                 n, ark, pending, got, g_readAsync.load(), g_addTask.load(),
+                 g_blockPoll.load(), mgr);
+}
+
+// GHPCSTRM: the one word the song load waits on.
+//
+// GamePanel::IsLoaded gates the loading_screen -> game_screen transition and
+// its last gate resolves, through BeatMatch and MasterAudio, to
+// StreamEE::IsReady (0x26ba28), which is:
+//
+//     lw $2, 0x4c($4); addiu $2, $2, -3; sltiu $2, $2, 3
+//
+// so "ready" means the state word at StreamEE+0x4c is 3, 4 or 5. The stall
+// leaves it outside that range forever. IsReady is called once per frame with
+// the object in $a0, so hooking it names both the object and the state without
+// having to find TheStreamEE.
+//
+// Addresses are GH2 PS2 Final Debug specific, like the probes above.
+namespace
+{
+    constexpr uint32_t kStreamIsReady = 0x0026BA28u; // StreamEE::IsReady
+    constexpr uint32_t kStreamState = 0x4Cu;         // StreamEE+0x4c
+
+    std::atomic<unsigned long long> g_strmCalls{0ull};
+
+    bool guestWrite32(uint8_t *rdram, uint32_t addr, uint32_t value)
+    {
+        addr &= 0x1FFFFFFFu;
+        if (addr < 0x00100000u || (addr + 4u) > PS2_RAM_SIZE || (addr & 3u) != 0u)
+        {
+            return false;
+        }
+        std::memcpy(rdram + addr, &value, sizeof(value));
+        return true;
+    }
+
+    // EXPERIMENT (GHPC_STREAM_READY): stand in for the missing IOP synth module,
+    // the same way GHPC_SYNTH_ACK stands in for SYNTH_R's SPU handshake.
+    //
+    // Nothing on the EE advances the state word 2 -> 3. The only writer of 3 is
+    // Poll__8StreamEE at 0x26d054, reached only by draining a StreamOp of type 2
+    // off the vector at StreamEE+0x2c. That op is pushed by
+    // Dispatch__8StreamEEiiUi (0x26d5b8), whose only caller is
+    // CtlDispatch_impl__7SynthEE (0x3eb828) via its jump table at 0x4eb680,
+    // entry 2. That is an IOP -> EE RPC callback: the EE sends StreamInfoArg out
+    // as CTL 0x190 from the state 2 handler and waits for the IOP to answer.
+    // With no IOP synth module the answer never comes.
+    //
+    // A probe, not a fix. It writes the word rather than pushing the op, which
+    // is the op's only observable effect. The delay is there so state 2's own
+    // handler gets to run its one-shot (the 0x190 send, latched at +0x128)
+    // before the state moves on.
+    constexpr unsigned kStreamReadyDelay = 120u; // frames pinned at 2 before standing in
+    constexpr uint32_t kStreamStatePrepared = 3u;
+}
+
+void PS2Runtime::noteStreamCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    (void)targetPc;
+    const unsigned long long n = g_strmCalls.fetch_add(1ull) + 1ull;
+    const uint32_t self = getRegU32(ctx, 4);
+    uint32_t state = 0xFFFFFFFFu;
+    guestRead32(rdram, self + kStreamState, state);
+
+    static const bool standIn = std::getenv("GHPC_STREAM_READY") != nullptr;
+    if (standIn)
+    {
+        static uint32_t s_pinnedSelf = 0xFFFFFFFFu;
+        static unsigned s_pinnedFor = 0u;
+        if (self == s_pinnedSelf && state == 2u)
+        {
+            ++s_pinnedFor;
+        }
+        else
+        {
+            s_pinnedSelf = self;
+            s_pinnedFor = (state == 2u) ? 1u : 0u;
+        }
+        if (s_pinnedFor == kStreamReadyDelay &&
+            guestWrite32(rdram, self + kStreamState, kStreamStatePrepared))
+        {
+            state = kStreamStatePrepared;
+            std::fprintf(stderr,
+                         "[ghpc/strm] #%llu this=0x%08x STAND-IN wrote state=3 "
+                         "(IOP CTL cmd 2 never arrived)\n",
+                         n, self);
+        }
+    }
+
+    // Print on change so a stuck value costs one line, and on a slow heartbeat
+    // so "still stuck" is distinguishable from "probe stopped firing".
+    static uint32_t s_lastSelf = 0xFFFFFFFFu;
+    static uint32_t s_lastState = 0xFFFFFFFEu;
+    const bool changed = (self != s_lastSelf || state != s_lastState);
+    if (!changed && (n % 600ull) != 0ull)
+    {
+        return;
+    }
+    s_lastSelf = self;
+    s_lastState = state;
+    std::fprintf(stderr,
+                 "[ghpc/strm] #%llu this=0x%08x state=%u ready=%d%s\n",
+                 n, self, state, (state - 3u) < 3u ? 1 : 0,
+                 changed ? " CHANGED" : "");
+}
+
+// GHPCSONG: is the chart actually advancing, or is game_screen just a screen?
+//
+// The ladder in scripts/progress.py tops out at game_screen, so reaching it
+// scores a win whether or not a single note ever moves. PlayerMatcher::Poll
+// (0x117dd0) is called once per player per frame with the current SongPos,
+// which is the value the whole chart is drawn from, so its leading float
+// advancing over a run is the difference between "a screen appeared" and
+// "the song is playing".
+//
+// ABI, read off the prologue rather than assumed: `move $16, $4` takes this,
+// `move $17, $5` takes the SongPos reference and `mov.s $f20, $f12` takes the
+// float, so it is Poll(this=$a0, ms=$f12, pos=$a1) with the float in an FPR
+// and the pointer keeping its integer slot.
+//
+// SongPos is 0x14 bytes and only its leading float is ever read back
+// (BeatMatcher::GetTick, InSoloNow), so that word is the position.
+namespace
+{
+    std::atomic<unsigned long long> g_songCalls{0ull};
+}
+
+void PS2Runtime::noteSongCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    (void)targetPc;
+    const unsigned long long n = g_songCalls.fetch_add(1ull) + 1ull;
+    const uint32_t self = getRegU32(ctx, 4);
+    const uint32_t posPtr = getRegU32(ctx, 5);
+    const float ms = ctx->f[12];
+
+    uint32_t raw = 0u;
+    if (!guestRead32(rdram, posPtr, raw))
+    {
+        return;
+    }
+    float tick = 0.0f;
+    std::memcpy(&tick, &raw, sizeof(tick));
+
+    // Print the first call, then on a heartbeat. A stuck chart and a chart that
+    // never got polled at all are different failures, and only the heartbeat
+    // tells them apart: the line keeps arriving with the number standing still.
+    // GHPC_SONG_HEARTBEAT=N overrides the cadence; N<=0 falls back to 120.
+    static const unsigned long long every = []() -> unsigned long long {
+        const char *env = std::getenv("GHPC_SONG_HEARTBEAT");
+        const long v = env ? std::strtol(env, nullptr, 10) : 0L;
+        return v > 0L ? (unsigned long long)v : 120ull;
+    }();
+    if (n != 1ull && (n % every) != 0ull)
+    {
+        return;
+    }
+    std::fprintf(stderr,
+                 "[ghpc/song] #%llu this=0x%08x ms=%.3f tick=%.3f\n",
+                 n, self, (double)ms, (double)tick);
+}
+
+// GHPCGAME: why the chart never starts.
+//
+// GamePanel::Enter calls SetRealtime(true) (0x106d04, $a1=1), so mUnk70 at +0x70
+// is 1 by design on entry: realtime mode IS the count-in. While it is set,
+// GamePanel::Poll takes the TaskMgr::UISeconds branch at 0x1071b8 and the `b`
+// at 0x1071f4 jumps past BeatMatch::Poll, so no chart runs. It ends when
+// StartGame (0x1070f8) flips it, and StartGame sits behind two gates:
+//
+//   107220  lw    $2, 0x88($17)      mUnk88, non-zero skips the check entirely
+//   10723c  c.olt.s $f0, $f20        -0.025 < $f20, the count-in reaching zero
+//   10724c  jal   StartGame
+//
+// $f20 is UISeconds() + mUnk78, and SetTimeOffset stores Seconds()-UISeconds()
+// into mUnk78, so $f20 reconstructs TaskMgr seconds and counts up toward 0.
+// Reading the fields is the only way to tell "the gate is shut" from "the clock
+// is stopped" from "the clock is fine but the start time is absurd"; the
+// disassembly cannot distinguish them and guessing between them is how a round
+// gets wasted.
+//
+// Offsets are the decomp's GamePanel layout. Addresses are GH2 PS2 Final Debug.
+namespace
+{
+    std::atomic<unsigned long long> g_gameCalls{0ull};
+
+    float guestFloat(const uint8_t *rdram, uint32_t base, uint32_t off)
+    {
+        uint32_t raw = 0u;
+        float value = 0.0f;
+        if (guestRead32(const_cast<uint8_t *>(rdram), base + off, raw))
+        {
+            std::memcpy(&value, &raw, sizeof(value));
+        }
+        return value;
+    }
+
+    uint32_t guestWord(const uint8_t *rdram, uint32_t base, uint32_t off)
+    {
+        uint32_t raw = 0u;
+        guestRead32(const_cast<uint8_t *>(rdram), base + off, raw);
+        return raw;
+    }
+}
+
+void PS2Runtime::noteGameCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc)
+{
+    (void)targetPc;
+    const unsigned long long n = g_gameCalls.fetch_add(1ull) + 1ull;
+    const uint32_t self = getRegU32(ctx, 4);
+
+    // Every call is printed. GamePanel::Poll runs about 30 times in a whole run
+    // at the frame rate game_screen currently manages, so a heartbeat would
+    // throw away most of the evidence rather than save noise.
+    // UISeconds__C7TaskMgr (0x316448) is
+    //   *(float *)(*(uint32_t *)(TheTaskMgr + 0x28) + 0x34)
+    // and TheTaskMgr is 0x5A5870. countIn is the value the StartGame branch at
+    // 0x10723c actually compares: $f20 = UISeconds() + mUnk78. StartGame runs
+    // once it exceeds -0.025, so watching it move (or not) across a run is what
+    // separates a shut gate from a stopped clock from a slow one.
+    constexpr uint32_t kTheTaskMgr = 0x005A5870u;
+    const uint32_t taskState = guestWord(rdram, kTheTaskMgr, 0x28u);
+    const float uiSeconds = taskState ? guestFloat(rdram, taskState, 0x34u) : 0.0f;
+    const float offset = guestFloat(rdram, self, 0x78u);
+
+    std::fprintf(stderr,
+                 "[ghpc/game] #%llu this=0x%08x realtime=%u startGate88=%u "
+                 "unk84=%u unk36c=%u tempo=%.3f offset78=%.3f secs7c=%.3f "
+                 "beat80=%.3f uiSecs=%.4f countIn=%.4f\n",
+                 n, self,
+                 guestWord(rdram, self, 0x70u),
+                 guestWord(rdram, self, 0x88u),
+                 guestWord(rdram, self, 0x84u),
+                 guestWord(rdram, self, 0x36Cu),
+                 (double)guestFloat(rdram, self, 0x74u),
+                 (double)offset,
+                 (double)guestFloat(rdram, self, 0x7Cu),
+                 (double)guestFloat(rdram, self, 0x80u),
+                 (double)uiSeconds,
+                 (double)(uiSeconds + offset));
+}
+#endif
 
 bool PS2Runtime::hasFunction(uint32_t address) const
 {
@@ -1341,6 +2161,29 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
         readGuestU32Offset(a0Word0, 0x08u, vtableSlot8) &&
         readGuestU32Offset(a0Word0, 0x0cu, vtableSlotC);
 
+    // firstReport is one global latch for the whole run, across every site, so
+    // a single line can hide something firing every frame. Frequency has been
+    // the deciding question repeatedly here, and a first-only line cannot
+    // answer it. Count, rate limited.
+    {
+        static std::mutex branchCensusMutex;
+        static std::unordered_map<uint32_t, unsigned long long> branchBySource;
+        static unsigned long long branchTotal = 0ull;
+        std::lock_guard<std::mutex> lock(branchCensusMutex);
+        ++branchBySource[sourcePc];
+        if ((++branchTotal % 200ull) == 0ull)
+        {
+            std::fprintf(stderr, "[guest-branch census] total=%llu", branchTotal);
+            for (const auto &entry : branchBySource)
+            {
+                std::fprintf(stderr, " src=0x%08x:%llu",
+                             (unsigned)entry.first, (unsigned long long)entry.second);
+            }
+            std::fprintf(stderr, "\n");
+            std::fflush(stderr);
+        }
+    }
+
     if (firstReport)
     {
         std::ostringstream oss;
@@ -1430,53 +2273,157 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
     //   GHPC_PROBE=0x2fcf98,0x24b970 ./scripts/run.sh --quiet --debug
     if (isCall)
     {
-        static uint32_t s_watch[16];
-        static unsigned s_count = 0u;
-        static uint32_t s_lo = 0xFFFFFFFFu, s_hi = 0u;
-        static unsigned long long s_hits[16] = {0};
-        static bool s_init = false;
-        if (!s_init)
+        noteProbeEntry(ctx, targetPc, sourcePc, "call");
+    }
+
+    // GHPCHEAP: remember every malloc request so the flex fatal error can name
+    // the one that failed, and dump the allocator when it does.
+    if (isCall && (targetPc == 0x0035C778u || targetPc == 0x00307CC0u))
+    {
+        noteHeapCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCLOAD: which file the loader list is stuck on.
+    if (isCall && (targetPc == 0x0031D6C0u || targetPc == 0x0031D7F0u ||
+                   targetPc == 0x0031E2D8u))
+    {
+        noteLoaderCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCBLK: read issued, queued, polled, retired.
+    if (isCall && (targetPc == 0x002F7DE8u || targetPc == 0x002F92D0u ||
+                   targetPc == 0x002F9848u || targetPc == 0x002F8128u))
+    {
+        noteBlockCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCSTRM: the StreamEE state word that gates the song load.
+    if (isCall && targetPc == 0x0026BA28u)
+    {
+        noteStreamCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCSONG: PlayerMatcher::Poll, the per-frame song position.
+    if (isCall && targetPc == 0x00117DD0u)
+    {
+        noteSongCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCGAME: GamePanel::Poll, the count-in gate.
+    if (isCall && targetPc == 0x00107140u)
+    {
+        noteGameCall(rdram, ctx, targetPc);
+    }
+
+    // GHPCASSERT: name the guest assert at the call, not after the fact.
+    // EeScheduler::dumpStackStrings scavenges the stalled stack for printable
+    // runs, which is why the text has been arriving as a fragment ("Data (").
+    // Debug::Fail takes the already formatted message in $a1, so reading it
+    // here gets the whole string with its file and line still attached.
+    //
+    // Notify (0x2ebd88) is covered too. It is the non-fatal spelling and it is
+    // currently invisible, which hides every warning the game raises before the
+    // one that stops it.
+    //
+    // +0x0c is the already-failing latch and +0x1c the try nesting depth, both
+    // pinned by the decomp's Debug::Fail and Debug::SetTry. Depth is read here
+    // because it is the value Fail is about to test: at depth 0 it goes modal,
+    // above 0 it longjmps back out and the game carries on. That is what
+    // separates an assert that kills the boot from one the game handles.
+    if (isCall && (targetPc == 0x2EBDA8u || targetPc == 0x2EBD88u))
+    {
+        const uint32_t self = getRegU32(ctx, 4) & 0x01FFFFFFu;
+        const uint32_t msg = getRegU32(ctx, 5) & 0x01FFFFFFu;
+
+        char text[192];
+        unsigned n = 0u;
+        if (msg >= 0x00100000u && msg < 0x02000000u)
         {
-            s_init = true;
-            if (const char *env = std::getenv("GHPC_PROBE"))
+            for (; n + 1u < sizeof(text); ++n)
             {
-                const char *p = env;
-                while (*p && s_count < 16u)
+                const uint8_t c = rdram[msg + n];
+                if (c == 0u)
                 {
-                    char *end = nullptr;
-                    const unsigned long v = std::strtoul(p, &end, 0);
-                    if (end == p) break;
-                    const uint32_t a = static_cast<uint32_t>(v);
-                    s_watch[s_count++] = a;
-                    if (a < s_lo) s_lo = a;
-                    if (a > s_hi) s_hi = a;
-                    p = end;
-                    while (*p == ',' || *p == ' ') ++p;
+                    break;
                 }
-                std::fprintf(stderr, "[probe] GHPCPROBE watching %u address(es)\n", s_count);
+                text[n] = (c >= 0x20u && c < 0x7Fu) ? static_cast<char>(c) : '?';
             }
         }
-        // Common case with no watch list is two compares.
-        if (s_count != 0u && targetPc >= s_lo && targetPc <= s_hi)
+        text[n] = '\0';
+
+        uint32_t latch = 0u;
+        uint32_t depth = 0u;
+        if (self >= 0x00100000u && self + 0x20u < 0x02000000u)
         {
-            for (unsigned i = 0; i < s_count; ++i)
+            std::memcpy(&latch, rdram + self + 0x0Cu, sizeof(latch));
+            std::memcpy(&depth, rdram + self + 0x1Cu, sizeof(depth));
+        }
+
+        std::fprintf(stderr, "[assert] %s depth=%u latch=%u from=0x%x msg=\"%s\"\n",
+                     targetPc == 0x2EBDA8u ? "Fail" : "Notify",
+                     depth, latch, sourcePc, text);
+    }
+#endif
+
+    // GHPCCOUNTIN and GHPCSTART live OUTSIDE the diagnostics block on purpose.
+    //
+    // Every throughput number this project has on record comes from
+    // build-debug, and the run that produced the last one wrote 140,350 lines
+    // of formatted stderr in 600 seconds. Sizing the Rnd seam against that is
+    // sizing it against the logging. Measuring a release build instead needs
+    // exactly one thing the release build did not have: a way to reach
+    // gameplay without waiting out the ten second count-in. GHPC_PAD_DRIVE and
+    // the [drive], [fps] and [eerate] reporters were already unconditional, so
+    // this is the last piece.
+    //
+    // The cost when the knob is unset is one load and test of a cached bool
+    // that never changes, which the branch predictor will not miss twice.
+    // Calling getenv here instead would put a lock on the hottest path in the
+    // runtime.
+    //
+    // GHPCCOUNTIN shortens the count-in at its source rather than at the gate.
+    // StartIntro (0x1074e8) works out how long the intro camera shot runs
+    //   1078f8  div.s $f20, $f0, $f1     $f1 = 41f00000 = 30.0, frames -> secs
+    // and hands it straight to SetStartTime
+    //   10799c  jal 0x107e88             SetStartTime(this, $f20)
+    // which is the only writer of the clock the StartGame gate reads: it calls
+    // SetSecondsBeat(TheTaskMgr, $f12, $f12 * 1000 / GetTempo()) and then
+    // SetRealtime(true), whose SetTimeOffset is what fills mUnk78. So every
+    // derived value, the beat included, comes out of this one float.
+    //
+    // That is why the clamp goes here and not on mUnk78. Poking mUnk78 later
+    // moves the gate while leaving TaskMgr's seconds and the beat where the ten
+    // second shot put them, which is a guest in two minds about what time it
+    // is. Clamping the argument leaves the game to compute all of it, and it is
+    // the same lever the game pulls itself: mFastIntro (+0x68) takes the branch
+    // at 0x1077fc that skips FindCameraShot, which is to say it feeds
+    // SetStartTime a smaller number by exactly this route.
+    //
+    // A probe, not a fix. The count-in is real and the camera shot is real;
+    // this is a harness for looking at what comes after them, and it stays out
+    // of any run that touches the recorded mark.
+    {
+        static const float s_countInFloor = []() -> float {
+            const char *e = std::getenv("GHPC_COUNTIN");
+            return e ? (float)std::atof(e) : 0.0f;
+        }();
+        static const bool s_countInOn = (s_countInFloor > 0.0f);
+        if (s_countInOn && isCall)
+        {
+            // GHPCSTART: latch the one instant the count-in ends, so the frame
+            // dumper can spend its budget on gameplay instead of on boot.
+            if (targetPc == 0x001070F8u && !g_ghpcGameStarted.exchange(true))
             {
-                if (s_watch[i] != targetPc) continue;
-                const unsigned long long n = ++s_hits[i];
-                if (n <= 40ull || (n % 1000ull) == 0ull)
-                {
-                    std::fprintf(stderr,
-                                 "[probe] 0x%x #%llu a0=0x%x a1=0x%x a2=0x%x a3=0x%x ra=0x%x from=0x%x\n",
-                                 targetPc, n,
-                                 (unsigned)getRegU32(ctx, 4), (unsigned)getRegU32(ctx, 5),
-                                 (unsigned)getRegU32(ctx, 6), (unsigned)getRegU32(ctx, 7),
-                                 (unsigned)getRegU32(ctx, 31), sourcePc);
-                }
-                break;
+                std::fprintf(stderr, "[ghpc/start] StartGame entered, count-in over\n");
+            }
+            if (targetPc == 0x00107E88u && ctx->f[12] < -s_countInFloor)
+            {
+                std::fprintf(stderr, "[ghpc/countin] %.3f -> %.3f\n",
+                             (double)ctx->f[12], (double)-s_countInFloor);
+                ctx->f[12] = -s_countInFloor;
             }
         }
     }
-#endif
 
     // Every inter-function transfer is also a deterministic EE safe point.
     // Backward edges inside generated functions use eeCheckpointDue(), while
@@ -1851,6 +2798,26 @@ uint32_t PS2Runtime::allocateGuestBlockLocked(uint32_t size, uint32_t alignment)
         return 0u;
     }
 
+    // Keep the runtime's reserve out of reach of bulk grabs. Only allocations
+    // larger than the reserve are held back, so ordinary small ones still get
+    // served once the game has taken its pools.
+    const uint32_t reserve = guestHeapRuntimeReserve();
+    if (reserve != 0u && allocSize > reserve)
+    {
+        uint64_t totalFree = 0;
+        for (const GuestHeapBlock &b : m_guestHeapBlocks)
+        {
+            if (b.free)
+            {
+                totalFree += b.size;
+            }
+        }
+        if (totalFree < static_cast<uint64_t>(allocSize) + static_cast<uint64_t>(reserve))
+        {
+            return 0u;
+        }
+    }
+
     for (size_t i = 0; i < m_guestHeapBlocks.size(); ++i)
     {
         const GuestHeapBlock block = m_guestHeapBlocks[i];
@@ -1953,11 +2920,61 @@ void PS2Runtime::configureGuestHeap(uint32_t guestBase, uint32_t guestLimit)
     resetGuestHeapLocked(normalizedBase, guestLimit);
 }
 
+uint32_t PS2Runtime::runtimeArenaBase()
+{
+    return kRuntimeArenaBase;
+}
+
+uint32_t PS2Runtime::guestHeapRuntimeReserve()
+{
+    static const uint32_t value = []() -> uint32_t {
+        if (const char *env = std::getenv("GHPC_HEAP_RESERVE"))
+        {
+            return static_cast<uint32_t>(std::strtoul(env, nullptr, 0));
+        }
+        return kGuestHeapRuntimeReserve;
+    }();
+    return value;
+}
+
 uint32_t PS2Runtime::guestMalloc(uint32_t size, uint32_t alignment)
 {
     std::lock_guard<std::mutex> lock(m_guestHeapMutex);
     ensureGuestHeapInitializedLocked();
-    return allocateGuestBlockLocked(size, alignment);
+    const uint32_t addr = allocateGuestBlockLocked(size, alignment);
+
+    // The game's malloc is bound to a stub that lands here, so a refusal is
+    // what the guest sees as a NULL. Bulk grabs being refused is how the game
+    // finds its pool size and is not worth reporting; a small request failing
+    // means the arena is actually gone, which is what killed the DTA lexer.
+    if (addr == 0u && size != 0u && size <= guestHeapRuntimeReserve())
+    {
+        uint64_t totalFree = 0, largestFree = 0;
+        size_t freeCount = 0, usedCount = 0;
+        for (const GuestHeapBlock &b : m_guestHeapBlocks)
+        {
+            if (b.free)
+            {
+                ++freeCount;
+                totalFree += b.size;
+                largestFree = std::max<uint64_t>(largestFree, b.size);
+            }
+            else
+            {
+                ++usedCount;
+            }
+        }
+        std::fprintf(stderr,
+                     "[heap] guestMalloc failed size=%u align=%u base=0x%08x limit=0x%08x"
+                     " blocks=%zu used=%zu free=%zu freeBytes=%llu largestFree=%llu reserve=%u\n",
+                     (unsigned)size, (unsigned)alignment, m_guestHeapBase, m_guestHeapLimit,
+                     m_guestHeapBlocks.size(), usedCount, freeCount,
+                     (unsigned long long)totalFree, (unsigned long long)largestFree,
+                     (unsigned)guestHeapRuntimeReserve());
+        std::fflush(stderr);
+    }
+
+    return addr;
 }
 
 uint32_t PS2Runtime::guestCalloc(uint32_t count, uint32_t size, uint32_t alignment)

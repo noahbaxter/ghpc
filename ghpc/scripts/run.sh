@@ -15,6 +15,7 @@ QUIET=0; ELF="$WORK/GH2_debug.elf"
 for a in "$@"; do case "$a" in
   --quiet) QUIET=1 ;;
   --debug) BUILD_DIR="build-debug" ;;
+  --calls) BUILD_DIR="build-calls" ;;
   GH1)     ELF="$WORK/elf-debug/GH1_debug.elf" ;;
   GH80s)   ELF="$WORK/elf-debug/GH80s_debug.elf" ;;
   *) echo "unknown arg: $a" >&2; exit 2 ;;

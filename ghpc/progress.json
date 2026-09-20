@@ -1,0 +1,16 @@
+{
+  "rung": 9,
+  "screen": "game_screen",
+  "detail": {
+    "fps": "2.89",
+    "eerate_pct": "4.7"
+  },
+  "env": {
+    "GHPC_COUNTIN": "0.5"
+  },
+  "build": "build",
+  "hold_secs": 60,
+  "rounds_since_gain": 1,
+  "rounds_total": 21,
+  "recorded": "2026-09-11 13:10:35"
+}

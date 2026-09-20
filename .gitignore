@@ -4,6 +4,7 @@
 build
 build/
 build-debug/
+build-calls/
 out
 out/
 .vs/
@@ -49,3 +50,4 @@ android/.gradle/
 
 .DS_Store
 .claude/
+__pycache__/

@@ -1,6 +1,8 @@
 #include "iop_service.h"
 #include "module_factories.h"
 
+#include <cstdlib>
+
 #include <utility>
 
 namespace ps2x::iop::detail
@@ -116,6 +118,14 @@ namespace ps2x::iop::detail
                 ServiceList services;
                 services.emplace_back(createFileioService(host));
                 services.emplace_back(createUsbKbService(host));
+                // Answers the synth CTL link on sid 0x75433178, which is what
+                // lets StreamEE reach state 3 and the song load finish. It was
+                // opt-in for one round because the game then hit a
+                // CharBonesSamples assert and exited at 94s; that was a wrong
+                // CVT.W.S rounding mode, fixed in ps2_runtime_macros.h, and
+                // this is on by default now that a stock build holds
+                // game_screen for the full run.
+                services.emplace_back(createSynthService(host));
                 return services;
             },
         });

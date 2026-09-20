@@ -336,6 +336,7 @@ bool PS2Memory::initialize(size_t ramSize)
     m_path3MaskedFifo.clear();
     m_vif1PendingPath2ImageQwc = 0u;
     m_vif1PendingPath2DirectHl = false;
+    m_vif1Residual.clear();
     resetEeTimers();
 
     try
@@ -1228,6 +1229,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 std::memset(&vif1_regs, 0, sizeof(vif1_regs));
                 m_vif1PendingPath2ImageQwc = 0u;
                 m_vif1PendingPath2DirectHl = false;
+                m_vif1Residual.clear();
             }
             if (value & 0x8u) // STC
             {
@@ -1318,6 +1320,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+#if GHPC_DIAG
+            // PsRnd::Reset sends the vf2 init call as a normal-mode VIF1 kick
+            // from scratchpad (PreSend: CHCR 0x101, MADR with the SPR bit).
+            if (channelBase == 0x10009000u && ((value >> 2) & 0x3u) == 0u && (madr & 0x80000000u))
+            {
+                static int normalSpr = 0;
+                if (normalSpr++ < 8)
+                    std::fprintf(stderr, "[dma/vif1] normal kick from SPR madr=0x%x qwc=%u chcr=0x%x dctrl=0x%x\n",
+                                 (unsigned)madr, (unsigned)qwc, (unsigned)value,
+                                 (unsigned)m_ioRegisters[0x1000E000u]);
+            }
+#endif
 
             // VIF1 draining an MFIFO stalls when it catches up with the fill
             // pointer. Without this the chain walker reads whatever happens to
@@ -1333,6 +1347,19 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     const uint32_t fill = m_ioRegisters[0x1000D010u];
                     if (tadr == fill)
                     {
+#if GHPC_DIAG
+                        // This stall is for a chain drain catching up with the
+                        // fill pointer. A normal-mode kick does not read the
+                        // ring, so refusing it here drops the packet.
+                        if (((value >> 2) & 0x3u) == 0u)
+                        {
+                            static int normalRefused = 0;
+                            if (normalRefused++ < 8)
+                                std::fprintf(stderr,
+                                             "[dma/vif1] NORMAL-mode kick refused by MFIFO stall: madr=0x%x qwc=%u chcr=0x%x tadr=0x%x fill=0x%x\n",
+                                             (unsigned)madr, (unsigned)qwc, (unsigned)value, (unsigned)tadr, (unsigned)fill);
+                        }
+#endif
                         return true;
                     }
                 }
@@ -1516,10 +1543,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 {
                     if (qwCount == 0)
                         return;
-                    const bool scratch = isScratchpad(srcAddr);
+                    // The DMAC's own scratchpad form is bit 31 over a scratchpad
+                    // offset (tDMAC_ADDR.SPR). isScratchpad() rejects it, because
+                    // 0x80000000 and up is also KSEG0 RAM to the CPU. PsRnd::Reset
+                    // sends the vf2 init call this way (madr=0x80000020), and it
+                    // was being read from RAM at 0x20 instead.
+                    static const bool s_sprLegacy = std::getenv("GHPC_DMA_SPR_LEGACY") != nullptr;
+                    const bool sprForm = !s_sprLegacy && (srcAddr & 0x80000000u) != 0u && !isScratchpad(srcAddr);
+                    const bool scratch = sprForm || isScratchpad(srcAddr);
                     PendingTransfer pt;
                     pt.fromScratchpad = scratch;
-                    pt.srcAddr = srcAddr;
+                    pt.srcAddr = sprForm ? (PS2_SCRATCHPAD_BASE | (srcAddr & (PS2_SCRATCHPAD_SIZE - 1u)))
+                                         : srcAddr;
                     pt.qwc = qwCount;
                     if (channelBase == 0x1000A000u)
                         m_pendingGifTransfers.push_back(pt);
@@ -1565,6 +1600,41 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                                                qwCount * 16u, false);
                         }
 #endif
+                        // An MFIFO drain reads ring memory, and the ring wraps at
+                        // RBSR. The fill side (channel 8) already wraps every
+                        // quadword it writes; this side read linearly, so a
+                        // cnt tag whose payload started in the last few
+                        // quadwords of the ring handed VIF1 whatever RAM sits
+                        // past the ring end. Every dirty chunk dumped on
+                        // 2026-09-11 had its first piece at 0xb7fe20..0xb7fff0
+                        // with the junk starting at 0xb80000. PCSX2
+                        // (mfifoVIF1chain) wraps by MADR being inside the ring,
+                        // whatever the tag id, so do the same.
+                        {
+                            static const bool s_noWrapLegacy = std::getenv("GHPC_MFIFO_NOWRAP_LEGACY") != nullptr;
+                            const uint32_t dctrlA = m_ioRegisters[0x1000E000u];
+                            const uint32_t ringBase = m_ioRegisters[0x1000E050u];
+                            const uint32_t ringMask = m_ioRegisters[0x1000E040u];
+                            const bool ringDrain = channelBase == 0x10009000u &&
+                                                   ((dctrlA >> 2) & 0x3u) == 2u && ringMask != 0u;
+                            // A cnt tag in the ring's last quadword puts its
+                            // payload at exactly ring end, which is ring base
+                            // on hardware, so the range is inclusive of the end
+                            // and the start is wrapped before the first read.
+                            if (!s_noWrapLegacy && ringDrain && m_rdram &&
+                                srcAddr >= ringBase && srcAddr <= ringBase + ringMask + 16u)
+                            {
+                                uint32_t a = ringBase | (srcAddr & ringMask);
+                                for (uint32_t q = 0u; q < qwCount; ++q)
+                                {
+                                    const uint32_t phys = a & PS2_RAM_MASK;
+                                    if (phys + 16u <= PS2_RAM_SIZE)
+                                        chainBuf.insert(chainBuf.end(), m_rdram + phys, m_rdram + phys + 16u);
+                                    a = ringBase | ((a + 16u) & ringMask);
+                                }
+                                return;
+                            }
+                        }
                         const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                         uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                         const bool scratch = isScratchpad(srcAddr);
@@ -1697,6 +1767,17 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
                         ++tagsProcessed;
+#if GHPC_DIAG
+                        if (channelBase == 0x10009000u)
+                        {
+                            extern void ghpcNoteChainTag(unsigned, unsigned, unsigned, unsigned, unsigned,
+                                                         unsigned long long, unsigned long long);
+                            uint64_t tagHi = 0ull;
+                            std::memcpy(&tagHi, tp + 8, 8);
+                            ghpcNoteChainTag((unsigned)chainBuf.size(), currentTagAddr, id, tagQwc, addr,
+                                             (unsigned long long)tag, (unsigned long long)tagHi);
+                        }
+#endif
 
                         uint32_t dataAddr = 0;
                         bool hasPayload = (tagQwc > 0);
@@ -1966,6 +2047,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 #endif
                     if (channelBase == 0x10009000u)
                         m_vif1DrainStalled = drainStalled;
+#if GHPC_DIAG
+                    if (channelBase == 0x10009000u)
+                    {
+                        extern void ghpcChainKickCommit(bool pushed);
+                        ghpcChainKickCommit(!chainBuf.empty());
+                    }
+#endif
                     m_ioRegisters[channelBase + 0x30] = tagAddr;
                     m_ioRegisters[channelBase + 0x40] = asr0;
                     m_ioRegisters[channelBase + 0x50] = asr1;

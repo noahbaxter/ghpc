@@ -1,0 +1,70 @@
+VU1 microprograms share persistent state, so skipping one is not local.
+2026-09-19, read statically off the overlays recovered by scripts/mpgwalk.py
+and scripts/vudis.py. No runs.
+
+ESTABLISHED.
+
+**qw1022 and qw1023 are a saved register context between the mesh T&L program
+and the clipper.** Across all 18 overlays exactly two touch them:
+
+  pc0x0cd8   8 stores, 0 loads     the mesh T&L program
+  pc0x14d8   8 loads,  0 stores    the near-plane clipper
+
+pc0xcd8 writes them as eight ISW, one per lane:
+
+  qw1022  .x vi03  .y vi04  .z vi10  .w vi12
+  qw1023  .x vi05  .y vi13  .z vi14  .w vi15
+
+pc0x14d8 restores exactly those eight into exactly those registers, at its
+restore block 0x18d8..0x1950. Those same registers are what its loop exits
+test: `IBNE vi13, vi00 -> 0x15e8`, `IBNE vi15, vi00 -> 0x1820`,
+`IBNE vi12, vi00 -> 0x1748`, `IBNE vi05, vi01 -> 0x15c0`, and
+`IBNE vi05, vi00 -> 0x18d8` branches into the restore block itself.
+
+So the contract is a call frame. The T&L program parks its vertex-loop state
+in the last two quadwords of VU1 data memory and the clipper restores it to
+resume. Skipping the T&L program leaves that frame holding an older draw's
+counters.
+
+**Double buffering is not the mechanism.** The VIF1 MSCAL path toggles DBF and
+advances tops whether or not the microprogram executes
+(`ps2_vif1_interpreter.cpp`, the VIF_MSCAL branch: `vif1_regs.stat ^= (1u <<
+7)` after selecting base or base+ofst). Skipping `m_vu1.execute` therefore does
+not desync the input buffers. Ruled out.
+
+**pc0x30b0 is a second T&L variant.** It spans 0x30b0..0x3730, carries its own
+CLIP.xyz and its own clip-handling branches, and reads the same shared T&L
+state the mesh program does: qw680 the GIFtag, qw695 the colour scale, qw696
+and qw697 the viewport, qw700..703 the projection rows. It takes its
+subroutine addresses from qw688.x and qw689.x and JALRs them, which is the
+lighting dispatch PsEnviron::Select 0x1c79c8 selects by light count. Its outer
+loop counter vi13 comes from a pointer chain rooted at qw688, not from
+qw1022/1023.
+
+NOT ESTABLISHED. The exact path by which skipping pc0xcd8 starves pc0x30b0.
+pc0x30b0 touches neither 1022 nor 1023, so the call frame above is not
+directly its input. What is certain is the measured behaviour
+(2026-09-19-vu1-runaway-from-skipping): 5336 of its ~5998 invocations run to
+the 65536 cycle cap with the native draw on, 0 of 1616 in the control.
+
+WHAT THIS MEANS FOR THE SEAM. VU1 programs here are mutually stateful, through
+a saved register frame in data memory, through VU registers that persist
+across MSCALs, and through the qw660..703 block that several programs read and
+different EE-side Select calls write. A seam that skips individual MSCALs has
+to reproduce every side effect the skipped program would have had on state
+other programs consume. The qw1022/1023 frame is one such effect that is now
+named; there is no reason to believe it is the only one.
+
+Four fixes aimed at the native draw's own cost have failed
+(2026-09-19-native-draw-profile) and the profile says the draw code is 2% of
+the thread. Per the project rule, that is an architecture signal rather than a
+fifth attempt. The seam is likely wrong at MSCAL granularity, and belongs
+either at PsRnd::FlushPacket 0x43e400, where a whole packet is replaced at
+once, or at the Rnd layer, where VU1 is never invoked at all and no shared
+state exists to corrupt.
+
+TOOLS. `scripts/mpgwalk.py <vutext.bin> <outdir>` splits the MPG blocks out of
+the .vutext VIF stream, one .bin per VU load address.
+`scripts/vudis.py <bin> <loadaddr>` disassembles one. Extract .vutext from the
+ELF at file offset 0x338100, size 0x3710, vaddr 0x00437100. The output is
+derived game data and is not committed.

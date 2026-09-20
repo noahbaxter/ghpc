@@ -74,6 +74,11 @@ namespace
 void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSize, GS &gs, PS2Memory *memory, uint32_t upperInstr)
 {
     (void)upperInstr;
+#if GHPC_DIAG
+    // Reset before dispatch so a non-load VI write never inherits the address
+    // of a previous instruction's load. Only ILW/ILWR below sets this back.
+    { extern bool g_ghpcPendingIntLoadValid; g_ghpcPendingIntLoadValid = false; }
+#endif
     if (instr == 0x00000000 || instr == 0x8000033C) // NOP
         return;
 
@@ -96,6 +101,18 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
             float tmp[4];
             std::memcpy(tmp, vuData + addr, 16);
             applyDest(m_state.vf[it], tmp, dest);
+            #if GHPC_DIAG
+            // Reads on the same ordered log as the stores, so a quadword
+            // clobbered before it was read is distinguishable from one
+            // legitimately written after.
+            {
+                extern unsigned long long g_ghpcVu1Mscals;
+                extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                unsigned rv[4];
+                std::memcpy(rv, vuData + addr, sizeof(rv));
+                ghpcLogQwWrite(g_ghpcVu1Mscals, 2 + (int)(m_state.pc << 4), (unsigned)(addr / 16u), rv, rv);
+            }
+            #endif
 #if GHPC_DIAG
             { extern unsigned int g_ghpcVfSrcAddr[32]; g_ghpcVfSrcAddr[it] = addr | 0x80000000u; }
             if (addr >= 0x2bc0u && addr < 0x2c00u)
@@ -133,6 +150,20 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
         int16_t imm = IMM11(instr);
         uint32_t addr = ((uint32_t)(int32_t)(m_state.vi[it] + imm)) * 16u;
         addr &= (dataSize - 1);
+#if GHPC_DIAG
+        // Where does the program think its output buffer is? If the base VI is
+        // wrong the packet lands on top of the input double buffer.
+        if (std::getenv("GHPC_STORE_PC"))
+        {
+            extern unsigned long long g_ghpcVu1Mscals;
+            const unsigned long long from = std::strtoull(std::getenv("GHPC_STORE_PC"), nullptr, 0);
+            if (g_ghpcVu1Mscals >= from && g_ghpcVu1Mscals <= from + 2ull)
+                std::fprintf(stderr, "[vu1/storeaddr] ms=%llu pc=0x%04x vi%u=%d imm=%d -> qw=%u top=%u\n",
+                             g_ghpcVu1Mscals, (unsigned)m_state.pc, (unsigned)it,
+                             (int)m_state.vi[it], (int)imm, (unsigned)(addr / 16u),
+                             (unsigned)m_state.top);
+        }
+#endif
         if (addr + 16 <= dataSize)
         {
             uint32_t words[4]{};
@@ -162,8 +193,21 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                 comp = 3;
             uint32_t v;
             std::memcpy(&v, vuData + addr + comp * 4, 4);
+#if GHPC_DIAG
+            if (m_unit == Unit::VU1)
+            {
+                extern void ghpcNoteTopRead(uint32_t, int, uint32_t, uint32_t);
+                ghpcNoteTopRead(addr, comp, v, m_state.pc);
+            }
+#endif
             if (it != 0)
+            {
+#if GHPC_DIAG
+                { extern bool g_ghpcPendingIntLoadValid; extern uint32_t g_ghpcPendingIntLoadAddr;
+                  g_ghpcPendingIntLoadValid = true; g_ghpcPendingIntLoadAddr = addr; }
+#endif
                 m_state.vi[it] = (int32_t)(int16_t)(v & 0xFFFF);
+            }
         }
         return;
     }
@@ -507,6 +551,18 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                     float tmp[4];
                     std::memcpy(tmp, vuData + addr, 16);
                     applyDest(m_state.vf[vfT], tmp, dest);
+                    #if GHPC_DIAG
+                    // Reads on the same ordered log as the stores, so a quadword
+                    // clobbered before it was read is distinguishable from one
+                    // legitimately written after.
+                    {
+                        extern unsigned long long g_ghpcVu1Mscals;
+                        extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                        unsigned rv[4];
+                        std::memcpy(rv, vuData + addr, sizeof(rv));
+                        ghpcLogQwWrite(g_ghpcVu1Mscals, 2 + (int)(m_state.pc << 4), (unsigned)(addr / 16u), rv, rv);
+                    }
+                    #endif
 #if GHPC_DIAG
                     { extern unsigned int g_ghpcVfSrcAddr[32]; g_ghpcVfSrcAddr[vfT] = addr | 0x80000000u; }
 #endif
@@ -540,6 +596,18 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                     float tmp[4];
                     std::memcpy(tmp, vuData + addr, 16);
                     applyDest(m_state.vf[vfT], tmp, dest);
+                    #if GHPC_DIAG
+                    // Reads on the same ordered log as the stores, so a quadword
+                    // clobbered before it was read is distinguishable from one
+                    // legitimately written after.
+                    {
+                        extern unsigned long long g_ghpcVu1Mscals;
+                        extern void ghpcLogQwWrite(unsigned long long, int, unsigned, const unsigned *, const unsigned *);
+                        unsigned rv[4];
+                        std::memcpy(rv, vuData + addr, sizeof(rv));
+                        ghpcLogQwWrite(g_ghpcVu1Mscals, 2 + (int)(m_state.pc << 4), (unsigned)(addr / 16u), rv, rv);
+                    }
+                    #endif
                 }
                 return;
             }
@@ -668,8 +736,21 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
                         comp = 3;
                     uint32_t v;
                     std::memcpy(&v, vuData + addr + comp * 4, 4);
+#if GHPC_DIAG
+                    if (m_unit == Unit::VU1)
+                    {
+                        extern void ghpcNoteTopRead(uint32_t, int, uint32_t, uint32_t);
+                        ghpcNoteTopRead(addr, comp, v, m_state.pc);
+                    }
+#endif
                     if (viT != 0)
+                    {
+#if GHPC_DIAG
+                        { extern bool g_ghpcPendingIntLoadValid; extern uint32_t g_ghpcPendingIntLoadAddr;
+                          g_ghpcPendingIntLoadValid = true; g_ghpcPendingIntLoadAddr = addr; }
+#endif
                         m_state.vi[viT] = (int32_t)(int16_t)(v & 0xFFFF);
+                    }
                 }
                 return;
             }

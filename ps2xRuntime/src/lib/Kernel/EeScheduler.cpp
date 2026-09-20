@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <iostream>
 #include <cassert>
 #include <cstring>
@@ -48,6 +49,32 @@ namespace
     // something the host never delivers. Dump the kernel state once so the
     // blocking object is named instead of guessed at.
     constexpr auto kStallReportDelay = std::chrono::seconds(3);
+
+#if CALL_HISTOGRAM
+    // The census only fires from inside EeScheduler::run, so a guest that stops
+    // yielding starves it: a 300s run spent 229s on loading_screen and produced
+    // one census in that whole window, which is far too coarse to tell a load
+    // loop from a slow load. GHPC_SAMPLE_MS dumps the histogram from a host
+    // thread instead, on a real clock, whatever the guest is doing.
+    const bool g_ghpcSampler = []() {
+        const char *e = std::getenv("GHPC_SAMPLE_MS");
+        const int ms = e ? std::atoi(e) : 0;
+        if (ms <= 0)
+        {
+            return false;
+        }
+        std::fprintf(stderr, "[ghpc/sample] host sampler every %d ms\n", ms);
+        std::thread([ms]() {
+            for (;;)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+                std::fprintf(stderr, "[ghpc/sample] tick\n");
+                ps2_log::call_hist_dump(400u);
+            }
+        }).detach();
+        return true;
+    }();
+#endif
 
     bool eeCensusDue()
     {
@@ -138,7 +165,99 @@ namespace
     void reportEeStall(const EeKernelSnapshot &snapshot, bool idle, const uint8_t *rdram)
     {
         (void)idle;
+#if CALL_HISTOGRAM
+        // Which guest functions ran since the last census. Names a spin loop
+        // directly, where a saved-context pc only names the last yield. Skipped
+        // when the host sampler is running, since both reset the same deltas.
+        if (!g_ghpcSampler)
+        {
+            ps2_log::call_hist_dump(400u);
+        }
+#endif
 
+        // ThreadCall_EE state, five words at fixed guest addresses. Decompiled
+        // from GH2_debug.elf: ThreadCallPoll is the only signaller of gSema, so
+        // work pending with gSignalled==0 means the main loop stopped polling,
+        // and work pending with gSignalled==1 means the worker never finished.
+        if (rdram)
+        {
+            auto gw = [rdram](uint32_t a) { uint32_t v = 0;
+                std::memcpy(&v, rdram + (a & 0x01FFFFFFu), sizeof(v)); return v; };
+            const uint32_t curCall = gw(0x445054u);
+            const uint32_t curFunc = (curCall < 5u) ? gw(0x523ec0u + curCall * 12u) : 0xFFFFFFFFu;
+            // SynthEE audio handshake. SPUSendPoll sets gSpuSendBusy and the
+            // only clear is CtlDispatch_impl message 13, which arrives over the
+            // EE's own RPC server sid 0x75433179. No SYNTH_R module ever calls
+            // it, so a stuck 1 here means every SPUSendBusy caller waits forever.
+            // Current UI screen. TheUI (0x4f9be8) is the UIManager instance.
+            // UIManager::GotoScreen compares its argument against lw 0x40($this)
+            // and early-returns when equal, so +0x40 is the live screen pointer
+            // (+0x44 the transition target, +0x28 the transition state).
+            // UIScreen::Print streams "{UIScreen " then +0x14, the name Symbol.
+            {
+                auto gstr = [rdram](uint32_t a) {
+                    std::string out;
+                    if (a < 0x1000u || a >= 0x02000000u) return std::string();
+                    for (uint32_t i = 0; i < 32u; ++i)
+                    {
+                        const char c = static_cast<char>(rdram[(a + i) & 0x01FFFFFFu]);
+                        if (c == '\0') break;
+                        if (c < 0x20 || c >= 0x7F) return std::string();
+                        out.push_back(c);
+                    }
+                    return out;
+                };
+                const uint32_t cur = gw(0x4f9be8u + 0x40u);
+                const uint32_t nxt = gw(0x4f9be8u + 0x44u);
+                std::cerr << "[ghpc/ui] cur=0x" << std::hex << cur
+                          << " next=0x" << nxt << std::dec
+                          << " xition=" << gw(0x4f9be8u + 0x28u)
+                          << " name=\"" << gstr(gw(cur + 0x14u)) << "\""
+                          << " nextName=\"" << gstr(gw(nxt + 0x14u)) << "\"";
+                // If +0x14 is not it, say which offset is, once.
+                for (uint32_t o = 0; o < 0x40u; o += 4u)
+                {
+                    const std::string t = gstr(gw(cur + o));
+                    if (t.size() >= 3u)
+                        std::cerr << " +0x" << std::hex << o << std::dec << "=\"" << t << "\"";
+                }
+                std::cerr << std::endl;
+            }
+            // Joypad state. gJoypadIdx[i] (0x51ddb0) is an INDEX, asserted < 8
+            // by JoypadGetData, into gJoypadData at 0x51dbc8 with 0x30 stride.
+            // TutorialPanel::IsMissingGuitar reads +0x20 as the connected flag.
+            // Dump the whole entry so a button press is visible as it lands.
+            {
+                std::cerr << "[ghpc/pad]";
+                for (uint32_t i = 0; i < 2u; ++i)
+                {
+                    const uint32_t idx = gw(0x51ddb0u + i * 4u);
+                    std::cerr << " p" << i << " idx=" << idx;
+                    if (idx < 8u)
+                    {
+                        const uint32_t base = 0x51dbc8u + idx * 0x30u;
+                        std::cerr << " conn=" << gw(base + 0x20u) << " [";
+                        for (uint32_t o = 0; o < 0x30u; o += 4u)
+                            std::cerr << (o ? " " : "") << std::hex << gw(base + o) << std::dec;
+                        std::cerr << "]";
+                    }
+                }
+                std::cerr << std::endl;
+            }
+            std::cerr << "[ghpc/spu] pending=" << gw(0x444d90u)
+                      << " inflight=" << gw(0x444d94u)
+                      << " ctlCursor=0x" << std::hex << gw(0x444d70u)
+                      << " ctlBase=0x4fa6b0" << std::dec
+                      << std::endl;
+            std::cerr << "[ghpc/tcall] sema=" << gw(0x445044u)
+                      << " thread=" << gw(0x445048u)
+                      << " callDone=" << gw(0x44504cu)
+                      << " signalled=" << gw(0x445050u)
+                      << " curCall=" << curCall
+                      << " freeCall=" << gw(0x445058u)
+                      << " curFunc=0x" << std::hex << curFunc << std::dec
+                      << std::endl;
+        }
         std::cerr << "[ee/stall] thread census" << std::endl;
         for (const EeThreadSnapshot &thread : snapshot.threads)
         {
@@ -163,6 +282,34 @@ namespace
             if (thread.status == EeThreadStatus::Running)
             {
                 dumpStackStrings(rdram, thread.sp);
+                // Return addresses still on the live stack, which name the
+                // caller chain. ra alone gives only the innermost frame, and a
+                // pc frozen at a call-return point cannot say whether the loop
+                // is inside that callee or in something above it. Resolve with
+                // ghpc/scripts/whereis.sh.
+                if (rdram && thread.sp)
+                {
+                    std::cerr << "[ghpc/frames] sp=0x" << std::hex << thread.sp << std::dec;
+                    unsigned shown = 0u;
+                    for (uint32_t i = 0u; i < 128u; ++i)
+                    {
+                        const uint32_t slot = (thread.sp & 0x01FFFFFFu) + i * 4u;
+                        if (slot + 4u > 0x02000000u)
+                            break;
+                        uint32_t w = 0u;
+                        std::memcpy(&w, rdram + slot, sizeof(w));
+                        if (w < 0x00100000u || w >= 0x00500000u || (w & 3u) != 0u)
+                            continue;
+                        if (shown >= 24u)
+                        {
+                            std::cerr << " ...(capped at 24)";
+                            break;
+                        }
+                        std::cerr << " +0x" << std::hex << (i * 4u) << ":" << w << std::dec;
+                        ++shown;
+                    }
+                    std::cerr << std::endl;
+                }
             }
         }
         for (const EeSemaphoreSnapshot &sema : snapshot.semaphores)
@@ -565,6 +712,9 @@ void EeScheduler::run()
             const uint32_t entryPc = context.pc;
             uint8_t beforeBuf[64];
             std::memcpy(beforeBuf, m_rdram + watchOff, kWatchLen);
+#if GHPC_DIAG
+            m_runtime.noteProbeEntry(&context, context.pc, 0u, "sched");
+#endif
             function(m_rdram, &context, &m_runtime);
             {
                 if (std::memcmp(beforeBuf, m_rdram + watchOff, kWatchLen) != 0)
@@ -608,6 +758,9 @@ void EeScheduler::run()
                 }
             }
 #else
+#if GHPC_DIAG
+            m_runtime.noteProbeEntry(&context, context.pc, 0u, "sched");
+#endif
             function(m_rdram, &context, &m_runtime);
 #endif
             m_guestExecuting.store(false, std::memory_order_release);
@@ -1848,6 +2001,7 @@ void EeScheduler::publishSnapshot()
         snapshot.id = id;
         snapshot.pc = item.activeContext().pc;
         snapshot.ra = getRegU32(&item.activeContext(), 31);
+        snapshot.gpr17 = getRegU32(&item.activeContext(), 17);
         snapshot.sp = getRegU32(&item.activeContext(), 29);
         snapshot.cop0Count = item.activeContext().cop0_count;
         snapshot.entry = item.entry;
@@ -2221,6 +2375,35 @@ void EeScheduler::processEvent(const EeEvent &event)
         break;
     case EeEventType::VBlankStart:
         ++m_vsyncTick;
+        // Guest time is gated on m_eeCycle, so if emulated cycles advance
+        // slower than real time the game plays in slow motion however high the
+        // render frame rate is. Report the ratio. GHPC_EERATE=N, every N ticks.
+        {
+            static const int every = []() {
+                const char *e = std::getenv("GHPC_EERATE");
+                return e ? std::atoi(e) : 0;
+            }();
+            if (every > 0)
+            {
+                static auto last = std::chrono::steady_clock::now();
+                static uint64_t lastCycle = 0;
+                static uint32_t ticks = 0;
+                if (++ticks >= (uint32_t)every)
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    const double secs = std::chrono::duration<double>(now - last).count();
+                    const uint64_t cycles = m_eeCycle - lastCycle;
+                    std::fprintf(stderr,
+                                 "[eerate] %.1f%% of realtime  (%.2f Mcycles/sec vs %.2f nominal)  %.1f vblanks/sec\n",
+                                 100.0 * (double)cycles / (secs * (double)kEeClockHz),
+                                 (double)cycles / secs / 1e6, (double)kEeClockHz / 1e6,
+                                 ticks / secs);
+                    last = now;
+                    lastCycle = m_eeCycle;
+                    ticks = 0;
+                }
+            }
+        }
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         if ((m_vsyncTick & 1u) != 0u)
         {

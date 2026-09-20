@@ -1,0 +1,266 @@
+VU1 runaway: the program's own output store overwrites its input header,
+2026-09-10, build-debug, 300s, GHPC_COUNTIN=0.5 GHPC_VU1_CENSUS=2000,
+bootskip on, game_screen at t=61.7. Includes the VIF1 residual fix.
+
+PROBE
+
+[vu1/topwatch], per VU1 run: qw[TOP] at entry, the first VU store to land on
+qw[TOP], the first integer load (ILW/ILWR) of it, the first such load that
+returns something other than the entry value, and whether the run was entered
+by MSCAL (execute) or MSCNT (resume). Buckets are
+[cut|end][mscal|mscnt] s = a store hit qw[TOP], d = a load differed.
+
+0x30b0: CLEAN SEPARATION
+
+  end/mscal   s0d0=264  s0d1=0  s1d0=37  s1d1=1
+  cut/mscal   s0d0=0    s0d1=0  s1d0=0   s1d1=66
+
+Every cut-off (66 of 66) had a store land on qw[TOP] and then a header load
+return a different value. 1 of 302 ended runs did. No 0x30b0 run came in by
+MSCNT.
+
+Every cut-off sample is at TOP=0 with the healthy header at entry
+(00000004 00000011 00000012 00000614). The store lands at pc 0x3178 (flush
+pc, so issued one slot earlier) and writes
+
+  00008000 300e4000 00000412 00000000
+
+over qw 0. That is a GIFtag, and z=0x412 is the 1042 the provenance round saw
+the bound read. The differing load is at pc 0x31b0, component y, reading
+806240256 (0x300e4000) where the entry value was 17. Healthy samples are at
+TOP=330 and no store ever touches qw 330.
+
+So the program writes its GS output at qw 0. When the input half is 0, that is
+its own input header, and the header is re-read after the write.
+
+0xcd8: SAME SIGNATURE, NOT EXCLUSIVE
+
+  end/mscal   s0d0=13858 s0d1=0 s1d0=14078 s1d1=25
+  end/mscnt   s0d0=5222  s0d1=0 s1d0=8996  s1d1=19
+  cut/mscal   s0d0=1129  s0d1=0 s1d0=422   s1d1=664
+  cut/mscnt   s0d0=2937  s0d1=0 s1d0=2000  s1d1=1574
+
+s1d1 is 664 of 2215 fresh-MSCAL cut-offs against 25 of 27961 ended ones. 0xcd8
+also stores a GIFtag to qw 0 on healthy TOP=0 runs (mscal 1: store at 0xdd8,
+00008000 302e4000 00000412), but reads its header at 0xce0 before that, so it
+survives. Other 0xcd8 cut-offs have no store and no differing read: the menu
+ones with an all-zero header (mscal 6645), and TOP=514 ones. More than one
+mechanism.
+
+MSCNT is common in healthy runs too (14237 ended), so H-MSCNT alone does not
+explain cut-offs.
+
+THE STORE, NAMED
+
+Second probe (store recorded at issue, where m_state.pc is the storing
+instruction). All 10 sampled 0x30b0 cut-offs:
+
+  issue pc=0x3170 lo=0x81e40b7d   SQI.xyzw vf1, (vi4++)   vi4 = 0
+
+vi4's writers this run: XTOP vi4 at 0x3e40 (vi4 = TOP), then MTIR vi4, vf2.x
+at 0x3148 (lo 0x800413fc), which replaces it with the low 16 bits of vf2.x,
+and that is 0. The output pointer is vf2.x, not TOP. Healthy 0xcd8 runs do the
+same through MTIR vi4, vf2.x at 0x0da0 and store at 0x0dd0.
+
+0xcd8's own runaway store is different: 0x0bc8 lo=0x03e36ffb is
+SQ vf13, -5(vi3) in the IBNE delay slot, riding the runaway counter vi3. That
+store is a consequence of the loop, not its cause.
+
+VU code is data in the ELF. work/GH2_debug.elf holds the 0x30b0 overlay with
+VU address 0 at file offset 0x3352e0; the words around 0x3170 match the runtime
+dump exactly. Decoded prologue:
+
+  0x30b0  ILW.x  vi1,  0x2b0(vi0)    qw688.x, 1989 at runtime
+  0x30b8  ILW.x  vi15, 0x2b1(vi0)    qw689.x
+  0x30d0  JALR   vi2, vi1            call 1989*8 = 0x3e28
+  0x30e0  JALR   vi2, vi15           call qw689.x*8
+  0x30f0  XTOP   vi1
+  0x30f8  ILW.z  vi14, 0(vi1)        header count
+  0x3100..0x3140  LQ vf7..vf13 from qw 695..703
+  0x3148  MTIR   vi4, vf2.x          output pointer
+  0x3170  SQI    vf1, (vi4++)        the clobber
+
+Nothing from 0x30b0 to 0x3148 writes vf2. It comes from one of the two
+subroutines reached through the jump table at qw 688/689, or is carried in
+from an earlier program. The ELF image at this base does not hold the runtime
+0x3e28 routine (its 0x3e40 is 0x10010801, the runtime's is XTOP vi4), so a
+different overlay is loaded there.
+
+That overlay is at file offset 0x334c08 for VU 0 (found by XTOP vi4 at 0x3e40
+with ILW vi3, 0(vi4) at 0x3e90, both matching the runtime). The 0x3e28 callee:
+
+  0x3e28  ILW.y  vi5, 0x2b0(vi0)     qw688.y
+  0x3e30  ILW.w  vi6, 0x2b0(vi0)     qw688.w
+  0x3e38  LQ     vf1, 0x2a9(vi0)     qw681
+  0x3e40  XTOP   vi4
+  0x3e48  IBNE   vi5, vi0, +0x1b
+  0x3e58  LQ     vf3, 0x2b2(vi0)     qw690
+  0x3e78  upper  MUL vf3, vf3, vf1
+  0x3e90  ILW.x  vi3, 0(vi4)         header x
+  0x3e98  IADDIU vi4, vi4, 1   upper MINI.w vf3, vf3, vf0
+  0x3eb8+ SQ vf3, 2/6/10(vi4) in a loop, IBGTZ vi3 at 0x3ed8
+
+The IBNE at 0x3e48 branches to 0x3f28 when vi5 != 0. That path (0x3f28 to
+JR vi2 at 0x3ff0) loads vf3-vf6 from qw 681 and TOP+3/7/11, multiplies, and
+stores vf7-vf9 back into the input buffer. Its other exit, IBEQ vi6 at 0x3f28,
+lands on the same JR. Both paths decoded: VF destinations are vf1 and vf3-vf9,
+never vf2.
+
+Decoded with a scratch decoder checked against ten words whose meaning was
+already confirmed from runtime behaviour (SQI, MTIR, XTOP, ILW, JALR, SQ, LQ,
+IADDIU, MUL, NOP), all matching. It also corrected one hand decode: 0x3118 is
+IADD vi14, vi14, vi1 (header count plus TOP), not a DIV.
+
+So vf2 is written by the second callee (reached through qw689.x, unknown
+offline) or carried in from an earlier program: VF registers persist across
+MSCALs. Needs a runtime trace of vf2's writer.
+
+WHO SHOULD SET VF2: THE INIT PROGRAM THAT NEVER RUNS
+
+The ELF names its VU overlays by load address (.DVP.overlay..<addr>).
+.DVP.overlay..0x3730 is 0x30 bytes, a six-instruction init:
+
+  IADDIU vi1, vi0, 704
+  MFIR.x vf2, vi1
+  MFIR.z vf2, vi1
+  IADDIU vi1, vi0, 849
+  MFIR.y vf2, vi1   [E]
+  MFIR.w vf2, vi1
+
+vf2 = (704, 849, 704, 849): two output buffers just above the constants at
+qw 680-703. The MR32 vf2, vf2 each program runs rotates it, so x alternates
+704 and 849 and never 0. Its MPG arrives (runtime MPG ranges include
+0x3730+0x30) but no MSCAL to 0x3730 is ever parsed; MSCAL targets all run are
+0xcd8, 0x2e60 and 0x30b0.
+
+Population (vf2 census, 84000 runs): all 354 ended 0x30b0 runs at TOP=0
+entered with vf2.x low 16 bits nonzero; 9 of 10 cut-offs entered with 0. vf2
+is shared state other programs leave behind (0x2e60 writes it every run), and
+without the init any zero lane sends every other batch's output to qw 0.
+
+PsRnd::Reset (0x1beb10) builds the call: lui 0x1400 / ori 0x6e6 at
+0x1bee1c, stores the qword {MSCAL 0x6e6, 0, 0, 0} at the scratchpad packet
+cursor, then DmaPacket::Send(packet, 1, 0, 0): channel 1 (VIF1), type 0.
+PreSend makes that a normal-mode kick, CHCR 0x101, with
+MADR = (start & 0x0fffffff) | ((start & 0x40000000) << 1), the DMAC's SPR
+form: bit 31 set, scratchpad offset below. GHPC_PROBE shows PsRnd::Init (from
+0x1004cc) and PsRnd::Reset (from Init+0x120) each run once at boot. The
+generated C++ for both is faithful.
+
+The DMA trace catches the kick:
+
+  [dma/vif1] normal kick from SPR madr=0x80000020 qwc=5 chcr=0x101 dctrl=0x1
+
+dctrl=0x1 is MFD=0, so the MFIFO empty-ring stall is not involved (no refusal
+logged). The kick is enqueued with srcAddr 0x80000020, but
+ps2IsScratchpadAddress only accepts bit 31 over a full 0x70000000-based
+address, so it returns false, translateAddress takes the KSEG0 path, and the
+5 quadwords are read from main RAM at 0x20 instead of scratchpad. A scan of
+every VIF1 and VIF0 chunk for the word MSCAL 0x6e6 finds it nowhere.
+
+Hardware reference, PCSX2 Dmac.cpp dmaGetAddr:
+
+  if (DMA_TAG(addr).SPR) return (tDMA_TAG*)&eeMem->Scratch[addr & 0x3ff0];
+
+and Dmac.h tDMAC_ADDR: "u32 SPR : 1; // Memory/SPR Address (only effective
+for MADR and TADR of non-SPR DMAs)". Bit 31 of a DMA source address is the
+scratchpad flag and the rest is the offset.
+
+Fix: enqueueTransfer (normal-mode VIF0, VIF1 and GIF kicks) decodes a bit-31
+source that isScratchpad() rejects as scratchpad at 0x70000000 | offset. The
+general ps2IsScratchpadAddress is unchanged: 0x80000000 and up is KSEG0 RAM to
+the CPU. GHPC_DMA_SPR_LEGACY=1 restores the old decode for a control arm.
+Chain tags are separate: the tag walker masks bit 31 off the ADDR field
+(ps2_memory.cpp:215), a related gap not touched here.
+
+RESULT
+
+Mechanism, build-debug, 150s, GHPC_COUNTIN=0.5 GHPC_VU1_CENSUS=2000:
+
+  [vif1/initscan] word 0x140006e6 at pos=0 of 80 src=1 mscals=0
+  [vif1/initscan] PARSED MSCAL 0x3730 at pos=0 of 80
+  MSCAL targets: 0xcd8x13887 0x2e60x3 0x30b0x104 0x3730x1
+  pc0x3730 ebit=1, 6 instructions
+  pc0x30b0 ebit=110 budget=0
+
+The init runs once at boot, and 0x30b0 no longer runs away at all (28 to 114
+cut-offs per run before). vf2.x low 16 bits are nonzero at entry in every
+0x30b0 and 0xcd8 run (z=0 buckets are empty), where 9 of 10 0x30b0 cut-offs
+entered with 0 before.
+
+Speed, release build, same binary, 300s each, GHPC_COUNTIN=0.5:
+
+  fix on             rung 9  eerate 0.9%  2.53 Mcycles/sec
+  GHPC_DMA_SPR_LEGACY  rung 9  eerate 0.9%  2.57 Mcycles/sec
+
+SAME. The 0x30b0 runaway was real and is gone, but it was never the gameplay
+cost. 0xcd8 still cuts off 2922 of 21771 runs (13%), and those burn 187M VU1
+instructions against 48M for the runs that end. 0xcd8's runaways are a
+different mechanism (menu runs with an all-zero header, and the loop reached
+through the jump from 0x0d00 to 0x0000) and are the next target.
+
+0xCD8 ENTRY, DECODED FROM THE ELF
+
+MPG 0x4a00019b in .vutext (file 0x33a624) loads 256 instructions at 0xcd8;
+checked against the runtime (lo at 0x0da0 = 0x800413fc, MTIR vi4, vf2.x, in
+both).
+
+  0x0cd8  XTOP  vi5
+  0x0ce0  ILW.w vi1,  0(vi5)     header.w
+  0x0ce8  ILW.x vi14, 688(vi0)   1989
+  0x0cf0  ILW.x vi15, 689(vi0)
+  0x0d00  JALR  vi2, vi1         call header.w * 8
+  0x0d10  JALR  vi2, vi14        call 0x3e28
+
+header.w selects a per-batch routine: 0x614 is the JR vi2 stub at 0x30a0,
+and gameplay headers carry 0x373, 0x3c6, 0x369, 0x394, which point at 0x1b98,
+0x1e30, 0x1b48 and 0x1ca0, all loaded overlays. The "jump from 0x0d00 to
+0x0000" in the provenance dumps is header.w = 0: the all-zero headers of the
+menu cut-offs. No MPG loads code below 0x9c8, so it runs zeros into whatever
+sits at 0x9c8. The zero header and the jump to 0 are one bug. Gameplay
+cut-off headers seen so far have nonzero w, so the gameplay runaways are not
+this.
+
+WHY A ZERO HEADER CAN NEVER FINISH
+
+The full VU code image rebuilt from all 18 MPG VIFcodes in .vutext (each
+matched to a runtime MPG range, three runtime-confirmed words reproduced):
+
+  0x0a00  XTOP   vi3
+  0x0a08  ILW.y  vi4, 0(vi3)        count = header.y
+  0x0a28  IADD   vi4, vi4, vi3      bound = TOP + y
+  0x0a30  IADDIU vi3, vi3, 1        counter = TOP + 1
+  0x0a38  IADDIU vi4, vi4, 4        bound = TOP + y + 4
+  0x0b88  IADDIU vi3, vi3, 4        step 4 per pass
+  0x0bc0  IBNE   vi3, vi4, 0x0b10   exit on exact equality only
+
+The gap starts at y + 3 and closes by 4, so the loop ends only when
+y = 1 (mod 4). Every header y observed is: 0x11, 0x41, 0xc1, 0xc5, 0x115,
+0x119, 0x11d, 0x121, 0x125, 0x129. A zero header leaves a gap of 3 that never
+closes, which is the provenance round's counter 5, 9, 13 against bound 4. The
+game never sends a zero header on hardware, so the zero is ours, upstream in
+delivery.
+
+RULED OUT: THE BASE GUARD
+
+The BASE handler rejects BASE VIFcodes with NUM != 0 or high immediate bits,
+which hardware ignores. With the residual desync fixed it could have been
+eating real BASEs. badBaseRejects=0 all run. BASE is 0 because the game sends
+0 (BASE 0 -> 99 -> 0 transients aside). The remaining 75 OFFSETs follow a
+regular pattern (0->515 num=2, 515->514 num=2, 514->0 num=3) and read as real
+game codes.
+
+So TOP=0 is legitimate, and a shipped game cannot be clobbering its input every
+other batch on hardware. The suspect is the store's address: why it is qw 0.
+
+MEASUREMENT DEFECT FOUND
+
+This run's oracle reported eerate_pct=20.9. That was the last [eerate] line
+seen, printed at log line 19993 on loading_screen; the run entered game_screen
+at line 22018 and printed no [eerate] line after. The earlier debug run did
+print one in gameplay: 0.7%. progress.py now counts eerate_pct and fps only
+while on the top rung (AT_TOP), so a missing gameplay line is missing rather
+than stale. This defect could have fired the 5% win on a menu number.
+
+Runner RSS across the run: 138 to 187 MB. The earlier job killed for low
+memory was outside pressure, not this process.

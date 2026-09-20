@@ -623,7 +623,16 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
 #define FPU_FLOOR_W_S(a) ((int32_t)floorf((float)(a)))
 #define FPU_CVT_S_W(a) ((float)(int32_t)(a))
 #define FPU_CVT_S_L(a) ((float)(int64_t)(a))
-#define FPU_CVT_W_S(a) ((int32_t)nearbyintf((float)(a)))
+// The R5900 rounds CVT.W.S toward zero, not to nearest. nearbyintf here turned
+// every (int)float in the recompiled game into a round, which showed up as
+// CharBonesSamples.cpp:114 "*frac >= 0?": FracToSample clamps its input to
+// [0,1], multiplies by n-1 and subtracts the truncated part, so the remainder
+// is non-negative by construction and can only go negative if the conversion
+// rounds up. The game proves the hardware truncates by adding 0.5 before
+// cvt.w.s on that function's other path (0x1b7ab4), an idiom that is only
+// correct against a truncating conversion. FPU_CVT_L_S below already
+// truncates; these two disagreeing was the tell.
+#define FPU_CVT_W_S(a) ((int32_t)(float)(a))
 #define FPU_CVT_L_S(a) ((int64_t)(float)(a))
 #define FPU_C_F_S(a, b) (0)
 #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))

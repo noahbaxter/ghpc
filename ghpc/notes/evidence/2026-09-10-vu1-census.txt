@@ -1,0 +1,29 @@
+VU1 microprogram termination census, 2026-09-10, build-debug, 600s run
+GHPC_COUNTIN=0.5 GHPC_VU1_CENSUS=2000, bootskip on
+
+One MSCAL is one VU1Interpreter::run() call. Budget is 65536 cycles,
+handed down from the callback in ps2_runtime.cpp. ebit = the program
+reached its end bit. budget = it was cut off mid-flight. offend = the
+pc left code memory.
+
+last sample before StartGame:
+[vu1/census] total=60000 pc0xcd8{ebit=41910 budget=16489 offend=0 stop=1125 avgInstr=20457 maxInstr=65536} pc0x2e60{ebit=44 budget=0 offend=0 stop=0 avgInstr=82 maxInstr=113} pc0x30b0{ebit=407 budget=25 offend=0 stop=0 avgInstr=4368 maxInstr=65536}
+
+end of run:
+[vu1/census] total=100000 pc0xcd8{ebit=65893 budget=30961 offend=0 stop=2283 avgInstr=22982 maxInstr=65536} pc0x2e60{ebit=87 budget=0 offend=0 stop=0 avgInstr=112 maxInstr=167} pc0x30b0{ebit=749 budget=27 offend=0 stop=0 avgInstr=2869 maxInstr=65536}
+
+gameplay window (delta between those two samples), program pc0xcd8:
+  39613 MSCALs, 14472 of them cut off by the budget
+  36.5% of runs, 89.4% of all VU1 instructions
+  a healthy run costs 4465 instructions, a runaway costs 65536 (14.7x)
+  VU1 work would drop 6.0x if the runaways terminated normally
+
+offend=0 everywhere: the pc never leaves code memory, so this is a loop
+that does not exit, not a jump to garbage.
+
+frame rate, same source revision, both builds, 600s each:
+  release menus    84.5-91.4% of realtime
+  release gameplay 0.18-0.31 fps, 0.4-0.7% of realtime
+  debug   menus    12.2-13.3 fps, 20.6-21.1% of realtime
+  debug   gameplay 0.06-0.12 fps, 0.2% of realtime
+  release log 1652 lines/600s, debug log 99762 lines/600s

@@ -19,6 +19,13 @@
 #define AGRESSIVE_LOGS 0
 #endif
 
+// Same per-function hook as AGRESSIVE_LOGS, but counting instead of printing.
+// A per-call log line is gigabytes over a few minutes; a counter is a few
+// hundred bytes per dump and can still name a loop.
+#ifndef CALL_HISTOGRAM
+#define CALL_HISTOGRAM 0
+#endif
+
 #define RUNTIME_ERROR(x)                                                                                               \
     do                                                                                                                 \
     {                                                                                                                  \
@@ -191,6 +198,70 @@ inline void print_saved_location()
     {                               \
         code;                       \
     } while (0)
+
+#elif CALL_HISTOGRAM
+
+namespace ps2_log
+{
+inline std::string log_path()
+{
+    return (std::filesystem::current_path() / "ps2_log.txt").string();
+}
+inline void print_saved_location() {}
+
+struct CallCounter
+{
+    const char *name;
+    unsigned long long hits;
+    unsigned long long last;
+    CallCounter *next;
+    explicit CallCounter(const char *n);
+};
+
+inline CallCounter *&call_hist_head()
+{
+    static CallCounter *head = nullptr;
+    return head;
+}
+
+inline CallCounter::CallCounter(const char *n)
+    : name(n), hits(0), last(0), next(call_hist_head())
+{
+    call_hist_head() = this;
+}
+
+// Ranked by delta since the previous dump, not by total. A loop that starts
+// late in a run is invisible in a running total but dominates the delta.
+inline void call_hist_dump(unsigned topN)
+{
+    std::vector<CallCounter *> v;
+    for (CallCounter *c = call_hist_head(); c != nullptr; c = c->next)
+    {
+        if (c->hits != c->last)
+        {
+            v.push_back(c);
+        }
+    }
+    std::sort(v.begin(), v.end(), [](CallCounter *a, CallCounter *b) {
+        return (a->hits - a->last) > (b->hits - b->last);
+    });
+    std::cerr << "[ghpc/calls] active=" << v.size();
+    for (std::size_t i = 0; i < v.size() && i < static_cast<std::size_t>(topN); ++i)
+    {
+        std::cerr << " | " << v[i]->name << "=" << (v[i]->hits - v[i]->last);
+    }
+    std::cerr << std::endl;
+    for (CallCounter *c = call_hist_head(); c != nullptr; c = c->next)
+    {
+        c->last = c->hits;
+    }
+}
+}
+
+#define PS_LOG_ENTRY(name)                        \
+    static ps2_log::CallCounter _ps2_cc_(name);   \
+    ++_ps2_cc_.hits
+#define PS2_IF_AGRESSIVE_LOGS(code) ((void)0)
 
 #else
 

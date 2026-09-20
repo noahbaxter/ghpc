@@ -1,5 +1,6 @@
 #include "Common.h"
 #include "Pad.h"
+#include "ghpc_drive.h"
 
 namespace ps2_stubs
 {
@@ -58,6 +59,26 @@ namespace
         constexpr int32_t kPadStateStable = 6;
         constexpr size_t kPadPortCount = 2;
         constexpr size_t kPadSlotCount = 1;
+
+        // GHPC_PAD_GUITAR presents port 0 as a RedOctane PS2 guitar.
+        // system/run/config/gen/joypad.dtb classifies controllers under HX_EE:
+        //     ro_guitar  (detect (type kJoypadAnalog) (button kPad_DLeft))
+        //     digital / analog / dualshock  (detect (type kJoypad...))
+        // so the real guitar is an analog pad with no actuators that holds
+        // D-pad Left forever, and GH2 keys off that quirk.
+        //
+        // Note the button mapping changes with it. Per
+        // config/gen/beatmatch_controller.dtb the guitar's green fret is R2,
+        // not cross, so a driver that keeps pressing cross will sit on the
+        // guitar help screen forever and look like a hang.
+        bool ghpcGuitarMode()
+        {
+            static const bool on = []() {
+                const char *e = std::getenv("GHPC_PAD_GUITAR");
+                return e && *e && *e != '0';
+            }();
+            return on;
+        }
 
         constexpr uint16_t kPadBtnSelect = 1u << 0;
         constexpr uint16_t kPadBtnL3 = 1u << 1;
@@ -309,7 +330,8 @@ namespace
             data[19] = pressureValue(state, portState, kPadBtnR2);
         }
 
-        bool readPadPortData(int port, int slot, PS2Runtime *runtime, uint8_t *outData, uint32_t dataAddr)
+        bool readPadPortData(int port, int slot, PS2Runtime *runtime, uint8_t *outData, uint32_t dataAddr,
+                             const uint8_t *rdram)
         {
             if (!outData)
             {
@@ -358,6 +380,23 @@ namespace
                 }
             }
 
+            if (ghpcGuitarMode() && port == 0)
+            {
+                // Held, not pulsed: the real guitar asserts D-Left permanently
+                // and the detect match samples a level. Active low.
+                state.buttons = static_cast<uint16_t>(state.buttons & ~kPadBtnLeft);
+            }
+
+            if (port == 0 && ghpc_drive::Driver::instance().enabled())
+            {
+                // Screen driven. Presses once per settled UI screen and reports
+                // the screen it cannot leave, which is what makes "how far does
+                // it get" a measurement rather than a guess. Takes precedence
+                // over the GHPCAUTOPAD timer below.
+                const uint16_t held = ghpc_drive::Driver::instance().poll(rdram);
+                state.buttons = static_cast<uint16_t>(state.buttons & ~held);
+            }
+
 #if GHPC_DIAG
             // GHPCAUTOPAD: synthesize button edges so headless runs can advance
             // past screens that wait for input. Off unless GHPC_PAD_AUTO is set:
@@ -370,12 +409,17 @@ namespace
                 if (s_auto < 0)
                 {
                     const char *env = std::getenv("GHPC_PAD_AUTO");
+                    // GHPC_PAD_AUTO=cross (or =x) presses CROSS and nothing
+                    // else, at 3 Hz. START backs out of the menu CROSS just
+                    // entered, so the mixed mode below never reaches a song.
                     s_auto = (env && *env && *env != '0') ? 1 : 0;
+                    if (env && (env[0] == 'c' || env[0] == 'x'))
+                        s_auto = 2;
                     s_t0 = std::chrono::steady_clock::now();
                     if (s_auto > 0)
                         std::fprintf(stderr, "[pad] GHPCAUTOPAD enabled\n");
                 }
-                if (s_auto > 0)
+                if (s_auto > 0 && !ghpc_drive::Driver::instance().enabled())
                 {
                     const double t = std::chrono::duration<double>(
                                          std::chrono::steady_clock::now() - s_t0)
@@ -383,19 +427,35 @@ namespace
                     const double delay = 6.0; // let boot settle first
                     if (t >= delay)
                     {
+                        // A 50/50 CROSS and START alternation does not walk into
+                        // a song: START backs out of the menu CROSS just entered.
+                        // Bias hard toward CROSS and keep START only often enough
+                        // to clear a title screen that wants it.
+                        //
+                        // The duty cycle must be a fraction of the period. A
+                        // fixed 0.35 against a 0.33 period is never false, so the
+                        // button was held rather than pulsed and the UI saw one
+                        // press edge for the whole run, which stalled every
+                        // screen after the first.
+                        const double period = (s_auto == 2) ? 0.33 : 1.0;
+                        const double duty = period * 0.5;
                         const double span = t - delay;
-                        const int cycle = static_cast<int>(span / 1.2);
-                        const double phase = span - (cycle * 1.2);
-                        if (phase < 0.2)
+                        const int cycle = static_cast<int>(span / period);
+                        const double phase = span - (cycle * period);
+                        if (phase < duty)
                         {
-                            const uint16_t btn = (cycle & 1) ? kPadBtnStart : kPadBtnCross;
+                            const bool useStart = (s_auto != 2) && ((cycle % 8) == 7);
+                            const uint16_t btn = useStart ? kPadBtnStart : kPadBtnCross;
                             state.buttons = static_cast<uint16_t>(state.buttons & ~btn);
-                            static int s_logged = 0;
-                            if (s_logged < 12)
+                            // Rate limited, not capped. A cap goes quiet early and
+                            // then cannot tell "still pressing" from "stopped".
+                            static int s_lastCycle = -1;
+                            if (cycle != s_lastCycle)
                             {
-                                ++s_logged;
-                                std::fprintf(stderr, "[pad] GHPCAUTOPAD press %s t=%.1f buttons=0x%04x\n",
-                                             (cycle & 1) ? "START" : "CROSS", t, state.buttons);
+                                s_lastCycle = cycle;
+                                if ((cycle % 20) == 0)
+                                    std::fprintf(stderr, "[pad] GHPCAUTOPAD cycle=%d press %s t=%.1f buttons=0x%04x\n",
+                                                 cycle, useStart ? "START" : "CROSS", t, state.buttons);
                             }
                         }
                     }
@@ -572,6 +632,13 @@ namespace
             return;
         }
 
+        if (ghpcGuitarMode())
+        {
+            // A guitar has no motors. Reporting any classifies the pad as
+            // kJoypadDualShock instead of kJoypadAnalog, which loses ro_guitar.
+            setReturnS32(ctx, 0);
+            return;
+        }
         if (act < 0)
         {
             setReturnS32(ctx, 2); // small + large motors
@@ -727,7 +794,7 @@ namespace
         }
 
         ps2TraceGuestRangeWrite(rdram, dataAddr, 32u, "scePadRead", ctx);
-        if (!readPadPortData(port, slot, runtime, data, dataAddr))
+        if (!readPadPortData(port, slot, runtime, data, dataAddr, rdram))
         {
 #if GHPC_DIAG
             ghpcNotePad("read", port, slot, 0, 0xFFFFu);

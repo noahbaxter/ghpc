@@ -1,0 +1,96 @@
+The first native draw: the seam works, the submit path does not.
+2026-09-19, release build, GHPC_COUNTIN=0.5, 300s per arm.
+
+WHERE THE SEAM GOES, and why not at DrawFaces.
+
+The queue said "write the first native draw at PsMesh::DrawFaces". Reading the
+body says no. On the common gameplay path (+0x140 & 0x1f == 0) DrawFaces
+0x43eea0 does not kick at all: 0x43ef04 branches past the chunk loop, 0x43ef34
+appends a REF DMAtag (id 3) pointing at mFacePacket, and 0x43ef44 jumps to the
+epilogue. PsMesh::DrawShowing flushes once after its per-material loop.
+
+The mutable-geometry path (+0x140 & 0x1f != 0) does run the loop at
+0x43ef50..0x43effc and calls PsRnd::FlushPacket 0x43e400 per chunk, after that
+chunk's bytes are already in the packet.
+
+Either way the invariant a native draw needs holds: within one VIF1 chain the
+A+D register block precedes the geometry that consumes it. PsRnd::SetRegister
+0x43e320 appends A+D pairs (value +0x0, register address +0x8) at the
+scratchpad cursor 0x70000008, inside a GIFtag opened by 0x43e988 with
+REGS=0xE, PACKED, NREG=1, and that GIFtag sits in a DMAtag whose TTE slot
+holds VIFcode 0x50000000, VIF DIRECT. Registers reach the GIF through DIRECT
+and never through VU1.
+
+So the seam is the MSCAL callback (ps2_runtime.cpp:791, fired from
+ps2_vif1_interpreter.cpp:1362). At that instant every A+D ahead of the
+geometry is already in the GS and VIF1 has unpacked the mesh into VU1 memory.
+Substituting a host transform for the microprogram changes nothing else.
+
+PAIRING. A single armed slot is wrong, because DrawFaces only appends and the
+flush comes later, so several draws are armed before any MSCAL fires. A FIFO
+is correct: VIF1 parses the chain in order, so MSCAL order matches DrawFaces
+order. Measured with the FIFO: drew=32768, dropped=0, queued=0, and vu1 moved
+only 35241 -> 36094 across a whole run. The pairing is exact.
+
+THE MEASUREMENTS.
+
+  arm                                            eerate  fps   rung
+  control, GHPC_NATIVE_DRAW unset                 4.8    2.93   9
+  mode 2, host transform runs, submits nothing    4.9    2.94   9
+  mode 1, host transform submits, VU1 skipped     0.9    0.45   9
+  mode 1 + trivial reject of offscreen triangles  0.8    0.46   9
+
+Control is tight: seven [eerate] samples spanning 4.7 to 4.8, 13.92 to 14.28
+Mcycles/sec. This also reproduces the stored 4.7 mark that NEXT.md listed
+under "does not reproduce", so that known-gap entry is stale and the host is
+simply quieter now than when the gap was recorded.
+
+WHAT IS PROVEN.
+
+1. The seam works. The FIFO pairing is exact and roughly half the gameplay
+   MSCALs went native with no guest change: rung stayed 9 in every arm.
+2. The host transform is free. Mode 2 adds the full skinning, projection and
+   uv work on top of the control and costs nothing measurable (4.9 vs 4.8).
+3. The entire loss is in handing triangles to the GS. Mode 1 removes VU1
+   interpretation, which the profile says is 80% of the busy thread, and is
+   still 6x slower than the control.
+
+TWO THEORIES TESTED AND DEAD.
+
+  Per-vertex GS::writeRegister overhead. Dead. The trivial reject cut
+  submitted triangles by 72% (2,715,404 -> 752,403) and therefore cut register
+  writes by 72% as well. eerate went 0.9 -> 0.8, which is noise. The cost is
+  not proportional to triangle count.
+
+  Offscreen vertices clamped into the scissor. Dead as the main cost, though
+  the clamp was a real bug and is fixed. xyz2() used to clamp x and y into
+  [0, 65535] instead of rejecting, and the rasteriser walks bbox intersected
+  with scissor (gs_cpu_backend.cpp:2382-2403), so a clamped triangle billed a
+  full-screen edge-test scan. Rejecting 1,962,940 such triangles per run
+  changed nothing measurable.
+
+WHAT SURVIVES. The 752,403 triangles that do reach the screen are each about
+10x more expensive to rasterise than VU1's. Control rasterises roughly 44k
+triangles/sec while also running VU1; mode 1 manages 3.8k/sec with VU1 off.
+The candidate is triangles that straddle the screen edge: the trivial reject
+only drops triangles wholly outside, and one that has a vertex on screen and
+two far outside still bills bbox-intersected-with-scissor, the whole frame,
+while covering almost none of it. Near-plane-crossing triangles have exactly
+that shape after projection, and VU1 is known to clip them by generating
+vertices (see 2026-09-19-vu1-tl-semantics). Not yet confirmed; the fixture
+replay tool measures box area against triangle area directly, offline.
+
+COUNTERS. [ghpc/native] reports drew, tris, clipped (behind the eye),
+offscreen, unenc, vu1, dropped, queued. Mode 1 runs are reproducible to the
+triangle: two independent runs hit drew=32768 with tris within 150 of each
+other and clipped within 22.
+
+KNOBS.
+
+  GHPC_NATIVE_DRAW=1   host transform submits, VU1 skipped for cached meshes
+  GHPC_NATIVE_DRAW=2   host transform runs, submits nothing, VU1 still draws.
+                       The correctness arm: it cannot change the picture, and
+                       it is the only mode where both sides of a comparison
+                       exist in one run.
+  GHPC_FIXTURE=<path>  with mode 2, capture draws plus VU1's own output
+  GHPC_FIXTURE_DRAWS=N how many draws to capture, default 8

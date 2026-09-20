@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 class GS;
 class PS2Memory;
@@ -228,6 +229,10 @@ private:
 #if GHPC_DIAG
 
     uint32_t m_ghpcStartPc = 0u;
+    // GHPCVULOOP: visits per instruction slot for one MSCAL, 2048 slots of
+    // micro memory. A member so it is not reallocated on every MSCAL; only
+    // touched when GHPC_VU1_LOOP is set.
+    std::vector<uint32_t> m_ghpcPcHits;
 #endif
     uint64_t m_nextWriteSequence = 0;
     uint64_t m_efuResourceReady = 0;

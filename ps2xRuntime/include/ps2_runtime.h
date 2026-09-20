@@ -400,6 +400,42 @@ public:
     bool registerFunction(uint32_t address, RecompiledFunction func);
     RecompiledFunction lookupFunction(uint32_t address);
     bool hasFunction(uint32_t address) const;
+#if GHPC_DIAG
+    // GHPCPROBE hit report, shared. dispatchGuestBranch is NOT the only way
+    // into a recompiled function: EeScheduler enters thread bodies and resumes
+    // yielded ones directly through lookupFunction, so a probe living only in
+    // the dispatch path reports a false NEGATIVE on every thread entry and
+    // every resume. That cost a whole debugging session: an entry probe on
+    // BeatMatch::UpdateSongPos never fired while the function demonstrably ran
+    // to completion. Both entry paths call this.
+    void noteProbeEntry(R5900Context *ctx, uint32_t targetPc, uint32_t sourcePc,
+                        const char *via);
+
+    // GHPCHEAP: newlib allocator census. The game links newlib's dlmalloc, so
+    // its whole state is guest data the runtime can read: __malloc_av_ holds
+    // the top chunk and 128 free bins, and sbrk's ceiling check comes through
+    // the EndOfHeap syscall. Together those answer the only question that
+    // matters at an allocation failure: was the heap actually full, or did the
+    // allocator give up with room left.
+    void noteHeapCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+    void noteHeapCeilingCheck(R5900Context *ctx);
+    void dumpGuestHeapCensus(uint8_t *rdram, const char *why);
+
+    // GHPCLOAD: name the file a stalled song load is waiting on.
+    void noteLoaderCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+
+    // GHPCBLK: where the ARK read chain stops.
+    void noteBlockCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+
+    // GHPCSTRM: the StreamEE state word the song load waits on.
+    void noteStreamCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+
+    // GHPCSONG: the song position the chart is actually being polled at.
+    void noteSongCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+
+    // GHPCGAME: the count-in gate that decides when the chart starts.
+    void noteGameCall(uint8_t *rdram, R5900Context *ctx, uint32_t targetPc);
+#endif
     bool dispatchGuestBranch(uint8_t *rdram,
                              R5900Context *ctx,
                              uint32_t targetPc,
@@ -445,6 +481,12 @@ public:
     uint32_t guestHeapBase() const;
     uint32_t guestHeapEnd() const;
     uint32_t guestHeapLimit() const;
+    static uint32_t guestHeapRuntimeReserve();
+    // Base of the runtime's own arena, and therefore the ceiling the guest
+    // allocator is told about by EndOfHeap. A constant, not guestHeapBase(),
+    // which returns the ELF derived suggestion until the arena is lazily
+    // configured and would hand the game a 4KB heap during boot.
+    static uint32_t runtimeArenaBase();
     uint32_t reserveAsyncCallbackStack(uint32_t size, uint32_t alignment = 16u);
 
     void drainCompletedDmacHandlers(uint8_t *rdram);
@@ -567,7 +609,7 @@ private:
     uint32_t m_guestHeapLimit = PS2_RAM_SIZE;
     uint32_t m_guestHeapSuggestedBase = 0x00100000u;
     bool m_guestHeapConfigured = false;
-    uint32_t m_asyncCallbackStackFloor = 0x01F00000u;
+    uint32_t m_asyncCallbackStackFloor = PS2_RAM_SIZE - 0x00100000u;
     uint32_t m_asyncCallbackStackTop = PS2_RAM_SIZE;
 
     std::atomic<uint32_t> m_missingFunctionPolicy{static_cast<uint32_t>(MissingFunctionPolicy::ContinueToTarget)};

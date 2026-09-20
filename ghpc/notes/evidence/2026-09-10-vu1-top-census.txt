@@ -1,0 +1,112 @@
+VU1 runaway split by TOP and by input freshness, 2026-09-10, build-debug, 300s
+GHPC_COUNTIN=0.5 GHPC_VU1_CENSUS=2000, bootskip on, game_screen at t=60.8
+
+PROBE
+
+[vu1/topcensus] keys every VU1 run by (startPc, TOP as XTOP returns it) and
+by whether qw[TOP] was last written by an UNPACK since the previous MSCAL
+(fresh) or not (stale). Freshness is captured at MSCAL issue from
+g_ghpcLastWriter, before the program's own stores land. [vu1/topin] prints
+qw[TOP] at issue for the first 40 cut-offs, every 500th after, and the first
+two ended runs per key.
+
+Q1: IS TOP THE VARIABLE? NO.
+
+  pc0x30b0/top0    fresh ebit=190  cut=28
+  pc0x30b0/top330  fresh ebit=1    cut=0
+  pc0xcd8/top0     fresh ebit=21367 cut=6595
+  pc0xcd8/top330   fresh ebit=4913 cut=1
+  pc0xcd8/top514   fresh ebit=870  cut=538
+  pc0xcd8/top515   fresh ebit=219  cut=134
+  pc0xcd8/top610   fresh ebit=8814 cut=6943
+  (total=52000, end of run)
+
+TOP=0 runs end normally most of the time, and gameplay cut-offs sit on TOPs
+of 514, 515 and 610 as well. Those three are not halves of the BASE=0
+OFFSET=330 double buffer at all.
+
+Q2: WAS THE INPUT DELIVERED? YES, ALWAYS.
+
+stale = 0 in every bucket across 52000 runs. Every cut-off got a qw[TOP]
+unpacked since the previous MSCAL. The VIF delivered something; the question
+is what.
+
+THREE POPULATIONS, NOT ONE
+
+A. menus, 0xcd8, rare (mscal 3363, 4601, 5716, 6699): the freshly unpacked
+   header is all zeros.
+B. loading_screen, 0x30b0, from mscal 7655: header identical to healthy runs
+   (00000004 00000011 00000012 00000614). Preceded at mscal 7649 by
+   BASE 0 -> 0 and OFFSET 330 -> 0 with num=3, which turns double buffering
+   off.
+C. game_screen, 0xcd8, the bulk: preceded at mscal 8392 by one packet parsing
+   ~20 OFFSET VIFcodes 28 to 32 bytes apart with num 100 to 155 and immediates
+   604 to 664. Those are payload words read as VIFcodes. They set OFFSET to
+   junk, which is where TOP 514/515/610 come from.
+
+THE DESYNC BEHIND C
+
+[vif1] TOTALS at end of run:
+
+  chunks=37380 truncUnpack=186 bytesDiscarded=431040
+  dirtyChunks=193 dirtyAfterTrunc=186 firstBadAtPos0=187 invalidOps=118798
+
+Early in the run (before gameplay): truncUnpack=0, dirtyChunks=4. The first
+UNPACK truncations appear at log line 22030, right after game_screen (21997),
+and the OFFSET flood follows at 22368. 186 of 193 dirty chunks come right after
+a truncated UNPACK. processVIF1Data drops a command whose payload runs past the
+chunk end, carries nothing, and the next chunk parses from mid-payload.
+
+boot-sequence-reference.md already names this as "a second, smaller defect"
+(25 per 45s at boot). At gameplay it is the dominant desync.
+
+1305 OFFSET VIFcodes over the run. Invalid opcodes 0x37 to 0x43 total ~118k.
+
+THE FIX: CARRY A STRADDLING COMMAND INTO THE NEXT CHUNK
+
+processVIF1Data now keeps a command whose payload runs past the chunk end
+(UNPACK, MPG, DIRECT, STMASK, STROW, STCOL), from its VIFcode on, in
+m_vif1Residual and parses it ahead of the next chunk. Cleared on VIF1 reset.
+GHPC_VIF1_NO_RESIDUAL=1 restores the old drop, for a same-build control.
+
+Mechanism, build-debug, 300s, same probes, game_screen at t=60.8:
+
+                    before (drop)   after (carry)
+  carried                 -             247
+  truncUnpack           186               0
+  dirtyAfterTrunc       186               0
+  dirtyChunks           193               6
+  invalidOps         118798            1018
+  OFFSET VIFcodes      1305              75
+  0xcd8 cut share      ~27%            8.4%
+
+The "before" column is the run above, on a build that differs only by this
+change.
+
+Speed, release build, same binary, 300s each, GHPC_COUNTIN=0.5:
+
+  fix on    SAME rung 9  eerate 0.7%  2.15 Mcycles/sec  fps 0.35  menus 85.3%
+  fix off   SAME rung 9  eerate 0.7%  2.13 Mcycles/sec  fps 0.26  menus 85.1%
+
+Verdict SAME. The desync was real and is gone, but it was not what holds
+gameplay speed down. After the fix, cut-off runs still retire 336M of 510M VU1
+instructions (66%), from 5426 of 64960 0xcd8 runs. The runaway survives a
+clean stream.
+
+Cut-offs after the fix, by TOP:
+
+  pc0xcd8/top0    ebit=44761 cut=2602
+  pc0xcd8/top514  ebit=1836  cut=1141
+  pc0xcd8/top515  ebit=2280  cut=1675
+  pc0xcd8/top753  ebit=777   cut=7
+  pc0xcd8/top768  ebit=4967  cut=0
+  pc0x30b0/top0   ebit=283   cut=114
+
+TOP 514/515/753/768 survive with only 75 OFFSETs left, so those may be offsets
+the game really sets at gameplay rather than desync products. Not checked.
+
+MSCNT CASCADE
+
+18 cut-off lines share mscal 8393 with TOP flipping 0 and 610: MSCNT resumes
+the stuck program, and MSCNT also toggles DBF. A cut-off program is resumed
+mid-loop rather than restarted, so one runaway costs several budgets.

@@ -1,0 +1,84 @@
+VIF1: the gameplay OFFSETs are payload read as VIFcodes, 2026-09-11,
+build-debug, 150s, GHPC_COUNTIN=0.5 GHPC_VU1_CENSUS=2000, bootskip on,
+game_screen at t=59.2. Includes the VIF1 residual fix and the scratchpad DMA
+fix.
+
+QUESTION
+
+Gameplay's double buffer came from OFFSET 514, 515 and 768, set by OFFSET
+VIFcodes carrying NUM 2 or 3. Hardware ignores NUM on OFFSET and BASE (PCSX2
+Vif_Codes.cpp: vif1Regs.ofst = vif1Regs.code & 0x3ff), so NUM alone proves
+nothing. Are those OFFSETs real, or payload read as commands?
+
+PROBE
+
+[vif1/offsetctx] at the first six OFFSETs with NUM != 0: the last 12 commands
+parsed, how far each advanced, and the raw words around the OFFSET. How far each
+command advanced is circular (the parser's own step decides where the next
+"command" starts), so the independent evidence is what surrounds it: real
+OFFSETs sit among VIFcodes, misparsed ones among data.
+
+RESULT: MISPARSED
+
+  #1  OFFSET->0    0x02030000  mscal 7643  loading_screen, chunk 1664 bytes
+  #2  OFFSET->0    0x02030000  mscal 8467  chunk 7120 bytes, pos 400
+  #3  OFFSET->515  0x02020203  mscal 8467  same chunk, pos 436
+  #4  OFFSET->0    0x02030000  mscal 8467  same chunk, pos 464
+  #5  OFFSET->768  0x02020300  mscal 8467  same chunk, pos 572
+
+In every one the twelve commands before it are zero words read as NOP, with
+stray words between them (0x00000603, 0x00000602, 0x00000006, 0x00060202,
+0x00060300) at a regular 28 to 32 byte spacing. BASE is set to 20 inside the
+same stretch. GH2's real packets come in NOP NOP FLUSHE UNPACK quadword groups;
+this is packed-byte data walked as commands, the same signature
+boot-sequence-reference.md describes for the pre-MFIFO-fix desync.
+
+So gameplay TOPs 514, 515 and 768 are desync products, and the bad headers the
+gameplay runaways read (2026-09-11-vu1-gameplay-loops.txt) are reached through
+a parser that is out of step. The command that put it out of step is further
+back than the 12-entry window.
+
+CANDIDATE CAUSE: STCYCL WL=0
+
+PCSX2 vifUnpackSetup:
+
+  uint wl = vifXRegs.cycle.wl ? vifXRegs.cycle.wl : 256;
+  if (wl <= vifXRegs.cycle.cl) { size = ((vifNum * gsize) + 3) / 4; }  // skipping
+  else { n = cl * (vifNum / wl) + _limit(vifNum % wl, cl);             // filling
+         size = ((n * gsize) + 3) >> 2; }
+
+The runtime forced CL=0 and WL=0 to 1. GH2 sends STCYCL 0x0011 (CL 17, WL 0)
+14 times and 0x0016 (CL 22, WL 0) once in the command histories logged this
+session. Under WL=1 those become skipping writes that read every vector from
+the stream; on hardware they are filling writes that read CL vectors per 256
+written. An earlier desync dump shows the cost: STCYCL 0x0011 then UNPACK V4-5
+NUM=255 consumed 516 bytes where PCSX2's rule reads 17 vectors, 36 bytes, and
+the parser hit an invalid opcode next.
+
+FIX TESTED: CORRECT, BUT NOT THE CAUSE
+
+STCYCL now decodes WL=0 as 256 and leaves CL=0 as 0, in VIF1 and VIF0.
+GHPC_VIF_STCYCL_LEGACY=1 restores the old decode.
+
+build-debug, fix on, 150s, same probes, game_screen reached, rung 9:
+
+  [vif1/stcycl] UNPACK cmd=0xffff0000 cycle=0x0011 cl=17 wl=256 writes=255 reads=17
+  chunks=21834 carried=79 dirtyChunks=4 invalidOps=772
+  OFFSETs with NUM != 0: 26 of 27
+  gameplay TOPs: 0, 20, 514, 534, 788 (330 only on menus)
+  0xcd8: 4225 of 27559 runs cut off (15%)
+
+The path runs and reads what PCSX2 reads, but the pre-declared mechanism check
+fails: the NUM != 0 OFFSETs are still there, gameplay TOPs are still not the
+0/330 double buffer, and 0xcd8's cut-off share did not fall (13% before).
+Invalid opcodes are 772 against about 1000 on earlier runs, a different run
+rather than a same-build control.
+
+The same-build legacy arm and both release speed arms were not measured: the
+job was killed for low memory during the legacy arm (the second such kill of a
+long build and run chain this session). They could not turn this into a pass.
+The decode is kept because it matches hardware; its release speed is
+unmeasured.
+
+The desync that manufactures the gameplay OFFSETs starts somewhere else, before
+the 12-command window, in the 7120-byte chunk at mscal 8467.

@@ -23,7 +23,7 @@
 
 class GS;
 
-constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
+constexpr uint32_t PS2_RAM_SIZE = 128u * 1024u * 1024u; // 128MB, the TOOL devkit size
 constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
 constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
 constexpr uint32_t PS2_SCRATCHPAD_BASE = 0x70000000;
@@ -418,6 +418,7 @@ public:
     bool m_path3Masked = false;
     uint32_t m_vif1PendingPath2ImageQwc = 0u;
     bool m_vif1PendingPath2DirectHl = false;
+    std::vector<uint8_t> m_vif1Residual;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
     struct PendingTransfer

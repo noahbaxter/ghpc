@@ -15,6 +15,15 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#if GHPC_DIAG
+// GHPC_QUIET silences the periodic diagnostic censuses.
+static bool ghpcQuietLogs()
+{
+    static const bool quiet = std::getenv("GHPC_QUIET") != nullptr;
+    return quiet;
+}
+#endif
+
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -549,6 +558,21 @@ namespace GhpcTexDiag
     // Why do 32M fragments produce 4 visible pixels? Count each early-out.
     unsigned long long g_rejScissor = 0ull, g_rejAlpha = 0ull, g_rejDstAlpha = 0ull,
                        g_rejZ = 0ull, g_wroteFb = 0ull;
+    // Same counters split by destination framebuffer. The two buffers get the
+    // same number of draws, so a divergence has to be a per-fragment test
+    // rejecting in one buffer and not the other. 0=scissor 1=alpha 2=dstAlpha
+    // 3=ztest 4=wrote.
+    unsigned g_fbpKey[4] = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+    unsigned long long g_fragOutcome[4][5] = {};
+    inline int fbpSlot(unsigned fbp)
+    {
+        for (int k = 0; k < 4; ++k)
+        {
+            if (g_fbpKey[k] == fbp) return k;
+            if (g_fbpKey[k] == 0xFFFFFFFFu) { g_fbpKey[k] = fbp; return k; }
+        }
+        return -1;
+    }
     unsigned long long g_wroteZeroPixel = 0ull;
 
     // Attribution: who painted the striped band? Record the last writer of each
@@ -724,7 +748,457 @@ void ghpcNoteImageFeed(int site, uint32_t bytes)
                   << " native=" << n[2] << "/" << b[2]
                   << " hwreg=" << n[3] << "/" << b[3] << std::endl;
 }
-void ghpcNotePresent(uint32_t fbp) { GhpcTexDiag::notePresent(fbp); }
+void ghpcNotePresent(uint32_t fbp)
+{
+    extern unsigned long long g_ghpcPresentsSeen;
+    ++g_ghpcPresentsSeen;
+#if GHPC_DIAG
+    // Double-buffer toggles per frame. An odd count swaps which VU1 half each
+    // batch lands in every frame, which is what the flicker looks like.
+    {
+        extern unsigned long long g_ghpcDbfToggles;
+        static unsigned long long last = 0ull;
+        static unsigned long long hist[16] = {};
+        static unsigned n = 0u;
+        const unsigned long long d = g_ghpcDbfToggles - last;
+        last = g_ghpcDbfToggles;
+        hist[n % 16u] = d;
+        if ((++n % 200u) == 0u)
+        {
+            std::fprintf(stderr, "[vif1/dbfrate] toggles=%llu lastFrames:", g_ghpcDbfToggles);
+            for (unsigned i = 0u; i < 16u; ++i)
+                std::fprintf(stderr, " %llu", hist[(n + i) % 16u]);
+            std::fprintf(stderr, "\n");
+        }
+    }
+#endif
+    GhpcTexDiag::notePresent(fbp);
+}
+
+struct GhpcQwWrite { unsigned long long ms; unsigned long long seq; int writer; unsigned qw; unsigned before[4]; unsigned after[4]; };
+// Draw order keyed on destination framebuffer. If each frame's draw list went
+// to one buffer, the fbp seen at DrawPrimitive would hold for a whole frame and
+// flip once per present. Short runs mean one frame's draws are split across
+// both buffers. Reported per window, never cumulative, so the last lines
+// describe the screen on display rather than the whole boot.
+void ghpcNoteDrawTarget(unsigned fbp, const GSPrimitiveBatch &batch)
+{
+    // Two consecutive frames, draw by draw, once the loading screen is up.
+    // The two buffers get the same number of draws but different pictures, so
+    // the question is which draw index first diverges and by how much.
+    if (std::getenv("GHPC_DRAWSEQ"))
+    {
+        struct Rec { unsigned tbp, prim; float x0, x1, y0, y1;
+                     float vx[3], vy[3]; unsigned long long kd, ka, top, mscals; };
+        static Rec seq[2][1024];
+        static int n[2] = {0, 0};
+        static int frame = -1;
+        static unsigned prevFbp = 0xFFFFFFFFu;
+        static unsigned fbpOf[2] = {0, 0};
+        static bool done = false;
+        static unsigned long long calls = 0ull;
+        ++calls;
+        // The trigger is a draw-call count, so where it lands depends entirely
+        // on how far the game got. At the default it fires on whatever screen
+        // is up after a million draws, which is a menu, and a menu animates:
+        // two consecutive frames legitimately differ and the report is
+        // meaningless. GHPC_DRAWSEQ takes a count so it can be aimed at the
+        // loading screen, and GHPC_DRAWSEQ_EVERY re-arms it so one long run
+        // yields a report per interval instead of a single early one.
+        static const unsigned long long drawseqFrom = []() -> unsigned long long {
+            const char *e = std::getenv("GHPC_DRAWSEQ");
+            const unsigned long long v = (e && *e) ? std::strtoull(e, nullptr, 0) : 0ull;
+            return v > 1ull ? v : 1000000ull;
+        }();
+        static const unsigned long long drawseqEvery = []() -> unsigned long long {
+            const char *e = std::getenv("GHPC_DRAWSEQ_EVERY");
+            return e ? std::strtoull(e, nullptr, 0) : 0ull;
+        }();
+        static unsigned long long nextArm = 0ull;
+        if (nextArm == 0ull) nextArm = drawseqFrom;
+        if (!done && calls > nextArm)
+        {
+            // The first run is entered mid-frame, so it is partial and cannot
+            // be compared draw for draw. Skip it and capture the next two.
+            if (fbp != prevFbp) { ++frame; prevFbp = fbp; if (frame >= 1 && frame < 3) fbpOf[frame - 1] = fbp; }
+            if (frame >= 1 && frame < 3 && n[frame - 1] < 1024)
+            {
+                const unsigned nv = batch.vertexCount > 3u ? 3u : batch.vertexCount;
+                extern unsigned long long g_ghpcKickDraw, g_ghpcKickAdc;
+                extern unsigned long long g_ghpcVu1Top, g_ghpcVu1Mscals;
+                Rec r{batch.state.context.tex0.tbp0, batch.state.prim.type, 1e30f, -1e30f, 1e30f, -1e30f,
+                      {0.f,0.f,0.f}, {0.f,0.f,0.f}, g_ghpcKickDraw, g_ghpcKickAdc,
+                      g_ghpcVu1Top, g_ghpcVu1Mscals};
+                for (unsigned v = 0; v < nv; ++v)
+                {
+                    const float x = batch.vertices[v].x, y = batch.vertices[v].y;
+                    if (x < r.x0) r.x0 = x;
+                    if (x > r.x1) r.x1 = x;
+                    if (y < r.y0) r.y0 = y;
+                    if (y > r.y1) r.y1 = y;
+                    r.vx[v] = x; r.vy[v] = y;
+                }
+                seq[frame - 1][n[frame - 1]++] = r;
+            }
+            if (frame >= 3)
+            {
+                done = true;
+                // Re-arm at scope exit, not here: the report below still reads
+                // n[] and seq[][], so resetting them now would gut it.
+                struct ReArm
+                {
+                    bool *done; int *n0, *n1, *frame; unsigned *prevFbp;
+                    unsigned long long *nextArm, calls, every;
+                    ~ReArm()
+                    {
+                        if (every == 0ull) return;
+                        *done = false; *n0 = 0; *n1 = 0; *frame = -1;
+                        *prevFbp = 0xFFFFFFFFu; *nextArm = calls + every;
+                    }
+                } rearm{&done, &n[0], &n[1], &frame, &prevFbp, &nextArm, calls, drawseqEvery};
+                std::fprintf(stderr, "[gs/drawseq] armed at draw call %llu\n", calls);
+                const int m = n[0] < n[1] ? n[0] : n[1];
+                std::fprintf(stderr, "[gs/drawseq] frameA fbp=%u n=%d | frameB fbp=%u n=%d\n",
+                             fbpOf[0], n[0], fbpOf[1], n[1]);
+                // Diff the VU1 input of the two MSCALs behind the first
+                // diverging draw. Same static screen, so any difference here is
+                // the cause rather than a symptom.
+                {
+                    extern unsigned char g_ghpcMscalRing[64][1024 * 16];
+                    extern unsigned long long g_ghpcMscalRingIdx[64];
+                    int firstBad = -1;
+                    const int mm = n[0] < n[1] ? n[0] : n[1];
+                    for (int i = 0; i < mm && firstBad < 0; ++i)
+                    {
+                        const Rec &a = seq[0][i], &b = seq[1][i];
+                        if (a.tbp != b.tbp || a.prim != b.prim ||
+                            std::fabs(a.vx[0] - b.vx[0]) > 0.01f || std::fabs(a.vy[0] - b.vy[0]) > 0.01f)
+                            firstBad = i;
+                    }
+                    if (firstBad >= 0)
+                    {
+                        const unsigned long long ma = seq[0][firstBad].mscals, mb = seq[1][firstBad].mscals;
+                        const unsigned sa = (unsigned)(ma % 64ull), sb = (unsigned)(mb % 64ull);
+                        std::fprintf(stderr, "[gs/drawseq] first diverging draw %d from mscal %llu (top=%llu) vs %llu (top=%llu)\n",
+                                     firstBad, ma, seq[0][firstBad].top, mb, seq[1][firstBad].top);
+                        {
+                            extern int g_ghpcLastWriter[1024];
+                            extern unsigned long long g_ghpcLastWriterMs[1024];
+                            for (int side = 0; side < 2; ++side)
+                            {
+                                const unsigned long long t = (side == 0) ? seq[0][firstBad].top : seq[1][firstBad].top;
+                                const unsigned long long m = (side == 0) ? ma : mb;
+                                unsigned byUnpack = 0u, byStore = 0u, staleStore = 0u;
+                                for (uint32_t i = 0u; i < 290u; ++i)
+                                {
+                                    const uint32_t qw = (uint32_t)((t + i) & 0x3FFull);
+                                    if (g_ghpcLastWriter[qw] == 0) ++byUnpack;
+                                    else { ++byStore; if (g_ghpcLastWriterMs[qw] < m) ++staleStore; }
+                                }
+                                std::fprintf(stderr,
+                                    "[gs/drawseq] %c input at top=%llu: %u quadwords last written by UNPACK, %u by VU STORE (%u of those from an earlier mscal)\n",
+                                    side == 0 ? 'A' : 'B', t, byUnpack, byStore, staleStore);
+                            }
+                        }
+                        // The open question: was a quadword clobbered BEFORE it was
+                        // read, or only written after the program had consumed it?
+                        // The last writer map above cannot tell those apart. This
+                        // can, because reads and stores share one ordered log.
+                        if (std::getenv("GHPC_RW_FROM"))
+                        {
+                            extern GhpcQwWrite g_ghpcQwLog[65536];
+                            extern unsigned long long g_ghpcQwLogN;
+                            const unsigned long long tot = g_ghpcQwLogN;
+                            const unsigned long long lo = tot > 65536ull ? tot - 65536ull : 0ull;
+
+                            for (int side = 0; side < 2; ++side)
+                            {
+                                const unsigned long long t = (side == 0) ? seq[0][firstBad].top : seq[1][firstBad].top;
+                                const unsigned long long m = (side == 0) ? ma : mb;
+
+                                static unsigned long long firstRead[1024], firstStore[1024], unpackSeq[1024];
+                                for (unsigned i = 0; i < 1024u; ++i)
+                                {
+                                    firstRead[i] = ~0ull; firstStore[i] = ~0ull; unpackSeq[i] = ~0ull;
+                                }
+                                unsigned long long events = 0ull;
+                                for (unsigned long long i = lo; i < tot; ++i)
+                                {
+                                    const GhpcQwWrite &e = g_ghpcQwLog[i % 65536ull];
+                                    if (e.ms != m || e.qw >= 1024u) continue;
+                                    ++events;
+                                    const int kind = e.writer & 0xF;
+                                    if (kind == 2) { if (e.seq < firstRead[e.qw]) firstRead[e.qw] = e.seq; }
+                                    else if (kind == 1) { if (e.seq < firstStore[e.qw]) firstStore[e.qw] = e.seq; }
+                                    else { if (e.seq < unpackSeq[e.qw]) unpackSeq[e.qw] = e.seq; }
+                                }
+
+                                unsigned clobbered = 0u, safeOrder = 0u, neverRead = 0u, neverStored = 0u;
+                                unsigned firstClobberQw = 0u; bool haveExample = false;
+                                for (uint32_t i = 0u; i < 290u; ++i)
+                                {
+                                    const uint32_t qw = (uint32_t)((t + i) & 0x3FFull);
+                                    const bool hasRead = firstRead[qw] != ~0ull;
+                                    const bool hasStore = firstStore[qw] != ~0ull;
+                                    if (!hasRead) { ++neverRead; continue; }
+                                    if (!hasStore) { ++neverStored; continue; }
+                                    if (firstStore[qw] < firstRead[qw])
+                                    {
+                                        ++clobbered;
+                                        if (!haveExample) { haveExample = true; firstClobberQw = qw; }
+                                    }
+                                    else ++safeOrder;
+                                }
+
+                                std::fprintf(stderr,
+                                    "[gs/rworder] %c mscal=%llu top=%llu events=%llu | CLOBBERED-BEFORE-READ=%u"
+                                    " safe=%u neverRead=%u neverStored=%u\n",
+                                    side == 0 ? 'A' : 'B', m, t, events,
+                                    clobbered, safeOrder, neverRead, neverStored);
+
+                                // Validate the trace on one quadword before trusting the count.
+                                if (haveExample)
+                                {
+                                    std::fprintf(stderr,
+                                        "[gs/rworder]   example qw=%u unpackSeq=%llu firstStoreSeq=%llu firstReadSeq=%llu\n",
+                                        firstClobberQw,
+                                        unpackSeq[firstClobberQw], firstStore[firstClobberQw], firstRead[firstClobberQw]);
+                                    for (unsigned long long i = lo; i < tot; ++i)
+                                    {
+                                        const GhpcQwWrite &e = g_ghpcQwLog[i % 65536ull];
+                                        if (e.ms != m || e.qw != firstClobberQw) continue;
+                                        const int kind = e.writer & 0xF;
+                                        std::fprintf(stderr, "[gs/rworder]     seq=%llu %s pc=0x%04x\n",
+                                                     e.seq,
+                                                     kind == 0 ? "UNPACK " : (kind == 1 ? "STORE  " : "READ   "),
+                                                     (unsigned)(e.writer >> 4));
+                                    }
+                                }
+                            }
+                        }
+                        {
+                            extern GhpcQwWrite g_ghpcQwLog[65536];
+                            extern unsigned long long g_ghpcQwLogN;
+                            const unsigned long long total = g_ghpcQwLogN;
+                            const unsigned long long start = total > 1024ull ? total - 1024ull : 0ull;
+                            for (unsigned long long i = start; i < total; ++i)
+                            {
+                                const GhpcQwWrite &e = g_ghpcQwLog[i % 1024ull];
+                                const bool nearA = e.ms + 2ull >= ma && e.ms <= ma + 1ull;
+                                const bool nearB = e.ms + 2ull >= mb && e.ms <= mb + 1ull;
+                                if (!nearA && !nearB) continue;
+                                std::fprintf(stderr,
+                                    "  [qwlog] ms=%llu %s%04x qw=%u  %08x %08x %08x %08x -> %08x %08x %08x %08x\n",
+                                    e.ms, e.writer == 0 ? "UNPACK  pc=" : "VUSTORE pc=",
+                                    e.writer == 0 ? 0u : (unsigned)((e.writer - 1) >> 4), e.qw,
+                                    e.before[0], e.before[1], e.before[2], e.before[3],
+                                    e.after[0], e.after[1], e.after[2], e.after[3]);
+                            }
+                        }
+                        if (g_ghpcMscalRingIdx[sa] == ma && g_ghpcMscalRingIdx[sb] == mb)
+                        {
+                            unsigned diffs = 0u, same = 0u;
+                            for (uint32_t i = 0u; i < 1024u; ++i)
+                            {
+                                if (std::memcmp(g_ghpcMscalRing[sa] + i * 16u, g_ghpcMscalRing[sb] + i * 16u, 16u) == 0)
+                                { ++same; continue; }
+                                if (++diffs > 16u) continue;
+                                const uint32_t *p = (const uint32_t *)(g_ghpcMscalRing[sa] + i * 16u);
+                                const uint32_t *q = (const uint32_t *)(g_ghpcMscalRing[sb] + i * 16u);
+                                std::fprintf(stderr, "  +%3u A %08x %08x %08x %08x   B %08x %08x %08x %08x\n",
+                                             i, p[0], p[1], p[2], p[3], q[0], q[1], q[2], q[3]);
+                            }
+                            std::fprintf(stderr, "[gs/drawseq] vu1 data: %u quadwords identical, %u differ (of 1024)\n", same, diffs);
+                            // Each run's own input, at its own TOP. If a run's
+                            // batch header is not sitting at its TOP when it
+                            // fires, it is reading data that was never written
+                            // there, or that something overwrote first.
+                            for (int side = 0; side < 2; ++side)
+                            {
+                                const unsigned char *w = (side == 0) ? g_ghpcMscalRing[sa] : g_ghpcMscalRing[sb];
+                                const unsigned long long t = (side == 0) ? seq[0][firstBad].top : seq[1][firstBad].top;
+                                std::fprintf(stderr, "[gs/drawseq] %c at its top=%llu:\n", side == 0 ? 'A' : 'B', t);
+                                for (uint32_t i = 0u; i < 6u; ++i)
+                                {
+                                    const uint32_t qw = (uint32_t)((t + i) & 0x3FFull);
+                                    const uint32_t *v = (const uint32_t *)(w + qw * 16u);
+                                    std::fprintf(stderr, "    +%u qw=%u %08x %08x %08x %08x\n",
+                                                 i, qw, v[0], v[1], v[2], v[3]);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            std::fprintf(stderr, "[gs/drawseq] mscal windows evicted from ring (%llu/%llu vs %llu/%llu)\n",
+                                         g_ghpcMscalRingIdx[sa], ma, g_ghpcMscalRingIdx[sb], mb);
+                        }
+                    }
+                }
+                for (int i = 0; i < m; ++i)
+                {
+                    const Rec &a = seq[0][i], &b = seq[1][i];
+                    const bool same = a.tbp == b.tbp && a.prim == b.prim &&
+                                      std::fabs(a.x0 - b.x0) < 0.01f && std::fabs(a.x1 - b.x1) < 0.01f &&
+                                      std::fabs(a.y0 - b.y0) < 0.01f && std::fabs(a.y1 - b.y1) < 0.01f;
+                    std::fprintf(stderr,
+                        "[gs/drawseq] %4d %s A(tbp=%u p=%u v=(%.1f,%.1f)(%.1f,%.1f)(%.1f,%.1f) kd=%llu ka=%llu top=%llu ms=%llu) "
+                        "B(tbp=%u p=%u v=(%.1f,%.1f)(%.1f,%.1f)(%.1f,%.1f) kd=%llu ka=%llu top=%llu ms=%llu)\n",
+                        i, same ? "==" : "!=",
+                        a.tbp, a.prim, (double)a.vx[0], (double)a.vy[0], (double)a.vx[1], (double)a.vy[1],
+                        (double)a.vx[2], (double)a.vy[2], a.kd, a.ka, a.top, a.mscals,
+                        b.tbp, b.prim, (double)b.vx[0], (double)b.vy[0], (double)b.vx[1], (double)b.vy[1],
+                        (double)b.vx[2], (double)b.vy[2], b.kd, b.ka, b.top, b.mscals);
+                }
+            }
+        }
+    }
+
+    // Same draw count into both buffers but different fragment counts means the
+    // geometry differs. Average vertex y and the y offset register per buffer
+    // show a per-frame vertical shift if there is one.
+    {
+        const int fs = GhpcTexDiag::fbpSlot(fbp);
+        static double sumY[4] = {}, sumX[4] = {};
+        static unsigned long long nV[4] = {};
+        static unsigned ofy[4] = {}, ofx[4] = {};
+        static unsigned long long ofyMix[4] = {};
+        if (fs >= 0)
+        {
+            const unsigned nv = batch.vertexCount > 3u ? 3u : batch.vertexCount;
+            for (unsigned v = 0; v < nv; ++v)
+            {
+                sumY[fs] += (double)batch.vertices[v].y;
+                sumX[fs] += (double)batch.vertices[v].x;
+                ++nV[fs];
+            }
+            const unsigned oy = batch.state.context.xyoffset.ofy;
+            const unsigned ox = batch.state.context.xyoffset.ofx;
+            if (nV[fs] && ofy[fs] != oy) { ++ofyMix[fs]; }
+            ofy[fs] = oy; ofx[fs] = ox;
+        }
+        static unsigned long long tick = 0ull;
+        if ((++tick % 100000ull) == 0ull)
+        {
+            for (int k = 0; k < 4; ++k)
+            {
+                if (GhpcTexDiag::g_fbpKey[k] == 0xFFFFFFFFu || !nV[k]) continue;
+                std::fprintf(stderr,
+                    "[gs/geomshift] fbp=%u verts=%llu avgX=%.4f avgY=%.4f ofx=%u ofy=%u ofyChanges=%llu (window)\n",
+                    GhpcTexDiag::g_fbpKey[k], nV[k], sumX[k] / (double)nV[k],
+                    sumY[k] / (double)nV[k], ofx[k], ofy[k], ofyMix[k]);
+                sumX[k] = sumY[k] = 0.0; nV[k] = 0ull; ofyMix[k] = 0ull;
+            }
+        }
+    }
+
+    static unsigned prev = 0xFFFFFFFFu;
+    static unsigned long long run = 0ull;
+    static unsigned long long runs = 0ull, maxRun = 0ull, minRun = ~0ull;
+    static unsigned long long draws = 0ull;
+    static unsigned key[8] = {}; static unsigned long long hits[8] = {}; static int used = 0;
+    ++draws;
+    int slot = -1;
+    for (int k = 0; k < used; ++k) if (key[k] == fbp) { slot = k; break; }
+    if (slot < 0 && used < 8) { slot = used++; key[slot] = fbp; }
+    if (slot >= 0) ++hits[slot];
+    if (fbp == prev) { ++run; }
+    else
+    {
+        if (prev != 0xFFFFFFFFu)
+        {
+            ++runs;
+            if (run > maxRun) maxRun = run;
+            if (run < minRun) minRun = run;
+        }
+        prev = fbp; run = 1ull;
+    }
+    extern unsigned long long g_ghpcPresentsSeen;
+    if ((draws % 100000ull) == 0ull)
+    {
+        std::fprintf(stderr, "[gs/drawtarget] draws=%llu presents=%llu runs=%llu maxRun=%llu minRun=%llu byFbp:",
+                     draws, g_ghpcPresentsSeen, runs, maxRun,
+                     (minRun == ~0ull) ? 0ull : minRun);
+        for (int k = 0; k < used; ++k)
+            std::fprintf(stderr, " %u=%llu", key[k], hits[k]);
+        std::fprintf(stderr, " (window)\n");
+        for (int k = 0; k < 4; ++k)
+        {
+            if (GhpcTexDiag::g_fbpKey[k] == 0xFFFFFFFFu) continue;
+            std::fprintf(stderr,
+                "[gs/fragoutcome] fbp=%u scissor=%llu alpha=%llu dstAlpha=%llu ztest=%llu wrote=%llu (window)\n",
+                GhpcTexDiag::g_fbpKey[k],
+                GhpcTexDiag::g_fragOutcome[k][0], GhpcTexDiag::g_fragOutcome[k][1],
+                GhpcTexDiag::g_fragOutcome[k][2], GhpcTexDiag::g_fragOutcome[k][3],
+                GhpcTexDiag::g_fragOutcome[k][4]);
+            for (int r = 0; r < 5; ++r) GhpcTexDiag::g_fragOutcome[k][r] = 0ull;
+        }
+        runs = 0ull; maxRun = 0ull; minRun = ~0ull; used = 0;
+        for (int k = 0; k < 8; ++k) hits[k] = 0ull;
+        g_ghpcPresentsSeen = 0ull;
+    }
+}
+
+unsigned long long g_ghpcPresentsSeen = 0ull;
+unsigned long long g_ghpcVu1Top = 0ull, g_ghpcVu1Mscals = 0ull;
+unsigned long long g_ghpcDbfToggles = 0ull;
+unsigned char g_ghpcMscalRing[64][1024 * 16] = {};
+unsigned long long g_ghpcMscalRingIdx[64] = {};
+
+// Every write to a double-buffer head quadword, from either writer, in order.
+// Ordering between the unpack that fills a batch and the program's own stores
+// can only be judged inside one run.
+GhpcQwWrite g_ghpcQwLog[65536] = {};
+int g_ghpcLastWriter[1024] = {};
+unsigned long long g_ghpcLastWriterMs[1024] = {};
+unsigned long long g_ghpcQwLogN = 0ull;
+// Who last wrote qw[TOP] when the current MSCAL was issued, and how many MSCALs
+// before it. Captured at issue, before the program's own stores land.
+int g_ghpcMscalInKind = 0;
+unsigned long long g_ghpcMscalInAge = 0ull;
+unsigned g_ghpcMscalInWords[4] = {};
+void ghpcLogQwWrite(unsigned long long ms, int writer, unsigned qw,
+                    const unsigned *before, const unsigned *after)
+{
+    // Last writer per quadword, so a run's input can be classified as "filled
+    // by an unpack" or "clobbered by the program's own output stores".
+    extern int g_ghpcLastWriter[1024];
+    extern unsigned long long g_ghpcLastWriterMs[1024];
+    // Reads (kind 2) must not disturb the last-WRITER map.
+    const int kind = writer & 0xF;
+    if (qw < 1024u && kind != 2)
+    {
+        g_ghpcLastWriter[qw] = (kind == 0) ? 0 : 1;
+        g_ghpcLastWriterMs[qw] = ms;
+    }
+
+    // GHPC_RW_FROM opens a window on the mscal that actually diverges and
+    // records every quadword in it, reads included, so read against clobber
+    // order can be judged. Without it, keep the old two quadword behaviour.
+    static const unsigned long long rwFrom = []() -> unsigned long long {
+        const char *e = std::getenv("GHPC_RW_FROM");
+        return e ? std::strtoull(e, nullptr, 0) : 0ull;
+    }();
+    static const unsigned long long rwSpan = []() -> unsigned long long {
+        const char *e = std::getenv("GHPC_RW_SPAN");
+        return e ? std::strtoull(e, nullptr, 0) : 64ull;
+    }();
+    if (rwFrom != 0ull)
+    {
+        if (ms < rwFrom || ms > rwFrom + rwSpan) return;
+    }
+    else if (qw != 49u && qw != 192u)
+    {
+        return;
+    }
+
+    GhpcQwWrite &e = g_ghpcQwLog[g_ghpcQwLogN % 65536ull];
+    // Stamp the mscal at event time. Labelling from a ring index afterwards is
+    // what produced the off by one that gave a confident wrong answer before.
+    e.ms = ms; e.seq = g_ghpcQwLogN; e.writer = writer; e.qw = qw;
+    for (int i = 0; i < 4; ++i) { e.before[i] = before ? before[i] : 0u; e.after[i] = after ? after[i] : 0u; }
+    ++g_ghpcQwLogN;
+}
+
 
 // Set by the black-content fallback in copySource when it swaps the display
 // frame for a different context frame. Reset at the top of every present.
@@ -1048,6 +1522,10 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
     const auto &ctx = state.context;
 #if GHPC_DIAG
     {
+        extern void ghpcNoteDrawTarget(unsigned fbp, const GSPrimitiveBatch &b);
+        ghpcNoteDrawTarget(ctx.frame.fbp, batch);
+    }
+    {
         using namespace GhpcTexDiag;
         if (state.prim.tme)
         {
@@ -1290,6 +1768,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     {
 #if GHPC_DIAG
         ++GhpcTexDiag::g_rejScissor;
+        { const int fs = GhpcTexDiag::fbpSlot(state.context.frame.fbp); if (fs >= 0) ++GhpcTexDiag::g_fragOutcome[fs][0]; }
 #endif
         return;
     }
@@ -1324,7 +1803,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
         ++frags;
         if (writeMask.writesFramebuffer()) ++fbWrites; else ++alphaFail;
         ++aHist[a >> 5];
-        if ((frags % 20000ull) == 0ull)
+        if ((frags % 20000ull) == 0ull && !ghpcQuietLogs())
         {
             std::fprintf(stderr,
                 "[gs/logo] frags=%llu fbWrites=%llu alphaFail=%llu aref=%u atst=%u"
@@ -1340,6 +1819,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     {
 #if GHPC_DIAG
         ++GhpcTexDiag::g_rejAlpha;
+        { const int fs = GhpcTexDiag::fbpSlot(state.context.frame.fbp); if (fs >= 0) ++GhpcTexDiag::g_fragOutcome[fs][1]; }
 #endif
         return;
     }
@@ -1373,7 +1853,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
 
     if (!passesDestinationAlphaTest(ctx.test, static_cast<uint8_t>(fpsm), rawFramebufferPixel))
 #if GHPC_DIAG
-        if (++GhpcTexDiag::g_rejDstAlpha)
+        if (++GhpcTexDiag::g_rejDstAlpha && [&]{ const int fs = GhpcTexDiag::fbpSlot(state.context.frame.fbp); if (fs >= 0) ++GhpcTexDiag::g_fragOutcome[fs][2]; return true; }())
 #endif
     {
         return;
@@ -1403,6 +1883,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     {
 #if GHPC_DIAG
         ++GhpcTexDiag::g_rejZ;
+        { const int fs = GhpcTexDiag::fbpSlot(state.context.frame.fbp); if (fs >= 0) ++GhpcTexDiag::g_fragOutcome[fs][3]; }
 #endif
         return;
     }
@@ -1478,6 +1959,7 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
 
 #if GHPC_DIAG
         ++GhpcTexDiag::g_wroteFb;
+        { const int fs = GhpcTexDiag::fbpSlot(state.context.frame.fbp); if (fs >= 0) ++GhpcTexDiag::g_fragOutcome[fs][4]; }
         if ((bitsPerPixel(fpsm) == 16) ? ((pixel & 0x7FFFu) == 0u)
                                        : ((pixel & 0x00FFFFFFu) == 0u))
             ++GhpcTexDiag::g_wroteZeroPixel;
