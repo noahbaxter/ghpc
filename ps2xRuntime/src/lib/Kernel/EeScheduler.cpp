@@ -2404,6 +2404,44 @@ void EeScheduler::processEvent(const EeEvent &event)
                 }
             }
         }
+        // Save-state feasibility probe. GHPC_STATE_PROBE=N, every N ticks.
+        //
+        // A save state can copy RDRAM, the contexts and the kernel tables, but
+        // it cannot serialise a std::function. Three of them exist per thread:
+        // the wait completion, the resume completion, and one per queued
+        // invocation. A frame boundary is only a usable save point if those are
+        // all empty, so this counts them rather than assuming. If they are
+        // never all clear during gameplay, saving at vblank cannot be made
+        // faithful and the design has to change.
+        {
+            static const int every = []() {
+                const char *e = std::getenv("GHPC_STATE_PROBE");
+                return e ? std::atoi(e) : 0;
+            }();
+            if (every > 0 && (m_vsyncTick % (uint64_t)every) == 0u)
+            {
+                unsigned resume = 0, waitComp = 0, invoc = 0, invocDepth = 0;
+                for (const auto &kv : m_threads)
+                {
+                    if (kv.second.resumeCompletion) ++resume;
+                    if (kv.second.wait.completion) ++waitComp;
+                    if (!kv.second.invocations.empty())
+                    {
+                        ++invoc;
+                        invocDepth += (unsigned)kv.second.invocations.size();
+                    }
+                }
+                const size_t pending = m_pendingInvocations.size();
+                const bool quiescent =
+                    resume == 0 && waitComp == 0 && invoc == 0 && pending == 0;
+                std::fprintf(stderr,
+                             "[ghpc/state] tick=%llu threads=%zu quiescent=%s "
+                             "resume=%u waitcomp=%u invocThreads=%u invocDepth=%u pending=%zu\n",
+                             (unsigned long long)m_vsyncTick, m_threads.size(),
+                             quiescent ? "yes" : "NO",
+                             resume, waitComp, invoc, invocDepth, pending);
+            }
+        }
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         if ((m_vsyncTick & 1u) != 0u)
         {
