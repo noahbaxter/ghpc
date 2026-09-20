@@ -410,7 +410,12 @@ namespace
 // game_screen, which is why no picture of this game in gameplay existed.
 std::atomic<bool> g_ghpcGameStarted{false};
 
-static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+// Produces the RGBA8 frame both renderers present: the whole FB_WIDTH x
+// FB_HEIGHT buffer, of which outWidth x outHeight is the live picture. Returns
+// null when this vsync tick has already been presented and there is nothing
+// new to hand over, which is what the raylib path has always done by skipping
+// UpdateTexture.
+static const std::vector<uint8_t> *UploadFrame(PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
 {
     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
     static bool s_hasLatchedInitialFrame = false;
@@ -435,7 +440,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
     {
         outWidth = (s_lastWidth != 0u) ? s_lastWidth : FB_WIDTH;
         outHeight = (s_lastHeight != 0u) ? s_lastHeight : DEFAULT_DISPLAY_HEIGHT;
-        return;
+        return nullptr;
     }
 
     s_scratch.clear();
@@ -451,15 +456,22 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                    &sourceFbp,
                                                    &usedPreferredDisplaySource))
     {
-        Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, MAGENTA);
-        UpdateTexture(tex, blank.data);
-        UnloadImage(blank);
+        // The "GS never wrote a pixel" sentinel, RGBA8 by hand so both
+        // renderers get the same bytes rather than one of them going through
+        // GenImageColor.
+        for (size_t i = 0; i + 4 <= s_uploadBuffer.size(); i += 4)
+        {
+            s_uploadBuffer[i + 0] = 255u;
+            s_uploadBuffer[i + 1] = 0u;
+            s_uploadBuffer[i + 2] = 255u;
+            s_uploadBuffer[i + 3] = 255u;
+        }
         outWidth = FB_WIDTH;
         outHeight = DEFAULT_DISPLAY_HEIGHT;
         s_lastWidth = outWidth;
         s_lastHeight = outHeight;
         s_hasUploadedFrame = true;
-        return;
+        return &s_uploadBuffer;
     }
 
     PS2_IF_AGRESSIVE_LOGS({
@@ -639,10 +651,10 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
         }
     }
 
-    UpdateTexture(tex, s_uploadBuffer.data());
     outWidth = width;
     outHeight = height;
     s_hasUploadedFrame = true;
+    return &s_uploadBuffer;
 }
 
 PS2Runtime::PS2Runtime()
@@ -3650,8 +3662,18 @@ void PS2Runtime::run()
         });
         if (m_hostRenderer)
         {
-            // R0 presents a cleared frame. R1 puts the software GS framebuffer
-            // through uploadFrame and checks it against the raylib path.
+            uint32_t vkWidth = FB_WIDTH;
+            uint32_t vkHeight = DEFAULT_DISPLAY_HEIGHT;
+            if (const std::vector<uint8_t> *pixels = UploadFrame(this, vkWidth, vkHeight))
+            {
+                ghpc::HostRenderer::Frame frame;
+                frame.pixels = pixels->data();
+                frame.bufferWidth = FB_WIDTH;
+                frame.bufferHeight = FB_HEIGHT;
+                frame.sourceWidth = vkWidth;
+                frame.sourceHeight = vkHeight;
+                m_hostRenderer->uploadFrame(frame);
+            }
             m_hostRenderer->present();
 
             if (m_hostRenderer->shouldClose())
@@ -3665,7 +3687,10 @@ void PS2Runtime::run()
 
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
-        UploadFrame(frameTex, this, presentWidth, presentHeight);
+        if (const std::vector<uint8_t> *pixels = UploadFrame(this, presentWidth, presentHeight))
+        {
+            UpdateTexture(frameTex, pixels->data());
+        }
 
         BeginDrawing();
         ClearBackground(BLACK);

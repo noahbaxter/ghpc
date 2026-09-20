@@ -29,11 +29,24 @@ namespace ghpc
 
         virtual ~HostRenderer() = default;
 
+        // The software GS framebuffer. `pixels` is the whole 640x512 buffer, of
+        // which only the top-left sourceWidth x sourceHeight is the live
+        // picture; the rest is the other context's frame and must not reach the
+        // screen. The raylib path has always worked this way, uploading the
+        // whole texture and drawing a sub-rect of it.
+        struct Frame
+        {
+            const uint8_t *pixels = nullptr; // RGBA8, bufferWidth * bufferHeight
+            uint32_t bufferWidth = 0;
+            uint32_t bufferHeight = 0;
+            uint32_t sourceWidth = 0;
+            uint32_t sourceHeight = 0;
+        };
+
         virtual bool init(const Config &config) = 0;
         virtual void shutdown() = 0;
 
-        // RGBA8, `width` * `height` tightly packed. Ignored in R0.
-        virtual void uploadFrame(const uint8_t *pixels, uint32_t width, uint32_t height) = 0;
+        virtual void uploadFrame(const Frame &frame) = 0;
 
         // Clear, blit whatever uploadFrame last took, present.
         virtual void present() = 0;

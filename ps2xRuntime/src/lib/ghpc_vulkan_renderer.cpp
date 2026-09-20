@@ -93,7 +93,7 @@ namespace ghpc
 
             bool init(const Config &config) override;
             void shutdown() override;
-            void uploadFrame(const uint8_t *pixels, uint32_t width, uint32_t height) override;
+            void uploadFrame(const Frame &frame) override;
             void present() override;
             bool shouldClose() const override { return m_shouldClose; }
 
@@ -104,6 +104,11 @@ namespace ghpc
             void destroySwapchain();
             bool createSyncObjects();
             void pumpEvents();
+
+            bool findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props, uint32_t &outIndex) const;
+            bool createFrameResources(uint32_t width, uint32_t height);
+            void destroyFrameResources();
+            void checkParity(VkRect2D dstRect);
 
             SDL_Window *m_window = nullptr;
             VkInstance m_instance = VK_NULL_HANDLE;
@@ -127,6 +132,32 @@ namespace ghpc
             // with two frames in flight and three swapchain images, a
             // per-frame semaphore can still be pending on an older present.
             std::vector<VkSemaphore> m_renderSemaphores;
+
+            // The software GS framebuffer, staged host-side and blitted to the
+            // swapchain. R8G8B8A8 into a B8G8R8A8 swapchain: vkCmdBlitImage
+            // converts, which is why this is a blit and not a copy.
+            VkBuffer m_stagingBuffer = VK_NULL_HANDLE;
+            VkDeviceMemory m_stagingMemory = VK_NULL_HANDLE;
+            void *m_stagingMapped = nullptr;
+            VkImage m_frameImage = VK_NULL_HANDLE;
+            VkDeviceMemory m_frameMemory = VK_NULL_HANDLE;
+            uint32_t m_bufferWidth = 0u;
+            uint32_t m_bufferHeight = 0u;
+            uint32_t m_sourceWidth = 0u;
+            uint32_t m_sourceHeight = 0u;
+            bool m_hasFrame = false;
+
+            // Parity gate, GHPC_VK_PARITY=N. Reads the presented swapchain back
+            // every Nth frame and compares it to the bytes that went in.
+            int m_parityEvery = 0;
+            VkBuffer m_readbackBuffer = VK_NULL_HANDLE;
+            VkDeviceMemory m_readbackMemory = VK_NULL_HANDLE;
+            void *m_readbackMapped = nullptr;
+            bool m_swapchainReadable = false;
+            bool m_parityThisFrame = false;
+            uint64_t m_parityChecked = 0ull;
+            uint64_t m_parityMismatched = 0ull;
+            uint64_t m_parityWorstPixels = 0ull;
 
             uint32_t m_frame = 0u;
             bool m_swapchainDirty = false;
@@ -348,8 +379,19 @@ namespace ghpc
             info.imageExtent = extent;
             info.imageArrayLayers = 1u;
             // TRANSFER_DST is what lets R0 clear and R1 blit without a render
-            // pass or any shaders at all.
+            // pass or any shaders at all. TRANSFER_SRC is the parity gate
+            // reading the presented image back; it is optional because not
+            // every surface allows it.
             info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            m_swapchainReadable = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0u;
+            if (m_swapchainReadable)
+            {
+                info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            }
+            else if (m_parityEvery > 0)
+            {
+                std::cerr << "[ghpc/vk] surface does not allow TRANSFER_SRC; parity gate unavailable" << std::endl;
+            }
             info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.preTransform = caps.currentTransform;
             info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -449,8 +491,164 @@ namespace ghpc
             return true;
         }
 
+        bool VulkanRenderer::findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props,
+                                            uint32_t &outIndex) const
+        {
+            VkPhysicalDeviceMemoryProperties memory{};
+            vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &memory);
+            for (uint32_t i = 0u; i < memory.memoryTypeCount; ++i)
+            {
+                if ((typeBits & (1u << i)) == 0u)
+                {
+                    continue;
+                }
+                if ((memory.memoryTypes[i].propertyFlags & props) == props)
+                {
+                    outIndex = i;
+                    return true;
+                }
+            }
+            std::cerr << "[ghpc/vk] no memory type with properties 0x" << std::hex << props << std::dec << std::endl;
+            return false;
+        }
+
+        bool VulkanRenderer::createFrameResources(uint32_t width, uint32_t height)
+        {
+            destroyFrameResources();
+
+            const VkDeviceSize size = static_cast<VkDeviceSize>(width) * height * 4u;
+
+            auto makeHostBuffer = [&](VkBufferUsageFlags usage, VkBuffer &buffer,
+                                      VkDeviceMemory &memory, void *&mapped) -> bool {
+                VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                bufferInfo.size = size;
+                bufferInfo.usage = usage;
+                bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                if (!check(vkCreateBuffer(m_device, &bufferInfo, nullptr, &buffer), "vkCreateBuffer"))
+                {
+                    return false;
+                }
+
+                VkMemoryRequirements requirements{};
+                vkGetBufferMemoryRequirements(m_device, buffer, &requirements);
+
+                uint32_t typeIndex = 0u;
+                if (!findMemoryType(requirements.memoryTypeBits,
+                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                    typeIndex))
+                {
+                    return false;
+                }
+
+                VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                allocInfo.allocationSize = requirements.size;
+                allocInfo.memoryTypeIndex = typeIndex;
+                if (!check(vkAllocateMemory(m_device, &allocInfo, nullptr, &memory), "vkAllocateMemory"))
+                {
+                    return false;
+                }
+                vkBindBufferMemory(m_device, buffer, memory, 0u);
+                return check(vkMapMemory(m_device, memory, 0u, size, 0u, &mapped), "vkMapMemory");
+            };
+
+            if (!makeHostBuffer(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, m_stagingBuffer, m_stagingMemory, m_stagingMapped))
+            {
+                return false;
+            }
+
+            if (m_parityEvery > 0 && m_swapchainReadable &&
+                !makeHostBuffer(VK_BUFFER_USAGE_TRANSFER_DST_BIT, m_readbackBuffer, m_readbackMemory,
+                                m_readbackMapped))
+            {
+                return false;
+            }
+
+            VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+            imageInfo.extent = VkExtent3D{width, height, 1u};
+            imageInfo.mipLevels = 1u;
+            imageInfo.arrayLayers = 1u;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (!check(vkCreateImage(m_device, &imageInfo, nullptr, &m_frameImage), "vkCreateImage"))
+            {
+                return false;
+            }
+
+            VkMemoryRequirements requirements{};
+            vkGetImageMemoryRequirements(m_device, m_frameImage, &requirements);
+
+            uint32_t typeIndex = 0u;
+            if (!findMemoryType(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, typeIndex))
+            {
+                return false;
+            }
+
+            VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            allocInfo.allocationSize = requirements.size;
+            allocInfo.memoryTypeIndex = typeIndex;
+            if (!check(vkAllocateMemory(m_device, &allocInfo, nullptr, &m_frameMemory), "vkAllocateMemory"))
+            {
+                return false;
+            }
+            vkBindImageMemory(m_device, m_frameImage, m_frameMemory, 0u);
+
+            m_bufferWidth = width;
+            m_bufferHeight = height;
+            std::cout << "[ghpc/vk] frame staging " << width << "x" << height << std::endl;
+            return true;
+        }
+
+        void VulkanRenderer::destroyFrameResources()
+        {
+            auto dropBuffer = [&](VkBuffer &buffer, VkDeviceMemory &memory, void *&mapped) {
+                if (mapped != nullptr)
+                {
+                    vkUnmapMemory(m_device, memory);
+                    mapped = nullptr;
+                }
+                if (buffer != VK_NULL_HANDLE)
+                {
+                    vkDestroyBuffer(m_device, buffer, nullptr);
+                    buffer = VK_NULL_HANDLE;
+                }
+                if (memory != VK_NULL_HANDLE)
+                {
+                    vkFreeMemory(m_device, memory, nullptr);
+                    memory = VK_NULL_HANDLE;
+                }
+            };
+
+            dropBuffer(m_stagingBuffer, m_stagingMemory, m_stagingMapped);
+            dropBuffer(m_readbackBuffer, m_readbackMemory, m_readbackMapped);
+
+            if (m_frameImage != VK_NULL_HANDLE)
+            {
+                vkDestroyImage(m_device, m_frameImage, nullptr);
+                m_frameImage = VK_NULL_HANDLE;
+            }
+            if (m_frameMemory != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(m_device, m_frameMemory, nullptr);
+                m_frameMemory = VK_NULL_HANDLE;
+            }
+
+            m_bufferWidth = 0u;
+            m_bufferHeight = 0u;
+            m_hasFrame = false;
+        }
+
         bool VulkanRenderer::init(const Config &config)
         {
+            if (const char *parity = std::getenv("GHPC_VK_PARITY"); parity != nullptr)
+            {
+                m_parityEvery = std::atoi(parity);
+            }
+
             if (!SDL_InitSubSystem(SDL_INIT_VIDEO))
             {
                 std::cerr << "[ghpc/vk] SDL_InitSubSystem(VIDEO): " << SDL_GetError() << std::endl;
@@ -502,9 +700,19 @@ namespace ghpc
                 m_frame = 0u;
             }
 
+            if (m_parityChecked != 0ull)
+            {
+                std::cout << "[ghpc/vk/parity] checked=" << m_parityChecked
+                          << " mismatched=" << m_parityMismatched
+                          << " worstPixels=" << m_parityWorstPixels
+                          << (m_parityMismatched == 0ull ? "  PARITY HELD" : "  PARITY BROKEN") << std::endl;
+                m_parityChecked = 0ull;
+            }
+
             if (m_device != VK_NULL_HANDLE)
             {
                 vkDeviceWaitIdle(m_device);
+                destroyFrameResources();
                 destroySwapchain();
 
                 for (uint32_t i = 0u; i < kFramesInFlight; ++i)
@@ -553,9 +761,73 @@ namespace ghpc
             }
         }
 
-        void VulkanRenderer::uploadFrame(const uint8_t *, uint32_t, uint32_t)
+        void VulkanRenderer::uploadFrame(const Frame &frame)
         {
-            // R1.
+            if (frame.pixels == nullptr || frame.bufferWidth == 0u || frame.bufferHeight == 0u)
+            {
+                return;
+            }
+
+            if (frame.bufferWidth != m_bufferWidth || frame.bufferHeight != m_bufferHeight)
+            {
+                if (!createFrameResources(frame.bufferWidth, frame.bufferHeight))
+                {
+                    return;
+                }
+            }
+
+            const size_t size = static_cast<size_t>(frame.bufferWidth) * frame.bufferHeight * 4u;
+            std::memcpy(m_stagingMapped, frame.pixels, size);
+
+            // The sub-rect is clamped rather than trusted: a source larger than
+            // the buffer would read past the staging image in the blit.
+            m_sourceWidth = std::min(frame.sourceWidth, frame.bufferWidth);
+            m_sourceHeight = std::min(frame.sourceHeight, frame.bufferHeight);
+            m_hasFrame = m_sourceWidth != 0u && m_sourceHeight != 0u;
+        }
+
+        // Blit parity: the pixels read back off the presented swapchain against
+        // the pixels handed to uploadFrame. Only runs on a 1:1 blit, so the
+        // comparison is byte for byte with no resampling to excuse a
+        // difference. RGBA in, BGRA out, which is the swizzle vkCmdBlitImage is
+        // there to do; getting it backwards is exactly what this catches.
+        void VulkanRenderer::checkParity(VkRect2D dstRect)
+        {
+            const auto *src = static_cast<const uint8_t *>(m_stagingMapped);
+            const auto *dst = static_cast<const uint8_t *>(m_readbackMapped);
+            if (src == nullptr || dst == nullptr)
+            {
+                return;
+            }
+
+            uint64_t mismatched = 0ull;
+            for (uint32_t y = 0u; y < dstRect.extent.height; ++y)
+            {
+                const uint8_t *srcRow = src + static_cast<size_t>(y) * m_bufferWidth * 4u;
+                const uint8_t *dstRow = dst + static_cast<size_t>(y) * dstRect.extent.width * 4u;
+                for (uint32_t x = 0u; x < dstRect.extent.width; ++x)
+                {
+                    const uint8_t *s = srcRow + static_cast<size_t>(x) * 4u;
+                    const uint8_t *d = dstRow + static_cast<size_t>(x) * 4u;
+                    if (s[0] != d[2] || s[1] != d[1] || s[2] != d[0])
+                    {
+                        ++mismatched;
+                    }
+                }
+            }
+
+            ++m_parityChecked;
+            if (mismatched != 0ull)
+            {
+                ++m_parityMismatched;
+                m_parityWorstPixels = std::max(m_parityWorstPixels, mismatched);
+            }
+
+            const uint64_t total = static_cast<uint64_t>(dstRect.extent.width) * dstRect.extent.height;
+            std::cout << "[ghpc/vk/parity] frame=" << m_frame
+                      << " rect=" << dstRect.extent.width << "x" << dstRect.extent.height
+                      << " mismatched=" << mismatched << "/" << total
+                      << (mismatched == 0ull ? " OK" : " MISMATCH") << std::endl;
         }
 
         void VulkanRenderer::pumpEvents()
@@ -637,21 +909,122 @@ namespace ghpc
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  0u, 0u, nullptr, 0u, nullptr, 1u, &toTransfer);
 
-            // R0 presents a cleared frame. R1 replaces this with a blit of the
-            // software GS framebuffer, which is why the swapchain carries
-            // TRANSFER_DST.
-            //
-            // Magenta, matching the software GS sentinel: it means nothing has
-            // been drawn into this frame. Black would be indistinguishable from
-            // a window that was created and never presented at all.
-            const VkClearColorValue clearColor{{1.0f, 0.0f, 1.0f, 1.0f}};
+            // Black behind the picture, matching ClearBackground(BLACK) on the
+            // raylib path. Magenta when no frame has arrived yet, matching the
+            // software GS sentinel for "nothing was drawn here": black would be
+            // indistinguishable from a window that never presented at all.
+            const VkClearColorValue clearColor = m_hasFrame
+                                                     ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}}
+                                                     : VkClearColorValue{{1.0f, 0.0f, 1.0f, 1.0f}};
             vkCmdClearColorImage(cmd, m_swapchainImages[imageIndex],
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearColor, 1u, &range);
+
+            VkRect2D dstRect{};
+            if (m_hasFrame)
+            {
+                // Same letterbox the raylib path computes: fit the source rect
+                // into the window, preserving aspect, centred.
+                const float srcWidth = static_cast<float>(m_sourceWidth);
+                const float srcHeight = static_cast<float>(m_sourceHeight);
+                const float scale = std::min(static_cast<float>(m_swapchainExtent.width) / srcWidth,
+                                             static_cast<float>(m_swapchainExtent.height) / srcHeight);
+                const int32_t dstWidth = static_cast<int32_t>(srcWidth * scale);
+                const int32_t dstHeight = static_cast<int32_t>(srcHeight * scale);
+                dstRect.offset.x = (static_cast<int32_t>(m_swapchainExtent.width) - dstWidth) / 2;
+                dstRect.offset.y = (static_cast<int32_t>(m_swapchainExtent.height) - dstHeight) / 2;
+                dstRect.extent.width = static_cast<uint32_t>(dstWidth);
+                dstRect.extent.height = static_cast<uint32_t>(dstHeight);
+
+                // The clear and the blit both write this image and overlap, so
+                // they need ordering even though the layout does not change.
+                VkImageMemoryBarrier clearToBlit{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                clearToBlit.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                clearToBlit.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                clearToBlit.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                clearToBlit.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                clearToBlit.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                clearToBlit.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                clearToBlit.image = m_swapchainImages[imageIndex];
+                clearToBlit.subresourceRange = range;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0u, 0u, nullptr, 0u, nullptr, 1u, &clearToBlit);
+
+                VkImageMemoryBarrier frameToDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                frameToDst.srcAccessMask = 0u;
+                frameToDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                frameToDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                frameToDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                frameToDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                frameToDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                frameToDst.image = m_frameImage;
+                frameToDst.subresourceRange = range;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0u, 0u, nullptr, 0u, nullptr, 1u, &frameToDst);
+
+                VkBufferImageCopy copy{};
+                copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                copy.imageSubresource.layerCount = 1u;
+                copy.imageExtent = VkExtent3D{m_bufferWidth, m_bufferHeight, 1u};
+                vkCmdCopyBufferToImage(cmd, m_stagingBuffer, m_frameImage,
+                                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
+
+                VkImageMemoryBarrier frameToSrc = frameToDst;
+                frameToSrc.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                frameToSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                frameToSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                frameToSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0u, 0u, nullptr, 0u, nullptr, 1u, &frameToSrc);
+
+                // NEAREST, because raylib textures default to point filtering
+                // and parity is the whole point of this phase.
+                VkImageBlit blit{};
+                blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.srcSubresource.layerCount = 1u;
+                blit.srcOffsets[1] = VkOffset3D{static_cast<int32_t>(m_sourceWidth),
+                                                static_cast<int32_t>(m_sourceHeight), 1};
+                blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                blit.dstSubresource.layerCount = 1u;
+                blit.dstOffsets[0] = VkOffset3D{dstRect.offset.x, dstRect.offset.y, 0};
+                blit.dstOffsets[1] = VkOffset3D{dstRect.offset.x + static_cast<int32_t>(dstRect.extent.width),
+                                                dstRect.offset.y + static_cast<int32_t>(dstRect.extent.height), 1};
+                vkCmdBlitImage(cmd, m_frameImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               m_swapchainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1u, &blit, VK_FILTER_NEAREST);
+            }
+
+            m_parityThisFrame = m_parityEvery > 0 && m_hasFrame && m_readbackBuffer != VK_NULL_HANDLE &&
+                                (m_frame % static_cast<uint32_t>(m_parityEvery)) == 0u &&
+                                dstRect.extent.width == m_sourceWidth &&
+                                dstRect.extent.height == m_sourceHeight;
+            if (m_parityThisFrame)
+            {
+                VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toRead.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toRead.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toRead.image = m_swapchainImages[imageIndex];
+                toRead.subresourceRange = range;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     0u, 0u, nullptr, 0u, nullptr, 1u, &toRead);
+
+                VkBufferImageCopy readback{};
+                readback.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                readback.imageSubresource.layerCount = 1u;
+                readback.imageOffset = VkOffset3D{dstRect.offset.x, dstRect.offset.y, 0};
+                readback.imageExtent = VkExtent3D{dstRect.extent.width, dstRect.extent.height, 1u};
+                vkCmdCopyImageToBuffer(cmd, m_swapchainImages[imageIndex],
+                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_readbackBuffer, 1u, &readback);
+            }
 
             VkImageMemoryBarrier toPresent = toTransfer;
             toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             toPresent.dstAccessMask = 0u;
-            toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toPresent.oldLayout = m_parityThisFrame ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                                    : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                                  0u, 0u, nullptr, 0u, nullptr, 1u, &toPresent);
@@ -687,6 +1060,14 @@ namespace ghpc
             else if (presented != VK_SUCCESS)
             {
                 check(presented, "vkQueuePresentKHR");
+            }
+
+            if (m_parityThisFrame)
+            {
+                // The readback was recorded into this frame's command buffer,
+                // so its fence is what says the pixels are there.
+                vkWaitForFences(m_device, 1u, &m_inFlightFences[frame], VK_TRUE, UINT64_MAX);
+                checkParity(dstRect);
             }
 
             ++m_frame;
