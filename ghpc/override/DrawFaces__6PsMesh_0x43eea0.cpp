@@ -44,10 +44,22 @@
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
 #include "runtime/gs/ghpc_native_draw.h"
+#include "ghpc_scene.h"
+
+#include <cstring>
+#include <vector>
 
 #ifdef PS2_FUNCTION_LOG_TRACKER
 #include "ps2_log.h"
 #endif
+
+// qw696..703, defined at global scope in Select__5PsCam_0x1c1770.cpp. That
+// capture is ungated and runs once per camera select, so a global is the right
+// shape for it. Declared out here rather than beside its use, because the use
+// sits inside this file's anonymous namespace and an extern in there names a
+// different symbol that nothing defines.
+extern float g_ghpcCamQw[8][4];
+extern uint64_t g_ghpcCamSelects;
 
 // Host mesh cache, defined in Sync__6PsMeshi_0x43afa8.cpp (overlay.sh maps
 // only .cpp files, so there is no header). Filled at PsMesh::Sync entry, the
@@ -181,6 +193,106 @@ void ghpcMeshLog(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_
 // candidate formula. GHPC_TL_CAL=N enables it and caps the primitives the
 // frontend prints; GHPC_TL_CAL_DRAWS caps the draws tagged here, default 3.
 // Returns the mesh to tag, or 0.
+// R2: hand the cached geometry to a native backend.
+//
+// Separate from ghpcMeshTlCal rather than folded into it, because that one is
+// a calibration probe: it is gated on GHPC_TL_CAL, waits for the chart to
+// start, and stops after a few draws. A backend needs every draw of every
+// frame, so the only gate here is scene::active(), which is one relaxed load
+// when no backend is installed.
+//
+// The PS2 is little endian and so is the host, and the cache holds raw guest
+// bytes, so the float and uint16 fields copy straight across.
+// Find a VIF header by scanning back from the packet cursor.
+//
+// The per-draw matrices are read out of the packet here rather than from
+// DrawShowing's g_ghpcInstWorld, and that is not a style choice: that global
+// is documented in its own file as a probe and not a seam input, because it
+// names a different mesh chain than the DrawFaces it precedes. Reading the
+// packet at submit time names the right draw by construction, and it is the
+// path the transform was verified on to GS subpixel over 171 matched pairs.
+static uint32_t ghpcFindVifHeader(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
+                                  uint32_t cursor, uint32_t header) {
+    for (uint32_t back = 1; back <= 512u; ++back) {
+        const uint32_t a = cursor - back * 0x10u;
+        if (READ32(a + 0xcu) == header) return a;
+    }
+    return 0u;
+}
+
+static void ghpcReadQuads(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
+                          uint32_t base, uint32_t quadCount, float* out) {
+    for (uint32_t q = 0; q < quadCount; ++q) {
+        for (uint32_t k = 0; k < 4u; ++k) {
+            const uint32_t bits = READ32(base + q * 0x10u + k * 4u);
+            std::memcpy(out + q * 4u + k, &bits, sizeof(float));
+        }
+    }
+}
+
+void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
+    if (!ghpc::scene::active()) return;
+
+    if (g_ghpcCamSelects != 0ull) {
+        ghpc::scene::Camera cam{};
+        // g_ghpcCamQw[0]=qw696 scale, [1]=qw697 offset, [4..7]=qw700..703 rows.
+        for (uint32_t r = 0; r < 4u; ++r)
+            for (uint32_t c = 0; c < 4u; ++c)
+                cam.m[r * 4u + c] = g_ghpcCamQw[4u + r][c];
+        for (uint32_t k = 0; k < 3u; ++k) {
+            cam.scale[k] = g_ghpcCamQw[0][k];
+            cam.offset[k] = g_ghpcCamQw[1][k];
+        }
+        ghpc::scene::setCamera(cam);
+    }
+
+    // Skinned uploads a 20-quadword palette at VU1 660 behind 0x6C140294, of
+    // which qw660..675 are the four bone matrices. Unskinned writes one matrix
+    // at qw676..679 behind 0x6C0402A4. Both paths write qw676, so the palette
+    // header is what distinguishes them.
+    const uint32_t cursor = runtime->Load32(rdram, ctx, 0x70000008u);
+    const uint32_t palette = ghpcFindVifHeader(rdram, ctx, runtime, cursor, 0x6C140294u);
+    if (palette != 0u) {
+        float bones[16 * 4];
+        ghpcReadQuads(rdram, ctx, runtime, palette + 0x10u, 16u, bones);
+        ghpc::scene::setBonePalette(bones, 4u);
+    } else {
+        const uint32_t world = ghpcFindVifHeader(rdram, ctx, runtime, cursor, 0x6C0402A4u);
+        if (world != 0u) {
+            float m[16];
+            ghpcReadQuads(rdram, ctx, runtime, world + 0x10u, 4u, m);
+            ghpc::scene::setWorldMatrix(m);
+        }
+    }
+
+    uint32_t vertCnt = 0, faceCnt = 0;
+    const uint8_t* verts = nullptr;
+    const uint8_t* faces = nullptr;
+    if (!ghpcMeshCacheLookup(self, &vertCnt, &faceCnt, &verts, &faces)) return;
+    if (vertCnt == 0 || faceCnt == 0 || verts == nullptr || faces == nullptr) return;
+
+    // Reused across draws; a frame submits hundreds and these would otherwise
+    // be hundreds of allocations per frame.
+    static std::vector<ghpc::scene::Vertex> s_verts;
+    static std::vector<uint16_t> s_indices;
+
+    s_verts.resize(vertCnt);
+    for (uint32_t i = 0; i < vertCnt; ++i) {
+        const uint8_t* v = verts + (size_t)i * 64u;
+        ghpc::scene::Vertex& o = s_verts[i];
+        std::memcpy(o.pos,     v + 0x00u, sizeof(o.pos));
+        std::memcpy(o.norm,    v + 0x10u, sizeof(o.norm));
+        std::memcpy(o.weights, v + 0x20u, sizeof(o.weights));
+        std::memcpy(o.uv,      v + 0x30u, sizeof(o.uv));
+    }
+
+    s_indices.resize((size_t)faceCnt * 3u);
+    std::memcpy(s_indices.data(), faces, (size_t)faceCnt * 6u);
+
+    ghpc::scene::submitMesh(self, s_verts.data(), vertCnt,
+                            s_indices.data(), (uint32_t)s_indices.size());
+}
+
 uint32_t ghpcMeshTlCal(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
     static const bool s_on = std::getenv("GHPC_TL_CAL") != nullptr;
     if (!s_on) return 0u;
@@ -344,6 +456,7 @@ void DrawFaces__6PsMesh_0x43eea0(uint8_t* rdram, R5900Context* ctx, PS2Runtime *
     // cleared by the next fresh entry rather than at the return, because the
     // body has a dozen yield points and none of them is the only exit.
     g_ghpcTlCalMesh = ghpcMeshTlCal(rdram, ctx, runtime, GPR_U32(ctx, 4));
+    ghpcSceneSubmit(rdram, ctx, runtime, GPR_U32(ctx, 4));
     {
         static const bool s_log = std::getenv("GHPC_MESH_LOG") != nullptr;
         if (s_log) {

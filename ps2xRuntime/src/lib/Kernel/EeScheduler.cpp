@@ -2,6 +2,7 @@
 
 #include "runtime/ghpc_state.h"
 #include "Stubs/ghpc_drive.h"
+#include "ghpc_scene.h"
 #include "ps2_log.h"
 #include "ps2_runtime_macros.h"
 
@@ -2791,6 +2792,17 @@ void EeScheduler::processEvent(const EeEvent &event)
         // rdram in hand; the cost is three guest loads and a string compare.
         ghpc_drive::setCurrentScreen(ghpc_drive::currentScreen(m_rdram, nullptr));
 
+        // Frame boundary for the Rnd seam. Driven from vblank because this
+        // runs on the thread executing the guest, where the draws are
+        // submitted; the host present loop is a different thread and closing
+        // the frame from there would race every submit.
+        //
+        // Approximate, not the guest's own boundary: that is
+        // PsRnd::BeginDrawing 0x1bfed0 and EndDrawing 0x1c0070, and neither
+        // has an override yet. Good enough to count what arrives, not good
+        // enough to drive presentation.
+        ghpc::scene::endFrame();
+        ghpc::scene::beginFrame();
 
         // GHPCCLOCK: game time against wall time. GHPC_CLOCKRATE=N, every N ticks.
         //
