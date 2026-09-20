@@ -45,7 +45,7 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `4.7` |
 | fps | `2.89` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 7 of 6 |
+| rounds since gain | 0 of 6 |
 | rounds total | 20 of 30 |
 
 <!-- PROGRESS:END -->
@@ -80,7 +80,7 @@ Sizing it honestly, so no round oversells its result:
 ## Current target
 
 **The native draw is written. It regressed, the cause is found, and the fix
-is the next round.** Round 20, 2026-09-19, commit 972f4b4.
+is the next round.** Round 20, 2026-09-19, commit eb861e3.
 
 Release, same binary, `GHPC_COUNTIN=0.5`:
 
@@ -299,15 +299,22 @@ Stop when any of these is true:
   Both live in `scripts/progress.py`. Raising either is a decision to make
   awake, not mid-loop.
 
-  **Decide awake: the gain counter can no longer reset.** The verdict compares
-  the rung only (`PROGRESSED` means a higher held rung), and a recorded gain is
-  the only thing that zeroes `rounds_since_gain`. The rung has sat at the top
-  since `game_screen` became reachable, so no round can register a gain, and a
-  round that doubled gameplay speed would still count toward the stop. The 5%
-  win above is checked by whoever reads the `detail` line, never by the verdict.
-  This is the saturated-ladder trap described above, come back through the
-  counter. Options: make an `eerate_pct` gain at `game_screen`, same probes,
-  count as `PROGRESSED`, or reset the counter by hand after reviewing a round.
+  **Fixed on 2026-09-19, after it fired.** The verdict used to compare the rung
+  only, and a recorded gain was the only thing that zeroed `rounds_since_gain`.
+  The rung has sat at the top since `game_screen` became reachable, so no round
+  could register a gain and a round that doubled gameplay speed still counted
+  toward the stop. It stopped the loop on round 20, a round that found a root
+  cause. `top_rung_gain` in `scripts/progress.py` now counts a rise in
+  `eerate_pct` at the top rung as `PROGRESSED`, guarded three ways: the same
+  probes, because comparing across `GHPC_*` knobs is a category error; a held
+  rung, because a bounced run is not a floor; and a `GAIN_EERATE_MIN` margin of
+  0.3, because `eerate_pct` rounds to 0.1 and identical runs vary by about that
+  much, so a bare `>` would let noise reset the counter. `rounds_since_gain`
+  was reset from 7 to 0 at the same time.
+
+  The general rule, which cost this file two rounds to learn: **never set a
+  stop condition on a metric that has saturated.** If the ladder gains a rung
+  past `game_screen`, check this logic still says what you mean.
 - **Three failed fixes on one hypothesis.** It is an architecture problem, not a
   fourth attempt.
 

@@ -47,6 +47,11 @@ RUNG = {name: i + 1 for i, name in enumerate(LADDER)}
 STOP_ROUNDS_SINCE_GAIN = 6
 STOP_ROUNDS_TOTAL = 30
 
+# How much eerate_pct must rise at the top rung to count as a gain. The value
+# rounds to 0.1 and identical runs vary by about that much, so a margin keeps
+# noise from resetting the stop counter. See top_rung_gain().
+GAIN_EERATE_MIN = 0.3
+
 DRIVE = re.compile(r"^\[drive\] (?:enter (\w+)|(\w+) -> (\w+) after)")
 # Sub-rung probes: name -> (regex, group). Extend as blockers move.
 DETAIL = {
@@ -387,10 +392,36 @@ def main():
     if mark is None:
         verdict = "PROGRESSED"
 
+    # The ladder saturates at game_screen. Once the rung sits at the top no
+    # round can register a gain, `rounds_since_gain` can never reset, and the
+    # loop stops on a counter that has stopped measuring anything. That fired
+    # on 2026-09-19 after a round that found a root cause. At the top rung the
+    # metric that matters is eerate_pct, so a real rise in it is a gain.
+    #
+    # Guarded three ways, because each guard is a mistake this project has
+    # already made: the same probes, since comparing across GHPC_* knobs is a
+    # category error; a held rung, since a run that bounced is not a floor;
+    # and a margin, since eerate_pct rounds to 0.1 and identical runs vary by
+    # about that much, so a bare > would let noise reset the stop counter.
+    gain = None
+    if (verdict == "SAME" and mark is not None and rung == len(LADDER)
+            and not run["bounced"] and mark.get("env", {}) == run["env"]):
+        try:
+            now = float(detail.get("eerate_pct"))
+            was = float((mark.get("detail") or {}).get("eerate_pct"))
+        except (TypeError, ValueError):
+            now = was = None
+        if now is not None and was is not None and now - was >= GAIN_EERATE_MIN:
+            verdict = "PROGRESSED"
+            gain = {"metric": "eerate_pct", "from": was, "to": now,
+                    "margin": GAIN_EERATE_MIN}
+
     result = dict(run, verdict=verdict, previous_rung=prev,
                   previous_screen=mark["screen"] if mark else None,
                   ladder_size=len(LADDER), build=a.build,
                   failed_attempts=reasons)
+    if gain:
+        result["gain"] = gain
 
     # A mark set under a probe is not a floor the next round can be judged
     # against. Comparing across different GHPC_* knobs is a category error, so
@@ -448,6 +479,11 @@ def main():
                   "Not comparable."
                   % (result["env_mismatch"]["mark"] or "no probes",
                      result["env_mismatch"]["run"] or "no probes"))
+        if "gain" in result:
+            g = result["gain"]
+            print("  GAIN at the top rung: %s %s -> %s, margin %s. Counts as "
+                  "PROGRESSED because the ladder cannot go higher."
+                  % (g["metric"], g["from"], g["to"], g["margin"]))
         if detail:
             print("  detail: " + "  ".join("%s=%s" % kv for kv in sorted(detail.items())))
         if reasons:
