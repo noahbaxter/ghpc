@@ -14,6 +14,7 @@
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
 #include "ghpc_host_renderer.h"
+#include "ghpc_scene.h"
 #include "runtime/ghpc_state.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
@@ -3720,6 +3721,17 @@ void PS2Runtime::run()
         });
         if (m_hostRenderer)
         {
+            // The Rnd seam's transform lands in the GS's 2048-centred pixel
+            // space, and the rasteriser subtracts XYOFFSET before it tests the
+            // scissor. A native backend has to subtract the same thing, so it
+            // is read from the GS here rather than assumed: a gameplay sample
+            // is ofx=1984 ofy=1920, which is not half the framebuffer.
+            {
+                const GSDebugSnapshot snap = m_gs.getDebugSnapshot();
+                ghpc::scene::setGsOffset((float)snap.ctx[0].xyoffset.ofx / 16.0f,
+                                         (float)snap.ctx[0].xyoffset.ofy / 16.0f);
+            }
+
             uint32_t vkWidth = FB_WIDTH;
             uint32_t vkHeight = DEFAULT_DISPLAY_HEIGHT;
             if (const std::vector<uint8_t> *pixels = UploadFrame(this, vkWidth, vkHeight))
