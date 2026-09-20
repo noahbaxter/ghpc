@@ -82,10 +82,17 @@ distinguishable, neither concluded:
 Lower `kSpuChunkLogEvery` from 32 before measuring; it currently hides chunks 2
 through 31.
 
-**Replace the oracle.** `progress.py` scores `eerate_pct`, which was right for
-the VU1 phase and is wrong now. Needs frame rate on `game_screen`, audio chunks
-flowing, and the song tick advancing against wall clock. Also fix the control
-arm producing no `[eerate]` line at all, seen twice on release.
+**Finish the oracle.** Game time against wall clock is in (`[ghpc/clock]`,
+`GHPC_CLOCKRATE=N`) and `[fps]`/`[eerate]` now carry `screen=`, so a loading
+screen number can no longer be read as a gameplay one. What is left:
+
+- Audio chunks flowing, the third number.
+- A gate in `checkrun.sh` that asserts on `uirate` for the screen it is on.
+- `progress.py` still scores `eerate_pct` at the top rung. It should score
+  `uirate`, since `eerate` measures cycles retiring and not game speed, and the
+  two differed by 2x until 2026-09-20.
+- The control arm can still produce no `[eerate]` line at all, seen twice on
+  release.
 
 ## Parked
 

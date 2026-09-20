@@ -1,0 +1,77 @@
+COP0 Count was ticking every other EE cycle, and it halved every clock the
+game derives from it.
+
+2026-09-20, release build, main menu, boot skip on.
+
+THE BUG
+
+  EeScheduler::accountCycles set cop0_count to m_eeCycle >> 1, on the R4000
+  convention that Count advances at half the CPU clock. The EE does not do
+  that. ps2tek: "Count increments automatically every EE cycle", at the full
+  294.912 MHz.
+
+  Games read Count to get elapsed time. GH2's TaskMgr clocks are built from it,
+  so every one of them ran at exactly half speed.
+
+HOW IT WAS FOUND
+
+  The new [ghpc/clock] reporter reads TaskMgr's own clock array at vblank and
+  prints game seconds against wall seconds. On the menu it reported 0.215 while
+  [eerate] reported 43.1%: a ratio of 0.5, not the 1.0 it should be.
+
+  eerate could not have found this. It measures how fast emulated cycles
+  retire, which was correct. Only a number read off the game's own clock shows
+  the conversion being wrong, which is the argument for building the oracle
+  before touching the clock.
+
+  Two knobs separated the causes. vblank and cop0_count are both derived from
+  m_eeCycle, so at a single speed they are proportional and no measurement can
+  tell which one a number follows. Moving one against the other can.
+
+    GHPC_VBLANK_SCALE   multiplies the vblank period
+    GHPC_COP0_SHIFT     how far m_eeCycle shifts down for Count (now removed)
+
+  Doubling the vblank period doubled the game clock's advance per vblank, so
+  the clock tracked cycles rather than vblanks. That pointed at the shift.
+
+THE MEASUREMENT, one binary, single variable, both arms on main_screen
+
+  scale 4, shift 1    eerate 100.0%   uirate 0.500 0.500 0.500 0.509 0.491
+  scale 4, shift 0    eerate 100.0%   uirate 1.000 1.000 1.001 0.998 1.000
+
+  Scale 4 is there to put eerate at exactly nominal so emulation speed is not
+  a variable. An exact 2.000 is a shift, not a shortfall.
+
+  Stock machine after the fix, no knobs:
+
+    eerate 43.7%   uirate 0.431 0.433 0.435 0.434 0.440 0.434
+
+  uirate now equals eerate. Menu game speed went from 0.21 to 0.434.
+
+  Gameplay, GHPC_VBLANK_SCALE=4 GHPC_COP0_SHIFT=0, reached game_screen at
+  t=19.4 and ran 60s with no hang and no assert. game and beat came off zero
+  and advanced steadily, beat tracking game at about 94 BPM. rate 0.192 to
+  0.198 against eerate 19.3%, so uirate = eerate holds in gameplay too.
+
+WHAT IT DOES NOT FIX
+
+  The remaining gap is the software rasteriser, on both screens. A 12s sample
+  of the menu:
+
+    software GS      ~409 samples   SampleTexture 152, Submit 73, WritePixel 46
+    EeScheduler      ~115           mostly accountCycles and checkpointDue
+    vblank handling   ~23           processPendingEvents 12, processEvent 9
+
+  Halving the vblank rate does not skip scheduler overhead, it skips frames.
+  The menu's speed cap is the same software rasteriser R2 and R3 delete, which
+  is new: the menu was assumed to be fine at "~100% of realtime" and it never
+  was. That figure was eerate, and eerate was never game speed.
+
+RISK CARRIED FORWARD
+
+  Count now advances twice as fast, so every guest busy-wait keyed on it exits
+  after half as many guest instructions. That is the safe direction, but a loop
+  waiting on a hardware event that has not happened yet will spin out early and
+  run on stale data. Evidence that nothing broke is one 60s gameplay run and
+  one 30s menu run. song-load-crash.md and ui-draw-hang.md are both timing
+  sensitive and deserve a longer soak.

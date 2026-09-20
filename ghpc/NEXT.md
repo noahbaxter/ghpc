@@ -11,10 +11,24 @@ the rules below.
 
 Gameplay is reachable, renders correctly, and is far too slow to play.
 
-    menus       ~100% of realtime
-    gameplay      4.9% of realtime, 2.98 fps
-    audio       none
-    picture     correct (notes/evidence/2026-09-11-gameplay-frame-59.png)
+**`eerate` is not game speed, and the difference is not small.** It measures how
+fast emulated cycles retire. What a player feels is the rate TaskMgr's own
+clocks advance, which `[ghpc/clock]` reads straight out of guest RAM and
+reports as `uirate`. They agree only when the cycle-to-seconds conversion is
+right, and until 2026-09-20 it was not: COP0 Count ticked every other EE cycle
+and halved every clock the game derives from it
+(`notes/evidence/2026-09-20-cop0-count-halved-game-time.txt`).
+
+    menus        43% of realtime, game speed 0.43   was 0.21 before the fix
+    gameplay     19% with the rasteriser throttled, game speed 0.19
+    audio        none
+    picture      correct (notes/evidence/2026-09-11-gameplay-frame-59.png)
+
+The old "menus ~100% of realtime" line in this file was `eerate` on the loading
+screen. The main menu has never run at full speed, and it is capped by the same
+software rasteriser as gameplay: a menu profile puts ~409 samples in
+`GSCpuBackend` against ~23 in vblank handling. So R2 and R3 buy back the menus
+as well as gameplay, which nothing here had assumed.
 
 **The ceiling is measured, not estimated.** 2026-09-19, release, one binary,
 300s per arm, 60s hold, `GHPC_VU1_OFF=1`:
@@ -149,6 +163,23 @@ distinguishable, neither concluded. Do that next, not a rewrite.
     ./ghpc/scripts/fixreplay.sh <fixture>  ~1s, replays captured draws against
                                            VU1's own output
 
+Reporters, all release-safe and all tagged with the screen they were measured
+on, because a number off the loading screen is not a gameplay number:
+
+    GHPC_CLOCKRATE=N   [ghpc/clock] game time against wall time, every N vblanks
+    GHPC_EERATE=N      [eerate] emulated cycles against wall time
+    GHPC_FPS=N         [fps] presented frames
+
+`[ghpc/clock]` prints all four TaskMgr clocks. Which one carries the time
+depends on the screen: menus run on `ui`, the chart on `game` and `beat`, and
+`game` reads a real zero outside gameplay. A gate watching one clock would call
+that a stopped clock.
+
+    GHPC_VBLANK_SCALE=N  multiplies the vblank period. Diagnostic only: any
+                         value but 1 is a deliberately wrong machine. It is the
+                         only way to separate cost that scales with frames from
+                         cost that scales with cycles.
+
 Capture a fixture once, then iterate on it:
 
     GHPC_NATIVE_DRAW=2 GHPC_FIXTURE=/tmp/gh2.fix GHPC_COUNTIN=0.5 \
@@ -183,10 +214,14 @@ the 25s loop already covers.
 
 ## Known defects in the tooling
 
-- **The oracle needs replacing.** `progress.py` scores `eerate_pct` at the top
-  rung, which was right for the VU1 phase and is wrong now. A playability gate
-  needs three numbers: frame rate on `game_screen`, audio chunks flowing, and
-  the song tick advancing against wall clock. `checkrun.sh` is where that goes.
+- **The oracle is half replaced.** Two of the three numbers a playability gate
+  needs are in and release-safe: game time against wall clock (`[ghpc/clock]`,
+  and it is what found the COP0 bug), and frame rate attributable to a screen,
+  since `[fps]` and `[eerate]` now carry `screen=`. Audio chunks flowing is
+  still missing, and nothing consumes any of it yet: `checkrun.sh` has no gate
+  and `progress.py` still scores `eerate_pct` at the top rung, which is the
+  metric this file just spent a section explaining is not game speed. Wiring
+  those two up is the remaining work.
   This file no longer carries the generated `PROGRESS` block. That is
   deliberate: it reported a saturated rung and a metric that stopped
   describing the goal. `progress.py --check` now returns 0 on a missing block
