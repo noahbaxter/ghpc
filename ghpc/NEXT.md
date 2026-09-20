@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `4.7` |
 | fps | `2.89` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 0 of 6 |
-| rounds total | 20 of 30 |
+| rounds since gain | 1 of 6 |
+| rounds total | 21 of 30 |
 
 <!-- PROGRESS:END -->
 
