@@ -287,6 +287,12 @@ public:
 
     [[nodiscard]] bool isExecutingGuest() const noexcept;
 
+    // True when no thread holds a host callback and nothing is queued, so the
+    // scheduler's state can be written out without losing a std::function that
+    // cannot be serialised. See runtime/ghpc_state.h for why this gates saving.
+    // Only meaningful on the EE executor, and only at a frame boundary.
+    [[nodiscard]] bool isQuiescentForState() const;
+
     // Kernel object API. All calls except postEvent/requestStop execute on the
     // EE executor and therefore need no host synchronization.
     void setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_t gp);

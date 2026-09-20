@@ -1,5 +1,6 @@
 #include "runtime/ee_scheduler.h"
 
+#include "runtime/ghpc_state.h"
 #include "ps2_log.h"
 #include "ps2_runtime_macros.h"
 
@@ -890,6 +891,23 @@ void EeScheduler::clearYieldInFlight() noexcept
 bool EeScheduler::isExecutingGuest() const noexcept
 {
     return m_guestExecuting.load(std::memory_order_acquire);
+}
+
+bool EeScheduler::isQuiescentForState() const
+{
+    if (!m_pendingInvocations.empty())
+    {
+        return false;
+    }
+    for (const auto &kv : m_threads)
+    {
+        const GuestThread &t = kv.second;
+        if (t.resumeCompletion || t.wait.completion || !t.invocations.empty())
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 void EeScheduler::setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_t gp)
@@ -2432,8 +2450,7 @@ void EeScheduler::processEvent(const EeEvent &event)
                     }
                 }
                 const size_t pending = m_pendingInvocations.size();
-                const bool quiescent =
-                    resume == 0 && waitComp == 0 && invoc == 0 && pending == 0;
+                const bool quiescent = isQuiescentForState();
                 std::fprintf(stderr,
                              "[ghpc/state] tick=%llu threads=%zu quiescent=%s "
                              "resume=%u waitcomp=%u invocThreads=%u invocDepth=%u pending=%zu\n",
@@ -2442,6 +2459,11 @@ void EeScheduler::processEvent(const EeEvent &event)
                              resume, waitComp, invoc, invocDepth, pending);
             }
         }
+        // A pending save lands here, or is refused and retried next frame.
+        // This is the only point in the run where the scheduler can promise
+        // no host callback is outstanding.
+        ghpcStateServicePendingSave(m_runtime, isQuiescentForState());
+
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         if ((m_vsyncTick & 1u) != 0u)
         {
