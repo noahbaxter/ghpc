@@ -50,7 +50,7 @@ still cost. `.vutext` is already extracted and disassembled if it comes to that.
 
 One exit criterion each. Do not start the next before it holds.
 
-**Save states are parked, deliberately, and start R0 instead.** They are half
+**Save states are parked, deliberately.** They are half
 built: the container and the quiescent-frame gate are in and measured, the
 remaining chunks and the acceptance gate are in `BACKLOG.md` under Later.
 
@@ -67,16 +67,27 @@ Pick them up at the start of R2 if the drive is actually hurting by then.
 Never load a state that has not passed the determinism gate: one that loads
 and diverges later is worse than no state at all.
 
-### R0: Vulkan bring-up
-raylib is OpenGL-only and owns the window today (`ps2_runtime.cpp`,
-`ps2_debug_panel.cpp`, behind the `ps2_host_backend` INTERFACE target). Vulkan
-cannot share that window, so the renderer needs its own windowing. Use SDL3.
+### R0: Vulkan bring-up, done 2026-09-20
+SDL3 window, Vulkan instance, device, swapchain, cleared frame, selected by
+`GHPC_RENDERER=vulkan` with raylib the default. Exit met on one binary, both
+arms, in `notes/evidence/2026-09-20-r0-vulkan-bringup.txt`: MoltenVK on an M4
+Pro, a 3-image B8G8R8A8_UNORM swapchain, 771 frames presented over a 15s hold,
+and the raylib arm still reaching the main menu.
 
-Stand up SDL3 window, Vulkan instance, device, swapchain, and present a cleared
-frame. Selected by `GHPC_RENDERER=vulkan`, default raylib, both paths building.
+The seam is `ghpc::HostRenderer` in `include/ghpc_host_renderer.h`, implemented
+by `src/lib/ghpc_vulkan_renderer.cpp`. `PS2Runtime::m_hostRenderer` is null on
+the raylib path and non-null when SDL3 owns the window, in which case there is
+no raylib window at all: no audio device, no debug panel, and no pad input,
+which the pad stubs already gate on `IsWindowReady()`.
 
-**Exit:** a Vulkan window presents, and the game still boots unchanged on the
-raylib path.
+The clear is magenta, matching the software GS sentinel. Black is
+indistinguishable from a layer that was created and never presented, and the
+first run of this arm cleared to black and proved nothing.
+
+Build deps on macOS: `brew install molten-vk vulkan-loader vulkan-headers
+vulkan-validationlayers glslang`, plus `sdl3`. CMake takes an installed SDL3
+and falls back to FetchContent. `PS2X_ENABLE_VULKAN=OFF` drops the backend.
+`GHPC_VK_VALIDATION=1` turns the layer on.
 
 ### R1: blit parity
 Present the existing software GS framebuffer as a Vulkan texture. Vulkan now

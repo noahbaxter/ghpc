@@ -339,6 +339,11 @@ inline void ps2TraceGuestRangeWrite(uint8_t *rdram,
     // TODO we dont need this anymore so on next release it will be deleted
 }
 
+namespace ghpc
+{
+    class HostRenderer;
+}
+
 class PS2Runtime
 {
 public:
@@ -620,6 +625,9 @@ private:
     DebugUiCallback m_debugUiShutdownCallback = nullptr;
     void *m_debugUiUserData = nullptr;
     bool m_debugUiInitialized = false;
+    // Null on the default raylib path. Non-null means SDL3 owns the window and
+    // no raylib window exists at all.
+    std::unique_ptr<ghpc::HostRenderer> m_hostRenderer;
 
 public:
     std::atomic<uint32_t> m_debugPc{0};

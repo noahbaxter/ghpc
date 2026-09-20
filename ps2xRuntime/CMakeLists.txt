@@ -244,6 +244,51 @@ else()
     endif()
 endif()
 
+# Second host backend: SDL3 + Vulkan, selected at runtime by GHPC_RENDERER=vulkan.
+# raylib is OpenGL-only and cannot share its window, so this brings its own.
+if(PS2X_IS_VITA OR PS2X_IS_ANDROID)
+    set(PS2X_ENABLE_VULKAN_DEFAULT OFF)
+else()
+    set(PS2X_ENABLE_VULKAN_DEFAULT ON)
+endif()
+
+option(PS2X_ENABLE_VULKAN "Build the SDL3 + Vulkan host backend" ${PS2X_ENABLE_VULKAN_DEFAULT})
+
+add_library(ps2_vulkan_backend INTERFACE)
+
+if(PS2X_ENABLE_VULKAN)
+    find_package(Vulkan)
+
+    if(NOT Vulkan_FOUND)
+        message(WARNING "Vulkan not found; building without the Vulkan host backend")
+        set(PS2X_ENABLE_VULKAN OFF)
+    endif()
+endif()
+
+if(PS2X_ENABLE_VULKAN)
+    find_package(SDL3 QUIET CONFIG)
+
+    if(NOT SDL3_FOUND)
+        message(STATUS "SDL3 not installed; fetching it")
+        set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "" FORCE)
+        set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+        FetchContent_Declare(
+            SDL3
+            GIT_REPOSITORY "https://github.com/libsdl-org/SDL.git"
+            GIT_TAG "release-3.2.24"
+            GIT_SHALLOW TRUE
+            GIT_PROGRESS TRUE
+        )
+        FetchContent_MakeAvailable(SDL3)
+    else()
+        message(STATUS "Using installed SDL3: ${SDL3_DIR}")
+    endif()
+
+    target_link_libraries(ps2_vulkan_backend INTERFACE Vulkan::Vulkan SDL3::SDL3)
+    target_compile_definitions(ps2_vulkan_backend INTERFACE GHPC_ENABLE_VULKAN=1)
+endif()
+
 if(PS2X_IS_ANDROID)
     set(PS2X_ENABLE_FFMPEG_DEFAULT OFF)
 else()
@@ -387,6 +432,7 @@ add_library(ps2_runtime STATIC
     src/lib/gs/gs_cpu_backend.cpp
     src/lib/gs/ghpc_native_draw.cpp
     src/lib/ghpc_state.cpp
+    src/lib/ghpc_vulkan_renderer.cpp
     src/lib/gs/ghpc_fixture.cpp
     src/lib/ps2_iop_host.cpp
     src/lib/ps2_memory.cpp
@@ -525,7 +571,7 @@ target_include_directories(ps2_runtime PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
 )
 
-target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
+target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ps2_vulkan_backend ffmpeg ps2_iop)
 target_link_libraries(ps2EntryRunner
     PRIVATE
     ps2_runtime

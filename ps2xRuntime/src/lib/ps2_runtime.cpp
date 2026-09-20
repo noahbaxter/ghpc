@@ -12,6 +12,7 @@
 #include "Kernel/Stubs/GS.h"
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
+#include "ghpc_host_renderer.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 
@@ -721,6 +722,12 @@ PS2Runtime::~PS2Runtime()
             m_debugUiInitialized = false;
         }
 
+        if (m_hostRenderer)
+        {
+            m_hostRenderer->shutdown();
+            m_hostRenderer.reset();
+        }
+
         if (IsWindowReady())
         {
             CloseWindow();
@@ -920,6 +927,27 @@ bool PS2Runtime::initialize(const char *title)
 #if defined(PLATFORM_VITA)
         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
 #else
+        if (ghpc::vulkanRendererRequested())
+        {
+            ghpc::HostRenderer::Config rendererConfig;
+            rendererConfig.width = HOST_WINDOW_WIDTH;
+            rendererConfig.height = HOST_WINDOW_HEIGHT;
+            rendererConfig.title = title;
+            rendererConfig.hidden = std::getenv("GHPC_HIDE_WINDOW") != nullptr;
+            rendererConfig.unfocused = std::getenv("GHPC_NO_FOCUS") != nullptr;
+            m_hostRenderer = ghpc::createVulkanRenderer(rendererConfig);
+
+            if (m_hostRenderer)
+            {
+                // No raylib window exists on this path, so no audio device and
+                // no debug panel either. IsWindowReady() is false, which is
+                // what the pad stubs already gate on.
+                return true;
+            }
+
+            std::cerr << "[ghpc/vk] falling back to the raylib renderer" << std::endl;
+        }
+
         unsigned int windowFlags = FLAG_WINDOW_RESIZABLE;
         // GHPC_NO_FOCUS keeps keyboard focus on the terminal. It does NOT stop
         // the raise: GLFW's cocoa show path calls orderFront unconditionally and
@@ -3553,10 +3581,15 @@ void PS2Runtime::run()
 
     RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
 
-    // A blank image to use as a framebuffer
-    Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-    Texture2D frameTex = LoadTextureFromImage(blank);
-    UnloadImage(blank);
+    // A blank image to use as a framebuffer. The Vulkan path has no GL context
+    // to hold a texture, so it skips this until R1 gives it one of its own.
+    Texture2D frameTex{};
+    if (!m_hostRenderer)
+    {
+        Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
+        frameTex = LoadTextureFromImage(blank);
+        UnloadImage(blank);
+    }
 
     std::atomic<bool> gameThreadFinished{false};
 
@@ -3615,6 +3648,21 @@ void PS2Runtime::run()
                                                << std::endl);
             }
         });
+        if (m_hostRenderer)
+        {
+            // R0 presents a cleared frame. R1 puts the software GS framebuffer
+            // through uploadFrame and checks it against the raylib path.
+            m_hostRenderer->present();
+
+            if (m_hostRenderer->shouldClose())
+            {
+                RUNTIME_LOG("[run] window close requested, breaking out of loop");
+                requestStop();
+                break;
+            }
+            continue;
+        }
+
         uint32_t presentWidth = FB_WIDTH;
         uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
         UploadFrame(frameTex, this, presentWidth, presentHeight);
@@ -3660,8 +3708,16 @@ void PS2Runtime::run()
         m_debugUiShutdownCallback(*this, m_debugUiUserData);
         m_debugUiInitialized = false;
     }
-    UnloadTexture(frameTex);
-    CloseWindow();
+    if (m_hostRenderer)
+    {
+        m_hostRenderer->shutdown();
+        m_hostRenderer.reset();
+    }
+    else
+    {
+        UnloadTexture(frameTex);
+        CloseWindow();
+    }
 
     RUNTIME_LOG("[run] exiting loop");
 }

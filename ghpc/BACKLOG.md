@@ -20,25 +20,25 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**R0: Vulkan bring-up.** SDL3 window, Vulkan instance, device, swapchain,
-present a cleared frame, behind `GHPC_RENDERER=vulkan` with raylib as the
-default. Both paths build.
+**R1: blit parity.** Present the software GS framebuffer as a Vulkan image, so
+Vulkan owns the window and the picture is identical because nothing about
+drawing changed.
 
-raylib is OpenGL-only and cannot share a window with Vulkan. It is used in
-exactly two files, `ps2_runtime.cpp` and `ps2_debug_panel.cpp`, behind the
-`ps2_host_backend` INTERFACE target at `ps2xRuntime/CMakeLists.txt:240`. That
-target is the seam a second host backend goes in beside.
+`ghpc::HostRenderer::uploadFrame` is already the entry point and the Vulkan
+backend ignores it. The swapchain is created with `TRANSFER_DST`, so the blit
+needs a linear-tiled staging image and `vkCmdBlitImage`, no render pass and no
+shaders. `UploadFrame` in `ps2_runtime.cpp:412` already produces the RGBA8
+buffer both paths want; today the Vulkan branch skips it entirely.
 
-**Exit:** a Vulkan window presents, and the game still boots unchanged on the
-raylib path.
+**Exit:** `play.sh --ingame` produces the same frame on both renderers, checked
+by frame signature, not by eye.
 
-Settle in R0, not before: whether ImGui keeps the raylib path (rlImGui) or
-moves to the Vulkan backend. The debug panel is worth keeping, and losing it for
-one phase is acceptable if it buys a simpler R0.
+Settle here, not before: whether ImGui keeps the raylib path (rlImGui) or moves
+to the Vulkan backend. The Vulkan path has no debug panel at all right now.
 
 ## Next
 
-**R1 blit parity, then R2 the Rnd seam.** Exit criteria in `NEXT.md`.
+**R2: the Rnd seam.** Exit criteria in `NEXT.md`.
 
 R2 is where the speed arrives, and everything it needs is already measured:
 

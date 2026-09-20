@@ -1,0 +1,59 @@
+R0 exit: a Vulkan window presents, and the game still boots unchanged on raylib.
+
+2026-09-20, release build, one binary, both arms, no stray runner before either.
+
+Pre-declared metric, two arms, three outcomes:
+
+  arm       GHPC_RENDERER   what would make the claim impossible
+  vulkan    vulkan          no on-screen window owned by the runner's pid;
+                            a presented frame that is not the clear colour;
+                            a present count of zero
+  control   unset           the raylib path failing to reach the main menu
+
+
+ARM 1: vulkan
+
+  [ghpc/vk] device=Apple M4 Pro api=1.1.357 queueFamily=0
+  [ghpc/vk] swapchain 640x448 images=3 format=44
+  [ghpc/vk] swapchain 640x448 images=3 format=44
+  [ghpc/vk] presented 771 frames
+
+  window id=35887 owner='ps2EntryRunner' name='PS2-Recomp | GH2_debug.elf'
+  bounds=960,479 640x480 layer=0 onscreen=True
+
+  format 44 is VK_FORMAT_B8G8R8A8_UNORM. 771 frames over a 15s hold is about
+  51 fps against the 60Hz FIFO cap, the shortfall being the seconds before the
+  run loop is reached. Picture: 2026-09-20-r0-vulkan-present.png.
+
+  The clear is MAGENTA, not black, and that is the whole point of the arm. A
+  Metal layer that was created and never presented is also black, so a black
+  window proves nothing. Magenta is the same "nothing was drawn here" sentinel
+  the software GS already uses. The first run of this arm did clear to black
+  and was discarded as unfalsifiable.
+
+
+ARM 2: control, raylib
+
+  Same binary, GHPC_RENDERER unset, boot skip on, 20s hold. Reached the main
+  menu and rendered it. Picture: 2026-09-20-r0-raylib-control.png.
+
+  window id=35898 owner='ps2EntryRunner' bounds=874,565 640x480 onscreen=True
+
+
+VERDICT: PROGRESSED. Both halves of the R0 exit hold on one binary.
+
+
+Loose ends, none of them blocking R1:
+
+- The swapchain is built twice at startup. SDL emits a PIXEL_SIZE_CHANGED
+  right after window creation and the present path honours it. One wasted
+  swapchain, no visible effect.
+
+- The drawable comes back 640x448, point resolution, despite
+  SDL_WINDOW_HIGH_PIXEL_DENSITY. On a retina display a 2x drawable was
+  expected. R1 compares frame signatures rather than screen pixels so it does
+  not care, but a native renderer eventually will.
+
+- The Vulkan path has no input and no debug panel. There is no raylib window,
+  so IsWindowReady() is false and the pad stubs already gate on exactly that.
+  Nothing to fix until the Vulkan path is the one being played.
