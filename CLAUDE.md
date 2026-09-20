@@ -42,20 +42,27 @@ A 360 copy is useful as a second build to diff against.
 
 ## Stage
 
-M0 (symbols), M1 (recompile and compile), M2 (boot), M3 (RPC bind), M4 (fileio
-service) complete. Details in `ghpc/notes/`.
+**`ghpc/NEXT.md` is the standing handoff. Read it first; this section is only
+the one-paragraph version.**
 
-The storage stack works end to end: the ARK header parses, `GetFileInfo`
-resolves, and `BlockMgr` streams 64 KB blocks, verified at a 2.94 GB offset.
-The GS presents a real 512x448 frame, so the magenta sentinel is gone, but the
-drawing path (VIF1 -> VU1 -> GIF) delivers nothing into it.
+Boot, storage, RPC and fileio are done. Gameplay is reachable and renders
+correctly: venue, fretboard and gems, in
+`ghpc/notes/evidence/2026-09-11-gameplay-frame-59.png`. What is missing is
+speed and sound.
 
-An earlier build reached the main menu and wrote a memory card save. That
-depended on a `DataArray` workaround which existed only as a stale object file
-with no source, so it was never reproducible. After rebuilding from clean
-source the game dies earlier, at `Debug::Fail msg="Data ("`, preceded by
-`[FILEIO] fn=0xc status=-2 path="host0:"`. `host0:` is the devkit host
-filesystem, which is untested as a lead.
+    menus       ~100% of realtime
+    gameplay      4.9% of realtime, 2.98 fps
+    audio       none, no SPU2 exists
+
+The ceiling is measured rather than estimated. With `GHPC_VU1_OFF=1`, which
+stops VU1 running at all, the same binary reaches 100.1% and 59.15 fps and runs
+a song end to end. So VU1 interpretation is effectively the whole gameplay
+cost, and the recompiled EE code holds realtime on its own. That arm draws no
+geometry, so it is a ceiling, never a build.
+
+The target is a native Vulkan renderer at the `Rnd` seam, which deletes VU1,
+VIF1, GIF, MFIFO and the software rasteriser together. Vulkan native on Linux
+and Windows, MoltenVK on macOS. Phases R0 to R3 in `ghpc/NEXT.md`.
 
 ## Layout
 

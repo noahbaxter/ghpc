@@ -354,6 +354,14 @@ def main():
         if not os.path.exists(NEXT):
             sys.exit("missing %s" % NEXT)
         cur = open(NEXT).read()
+        # No block is a deliberate state, not a stale one. The generated table
+        # reported a saturated rung and eerate_pct, which stopped describing
+        # the goal once the target became a Vulkan backend. It was removed on
+        # 2026-09-20 and the pre-commit hook must not block on its absence.
+        # Restoring the markers is what re-enables this check.
+        if BEGIN not in cur or END not in cur:
+            print("NEXT.md carries no PROGRESS block, by design")
+            return 0
         # Staleness is computed by re-rendering and comparing, never judged.
         stale = _rendered_text(cur, m) != cur
         print("NEXT.md is %s" % ("STALE" if stale else "fresh"))

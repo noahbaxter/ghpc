@@ -1,201 +1,165 @@
 # Backlog
 
-The queue only. Session findings live in `notes/session-findings-archive.md`;
-topic notes in `notes/` supersede it. **Rewrite this file, never append to it.**
-It rotted once by being appended to until a stale "M4 in progress" header sat on
-top of 1570 lines of findings.
+The queue only. `ghpc/NEXT.md` is the standing handoff and carries the working
+rules. Session findings live in `notes/session-findings-archive.md`; topic notes
+in `notes/` supersede it. **Rewrite this file, never append to it.** It rotted
+once by being appended to until a stale "M4 in progress" header sat on top of
+1570 lines of findings.
 
 No status claim here that a command cannot check. Where one can, cite it.
 
 ## Ordering principle
 
-Gameplay-first ordering, seam-level execution. Sequence by what blocks gameplay,
-but fix at the seam that also buys speed and sound, rather than a symptom patch
-that gets thrown away. Reaching gameplay is not the end goal.
+Two tracks, worked in parallel, because neither blocks the other and both gate
+playability:
 
-    song load fix  ->  gameplay reachable  ->  Rnd seam  ->  playable speed
-                                               (also retires M7 VU work)
+    rendering   Vulkan at the Rnd seam   speed
+    audio       SPU upload, then output  note timing
+
+Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**The `Rnd` seam, first native draw.** Gameplay is ~5% of realtime and VU1
-interpretation is ~80% of the busy thread
-(`notes/evidence/2026-09-11-vu1-profile.txt`). The win is to stop running VU1
-for mesh draws: at `PsMesh::DrawFaces`, for a mesh whose geometry the host
-cache holds, transform the cached verts and hand triangles to `GSCpuBackend`
-directly. About 4x, so 5% toward 20%. The map is `notes/rnd-seam.md`.
+**R0: Vulkan bring-up.** SDL3 window, Vulkan instance, device, swapchain,
+present a cleared frame, behind `GHPC_RENDERER=vulkan` with raylib as the
+default. Both paths build.
 
-**The vertex transform is solved, to GS subpixel**
-(`notes/evidence/2026-09-12-bone-palette.txt`). Gameplay meshes are skinned,
-which is why no single object matrix ever fit:
+raylib is OpenGL-only and cannot share a window with Vulkan. It is used in
+exactly two files, `ps2_runtime.cpp` and `ps2_debug_panel.cpp`, behind the
+`ps2_host_backend` INTERFACE target at `ps2xRuntime/CMakeLists.txt:240`. That
+target is the seam a second host backend goes in beside.
 
-    world = sum over b of weight[b] * (pos * Bone[b])   b = 0..3
-    clip  = world * M           M = qw700..703 as rows, row vectors
-    q     = 1 / clip.w
-    x     = clip.x * q * qw696.x + qw697.x    y and z the same
-    s,t   = uv * q              the submit is fst=0, PRIM 4, iip=1
+**Exit:** a Vulkan window presents, and the game still boots unchanged on the
+raylib path.
 
-`Bone[0..3]` is the palette `PsMesh::DrawShowing` uploads at VU1 qw660..675
-behind `0x6C140294` (V4-32, NUM 0x14, ADDR 660). The weights are the Vert's
-four `Hmx::Color` floats at +0x20, which sum to 1.0. qw698 is not subtracted:
-M carries the view transform.
-
-Six meshes, 171 matched pairs: dx and dy medians 0.03 to 0.04 px, whole range
-[0.00, 0.07], q at -0.000%. A sixteenth of a pixel is 0.0625, so the residual
-is entirely GS quantisation.
-
-That also closes the earlier "second DrawFaces call site" puzzle. 0x43f434 is
-the only `jal DrawFaces` in the function, inside a per-material loop; the
-skinned paths simply branch past 0x43f2ec because they write qw676 themselves,
-as the palette's tail. Nothing was missing.
-
-The pairing is exact because DMA, VIF1, VU1 and GIF all run inline on the
-guest thread inside the store to D1_CHCR (`ps2_memory.cpp:2094`), so a mesh
-tag set at DrawFaces entry covers exactly that draw's submits. `GHPC_TL_CAL=N`
-turns it on.
-
-**The native draw is written and it REGRESSED. Round 20, 2026-09-19.**
-Release, same binary both arms, `GHPC_COUNTIN=0.5`:
-
-    control, GHPC_NATIVE_DRAW unset               eerate 4.8   fps 2.93
-    mode 2, transform runs, submits nothing       eerate 4.9   fps 2.94
-    mode 1, transform submits, VU1 skipped        eerate 0.9   fps 0.45
-
-**The cause is found and it is not the draw code.** Skipping a mesh
-microprogram makes a *different* microprogram run away
-(`notes/evidence/2026-09-19-vu1-runaway-from-skipping.txt`). Same build, both
-arms holding `game_screen`, `GHPC_VU1_CENSUS=2000` on `build-debug`:
-
-    pc0x30b0        invocations   cut-offs       maxInstr
-    control                1616   0 / 0M              708
-    native draw on          662   5336 / 349M       65536
-
-pc0x30b0 terminates on its E-bit in ~708 instructions every time in the
-control. With the native draw on, 89% of its invocations run to the full
-65536 cycle budget. The mesh T&L program pc0xcd8 shows `budget=0` in both
-arms, so the program being skipped is not the victim. The native arm also
-reports `song_tick_advanced=no` against the control's `yes`, so the gameplay
-chain is damaged, not merely slow.
-
-**What is proven and stays.** The MSCAL seam pairing is exact (`drew=32768`,
-`dropped=0`, `queued=0`) and the transform is subpixel against VU1's own
-submitted vertices, replayed offline: dx +0.027, dy +0.041, q -0.0000%
-against a 0.0625 quantisation floor. The seam is not refuted. Skipping a
-microprogram and doing nothing else is.
-
-**Move the seam, do not attempt a fifth fix per MSCAL.**
-`notes/evidence/2026-09-19-vu1-shared-state.txt`. The coupling is named:
-qw1022 and qw1023 are a saved register frame, written by the mesh T&L program
-pc0xcd8 as eight `ISW` (one per lane) and restored by the clipper pc0x14d8
-into exactly the registers its loop exits test. Only those two overlays of 18
-touch it. Skipping the T&L program leaves that frame holding an older draw's
-counters.
-
-Double buffering was checked and cleared: the VIF1 MSCAL branch toggles DBF
-and advances tops whether or not the microprogram runs.
-
-Still open, and do not assume otherwise: the exact path from skipping pc0xcd8
-to starving pc0x30b0, which touches neither 1022 nor 1023. The qw1022/1023
-frame is the coupling that has been found, not necessarily the only one.
-
-The seam belongs where no program is half-skipped. Either `PsRnd::FlushPacket`
-0x43e400, replacing a whole packet, or the `Rnd` layer, where VU1 never runs
-and there is no shared state to corrupt.
-
-**Four theories died on the way, do not re-chase them**
-(`notes/evidence/2026-09-19-native-draw-profile.txt`): the host transform
-being expensive (mode 2 measured 4.9 against 4.8), per-vertex
-`GS::writeRegister` cost (3.6x fewer triangles, speed unchanged), offscreen
-vertices clamped into the scissor (1.96M rejected, speed unchanged), and
-triangles straddling the screen edge (fixture measured 5 to 81 px bounding
-boxes, worst box 1% of the scissor). The profile settles it: `ghpcNativeDrawMscal`
-is 2% of GameThread and `VU1Interpreter::run` is 96%.
-
-**Iteration is no longer 6 minutes.** `GHPC_NATIVE_DRAW=2 GHPC_FIXTURE=<path>`
-captures real draws plus the primitives VU1 produced for them, and
-`scripts/fixreplay.sh` replays them through the same transform header the
-runtime uses and diffs against that oracle in under a second. Use it for the
-transform, clipping and lighting work instead of game runs.
-
-**The VU1 microcode is readable.** `.vutext` at vaddr 0x00437100, file offset
-0x338100, is a VIF stream; walk it for VIFcode 0x4A and all 18 overlays come
-out. Culling, lighting, PRIM flags, clipping and fog are answered in
-`notes/rnd-seam.md` and `notes/evidence/2026-09-19-vu1-tl-semantics.md`.
-Three of those contradict the current native draw: PRIM must come from the
-qw680 tag (ABE is set for every blend mode except 1, FGE is real), vertices
-are XYZF2 with fog rather than XYZ2, and colour is per-vertex lit rather than
-a 0x80 constant.
-
-**The stored 4.7 mark reproduces after all.** 2026-09-19, release, seven
-`[eerate]` samples spanning 4.7 to 4.8 (13.92 to 14.28 Mcycles/sec). The
-2026-09-11 note that it measured 3.0 stands as a record of that day, but the
-gap was the host, not the tree. Treat 4.8 as the current floor.
-
-Also done and still standing: the host mesh cache (99% of gameplay draws find
-their geometry host-side, `[ghpc/mesh/cache] hits=115314 misses=1024`) and all
-four backend inputs captured and named in the seam note. Six overrides in,
-speed unchanged.
-
-Cheap and still pending: cache three `getenv` calls in the VIF1 hot path
-(`ps2_vif1_interpreter.cpp:947` per MSCAL, plus 816 and 901), 45 profile
-samples.
+Settle in R0, not before: whether ImGui keeps the raylib path (rlImGui) or
+moves to the Vulkan backend. The debug panel is worth keeping, and losing it for
+one phase is acceptable if it buys a simpler R0.
 
 ## Next
 
-**Rnd seam.** Playback is at 39.2% of realtime (23.5 vblanks/sec vs 60,
-`GHPC_EERATE=60`) because rasterisation runs on the EE thread and guest time is
-gated on the EE cycle counter. Needs ~2.5x rasteriser throughput, which
-micro-optimisation will not deliver. A native GL or Vulkan backend at the `Rnd`
-layer also makes VIF1, VU1, GIF, MFIFO and the GS rasterizer dead code. Do not
-"fix" the clock by firing vblank on the host deadline alone; see the archive.
+**R1 blit parity, then R2 the Rnd seam.** Exit criteria in `NEXT.md`.
+
+R2 is where the speed arrives, and everything it needs is already measured:
+
+- Host mesh cache, 99% of gameplay draws find geometry host-side
+  (`[ghpc/mesh/cache] hits=115314 misses=1024`). The misses are three named
+  meshes, not a class.
+- All four backend inputs captured and named in `notes/rnd-seam.md`: geometry,
+  material, texture, camera.
+- The vertex transform, solved to GS subpixel over six meshes and 171 matched
+  pairs, dx and dy medians 0.03 to 0.04 px against a 0.0625 quantisation floor
+  (`notes/evidence/2026-09-12-bone-palette.txt`):
+
+      world = sum over b of weight[b] * (pos * Bone[b])   b = 0..3, skinned
+      world = pos * World                                 unskinned, qw676..679
+      clip  = world * M              M = qw700..703 as rows, row vectors
+      q     = 1 / clip.w
+      x,y,z = clip.{x,y,z} * q * qw696.{x,y,z} + qw697.{x,y,z}
+      s,t   = uv * q
+
+  Gameplay meshes are skinned. The weights are the Vert's four `Hmx::Color`
+  floats at +0x20, summing to 1.0, indexing the palette `DrawShowing` uploads
+  at qw660..675. qw698 is not subtracted: M carries the view transform.
+- VU1 semantics read out of `.vutext`
+  (`notes/evidence/2026-09-19-vu1-tl-semantics.md`). Three contradict the old
+  MSCAL-era native draw and the Vulkan path must honour them: PRIM comes from
+  the qw680 tag (ABE set for every blend mode except 1, FGE real), vertices are
+  XYZF2 with fog rather than XYZ2, and colour is per-vertex lit rather than a
+  0x80 constant. There is no backface culling anywhere in the 13,872 bytes, so
+  a triangle list from `Face[]` is a correct substitute for the strips.
+
+**A1 audio, in parallel.** The SPU upload protocol is solved and the ack is
+implemented; it is not sufficient. `chunks=1` in both arms, control
+`GHPC_SPU_ACK=0`. Two candidates in `notes/audio-path.md`, both
+distinguishable, neither concluded:
+
+1. The ack is dropped before it is sent, because StreamInfo outranks it when
+   they share a flush.
+2. The game only calls `SPUStartSend` once here, so there is no second transfer
+   to pace.
+
+Lower `kSpuChunkLogEvery` from 32 before measuring; it currently hides chunks 2
+through 31.
+
+**Replace the oracle.** `progress.py` scores `eerate_pct`, which was right for
+the VU1 phase and is wrong now. Needs frame rate on `game_screen`, audio chunks
+flowing, and the song tick advancing against wall clock. Also fix the control
+arm producing no `[eerate]` line at all, seen twice on release.
 
 ## Later
 
-- **Video seam.** Deprioritised: `scripts/bootskip.py --on` skips the intro
-  video entirely, so the IPU seam is not on the path to gameplay.
+- **VU1 static recompilation.** Contingency, not the plan. Only if programs
+  survive the Rnd seam and still cost. `.vutext` at vaddr 0x00437100 is a VIF
+  stream; `scripts/mpgwalk.py` walks it for VIFcode 0x4A and all 18 overlays
+  come out, `scripts/vudis.py` disassembles them. 13,872 bytes total. The hard
+  part is the indirect `JALR` at 0x0d10 taking its target from qw688.x.
+  Prior art: ico-recomp statically recompiles five VU1 microprograms.
 - **M8 input.** HID guitar, calibration, latency against a tuned PCSX2.
 - **GH1 and 80s.** Symbolized debug builds in `work/elf-debug/`. GH1 has 8,433
   symbols against GH2's 12,663, suggesting an earlier prototype. Verify before
   assuming parity.
+- **Video seam.** Deprioritised. `scripts/bootskip.py --on` skips the intro
+  entirely, so the IPU seam is not on the path to gameplay.
 - **SPU handshake stall.** Real and unfixed, but proven not to block the song
-  load: `GHPC_SYNTH_ACK=1` removes exactly `SPUSendBusy` and `SynthPoll` from the
-  working set and changes nothing else.
-
-**Boot skip is available and doubles iteration speed.**
-`ghpc/scripts/bootskip.py --on` flips one 11 byte symbol in `ui/gen/init.dtb` so
-boot goes straight to `main_screen`. Measured: `main_screen` at t=6.3 instead of
-t=38.8, `loading_screen` at t=41.6 instead of t=86.3, menu fully navigable.
-Reversible (`--off` restores byte-identical) and idempotent. **Caveat:** it skips
-whatever `bootup_load` initialises, so confirm any song-load or audio repro under
-`--off` before trusting it.
+  load: `GHPC_SYNTH_ACK=1` removes exactly `SPUSendBusy` and `SynthPoll` from
+  the working set and changes nothing else.
 
 ## Deferred
 
 - **Retargeting the retail ELF.** Undecided, and it changes how every stage
-  works. See `NORTHSTAR.md`, which calls this the biggest gap between the aim and
-  reality.
+  works. See `ghpc/NORTHSTAR.md`.
 - **Upstreaming.** Not until the port works. Patch 0003 (`isStubFunction`
   denylist) is the general fix covering all four name-collision mechanisms.
-  Patch 0001 (`GetRomName` bounds) is a memory-safety fix whose decision to
-  ignore `$a1` was derived from one caller in one game and needs disclosing.
 - **Audit the remaining 247 stubs** for the same collision class.
 - **Shipping target.** Development uses debug builds, which carry asserts and
   debug paths. Undecided.
 - **Mod support.** In the aim, not started.
 
+## Solved, do not re-chase
+
+Each cost at least a session. Evidence files hold the detail.
+
+- **The VU1 runaway.** The MFIFO drain read a `cnt` tag's payload past the ring
+  end while the fill side wrapped. Fixed in `appendData` by address. Cut-off
+  microprograms 2331 to 0 in 74,000 MSCALs; release gameplay 4.13 to 14.75
+  Mcycles/sec. `GHPC_MFIFO_NOWRAP_LEGACY=1` is the control arm.
+- **Everything that looked like a VIF1 parser bug was that same ring read.**
+  Three fixes made along the way are kept because they match hardware, but none
+  of them was the cause.
+- **The corrupted picture was the runaway.** Gameplay frames on the fixed build
+  show venue, fretboard and gems.
+- **A per-MSCAL seam, in any form.** Round 20's selective native draw regressed
+  to eerate 0.9. A skip that gates MSCAL while `setVu1MscntCallback` keeps
+  resuming lands at 0.8. Gating both reaches 100.1. The failure mode is a
+  microprogram left running on state a skipped predecessor should have written.
+  Skip everything or skip nothing.
+- **`PsCam::Select`'s VIF path.** Probed and cleared; the packet is right.
+- **An early-out on the VU1 pipeline commit.** Correct and worth nothing: an
+  entry becomes ready almost every cycle, so it never fires. Reverted.
+- **Four native-draw cost theories**
+  (`notes/evidence/2026-09-19-native-draw-profile.txt`): the host transform
+  being expensive, per-vertex `GS::writeRegister` cost, offscreen vertices
+  clamped into the scissor, and triangles straddling the screen edge. All dead.
+- **`GHPC_STREAM_READY`** reached `game_screen` sooner and produced a deader
+  guest. Anything that shortens a wait ships with a same-build control and
+  proves the gameplay chain still runs (`BeatMatch::Poll` 0x1259c0,
+  `PlayerMatcher::Poll` 0x117dd0).
+
 ## References
 
-- `gh2-decomp` (sibling repo) is a **reference clone, never a drop-in**, the same
-  status `NORTHSTAR.md` gives `third_party/`. It targets byte-matching with
-  32-bit GCC; ghpc builds native. When ghpc hits a function it must understand,
-  check there for the name and shape first, then disassemble. Do not build a sync
-  mechanism. It supplied `mState` at `0x4c` and `kPlaying`/`kStopped` for the
-  song load work, and did not have the function that was actually blocking.
+- `gh2-decomp` (sibling repo) is a **reference clone, never a drop-in**. 39%
+  byte-matched, 4,922 of 12,663 functions. `src/rndobj` carries the
+  platform-neutral `Rnd`, `Mat`, `Cam`, `Tex`, `Mesh`, `Environ`,
+  `LightPreset`, `Striper`, which is the interface a native backend implements.
+  `docs/notes/VU1CameraUpload.md` independently works out the qw696..703
+  upload. `tools/cop2.py` censuses VU0 macro-mode functions, which is a
+  different corpus from VU1 microcode.
 - `ps2ResolveGuestPointer` never fails. Out-of-range addresses are masked back
-  into RAM and it returns true, so `getMemPtr` cannot reject a bad pointer. Any
-  syscall taking a guest length must bound it itself.
-- The `File/CD` debug tab exposes a `cdImage` field that nothing sets. No CLI
-  flag or env var exists for it; the game-override hook is the intended path.
-- Diagnostics have two known defects: `call_hist_dump` splices concurrent stderr
-  into its own output, and `EeScheduler.cpp` still masks guest addresses to 25
+  into RAM and it returns true, so any syscall taking a guest length must bound
+  it itself.
+- Diagnostics have two known defects: `call_hist_dump` splices concurrent
+  stderr into its own output, and `EeScheduler.cpp` masks guest addresses to 25
   bits under a 128MB map. Both in `notes/song-load-crash.md`.
+- `notes/song-load-crash.md` carries a ruled-out list. Re-chasing something on
+  it is the most expensive mistake available here.

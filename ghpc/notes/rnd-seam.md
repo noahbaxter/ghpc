@@ -1,5 +1,21 @@
 # The Rnd seam
 
+**Status, 2026-09-20.** The map below is current and is what a backend is built
+from. Two things in it are superseded and are kept only because the surrounding
+measurements depend on them:
+
+- **The seam is not the MSCAL and not `PsMesh::DrawFaces`.** Both were tried
+  and both collapse, because a skip that leaves any microprogram running on
+  state a skipped predecessor should have written is fatal
+  (`evidence/2026-09-19-vu1-off-confirms-the-seam.txt`). The seam is
+  `PsRnd::FlushPacket` plus `PsMesh::DrawShowing`, where no program is ever
+  half-skipped.
+- **The backend is Vulkan, not `GSCpuBackend`.** Native on Linux and Windows,
+  MoltenVK on macOS. Phases in `ghpc/NEXT.md`.
+
+Everything else here, including the four captured inputs, the vertex transform
+and the VU1 semantics, stands and was measured.
+
 A map of GH2's renderer abstraction, for replacing the PS2 path (VIF1 -> VU1
 -> GIF -> software GS) with a native backend at the engine's own layer.
 Addresses come from the per-function filenames in `work/output/`
