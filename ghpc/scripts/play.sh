@@ -67,23 +67,19 @@ BIN="$ROOT/$BUILD_DIR/ps2xRuntime/ps2EntryRunner"
 [ -f "$ELF" ] || { echo "missing ELF: $ELF" >&2; exit 1; }
 [ -f "$WORK/GEN/MAIN.HDR" ] || { echo "work/GEN/MAIN.HDR missing, game data is not staged" >&2; exit 1; }
 
-# Put boot skip where this run wants it, and put it back afterwards if we were
-# the ones who moved it. It patches the ARK, so leaving it flipped would
-# silently change the next person's repro.
-skip_state() { python3 "$ROOT/ghpc/scripts/bootskip.py" --status | awk '{print $3}'; }
-BEFORE="$(skip_state)"
+# Put boot skip where this run wants it and leave it there.
+#
+# An earlier version restored the previous state on exit. That was wrong twice
+# over. The ARK state ended up depending on how the process died, since a
+# SIGKILL skips the trap entirely. And every run politely reverted the patch to
+# whatever it found, so a --ingame run flipped skip on, ran fast, put it back
+# to off, and the next run booted the intro again. Boot skip is a persistent
+# setting, not a per-run one. Flip it, say so, move on.
+SKIP_NOW="$(python3 "$ROOT/ghpc/scripts/bootskip.py" --status | awk '{print $3}')"
 WANT=$([ "$WANT_SKIP" = 1 ] && echo on || echo off)
-RESTORE=0
-if [ "$BEFORE" != "$WANT" ]; then
-  python3 "$ROOT/ghpc/scripts/bootskip.py" "--$WANT" >/dev/null
-  RESTORE=1
+if [ "$SKIP_NOW" != "$WANT" ]; then
+  python3 "$ROOT/ghpc/scripts/bootskip.py" "--$WANT"
 fi
-cleanup() {
-  if [ "$RESTORE" = 1 ]; then
-    python3 "$ROOT/ghpc/scripts/bootskip.py" "--$BEFORE" >/dev/null || true
-  fi
-}
-trap cleanup EXIT
 
 # --ingame walks the three menus and then goes quiet. The "*=none" fallback is
 # what stops it: without it an unlisted screen falls through to cross, and the
