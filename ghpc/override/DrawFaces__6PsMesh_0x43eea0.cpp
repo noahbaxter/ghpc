@@ -268,8 +268,43 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
     uint32_t vertCnt = 0, faceCnt = 0;
     const uint8_t* verts = nullptr;
     const uint8_t* faces = nullptr;
-    if (!ghpcMeshCacheLookup(self, &vertCnt, &faceCnt, &verts, &faces)) return;
-    if (vertCnt == 0 || faceCnt == 0 || verts == nullptr || faces == nullptr) return;
+    // Every draw this seam cannot serve, counted. A backend can only draw
+    // what arrives, and the difference between the guest's draw count and the
+    // seam's is invisible from the backend side: the backend sees a complete
+    // frame either way, just a smaller one.
+    //
+    // Two reasons a draw is dropped, and they are not the same gap:
+    //   cacheMiss  the mesh was never captured at PsMesh::Sync. rnd-seam.md
+    //              names three meshes, one of them mutable geometry
+    //              (flags140 & 0x1f), which Sync deliberately leaves alone.
+    //   noFaces    captured, but Face[] is empty. Its triangles live in the
+    //              converted PS2 packet, not in the engine's face vector, so
+    //              a triangle list off Face[] has nothing to draw.
+    static uint64_t s_dropCacheMiss = 0;
+    static uint64_t s_dropNoFaces = 0;
+    static uint64_t s_served = 0;
+    static const long s_dropEvery = []() {
+        const char* e = std::getenv("GHPC_SCENE_DROP_LOG");
+        return e ? std::atol(e) : 20000L;
+    }();
+
+    const bool cached = ghpcMeshCacheLookup(self, &vertCnt, &faceCnt, &verts, &faces);
+    const bool usable = cached && vertCnt != 0 && faceCnt != 0 &&
+                        verts != nullptr && faces != nullptr;
+    if (!cached) {
+        ++s_dropCacheMiss;
+    } else if (!usable) {
+        ++s_dropNoFaces;
+    } else {
+        ++s_served;
+    }
+    if (s_dropEvery > 0 && ((s_served + s_dropCacheMiss + s_dropNoFaces) % (uint64_t)s_dropEvery) == 0) {
+        std::fprintf(stderr,
+            "[ghpc/scene/drop] served=%llu cacheMiss=%llu noFaces=%llu\n",
+            (unsigned long long)s_served, (unsigned long long)s_dropCacheMiss,
+            (unsigned long long)s_dropNoFaces);
+    }
+    if (!usable) return;
 
     // Reused across draws; a frame submits hundreds and these would otherwise
     // be hundreds of allocations per frame.
