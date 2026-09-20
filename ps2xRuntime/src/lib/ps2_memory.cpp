@@ -5,6 +5,7 @@
 extern unsigned int g_ghpcVif1ChunkSource;
 #endif
 #include "runtime/ps2_address.h"
+#include "runtime/ghpc_state.h"
 #include "runtime/gs/gs_frontend.h"
 #include "ps2_log.h"
 #include <atomic>
@@ -3005,4 +3006,103 @@ void PS2Memory::clearModifiedFlag(uint32_t address, uint32_t size)
             }
         }
     }
+}
+
+bool PS2Memory::serializeForState(GhpcStateWriter &w) const
+{
+    w.u64(static_cast<uint64_t>(m_ioRegisters.size()));
+    for (const auto &kv : m_ioRegisters)
+    {
+        w.u32(kv.first);
+        w.u32(kv.second);
+    }
+
+    w.u64(static_cast<uint64_t>(m_tlbEntries.size()));
+    for (const TLBEntry &e : m_tlbEntries)
+    {
+        w.pod(e);
+    }
+
+    for (const EeTimer &t : m_eeTimers)
+    {
+        w.pod(t);
+    }
+
+    w.pod(gs_regs);
+
+    w.pod(m_vif1MfifoArmed);
+    w.pod(m_vif1DrainStalled);
+    w.u32(m_vif1PendingPath2ImageQwc);
+    w.pod(m_vif1PendingPath2DirectHl);
+    w.u64(static_cast<uint64_t>(m_vif1Residual.size()));
+    if (!m_vif1Residual.empty())
+    {
+        w.raw(m_vif1Residual.data(), m_vif1Residual.size());
+    }
+
+    return true;
+}
+
+bool PS2Memory::deserializeForState(GhpcStateReader &r)
+{
+    uint64_t ioCount = 0;
+    if (!r.u64(ioCount))
+    {
+        return false;
+    }
+    m_ioRegisters.clear();
+    for (uint64_t i = 0; i < ioCount; ++i)
+    {
+        uint32_t key = 0;
+        uint32_t value = 0;
+        if (!r.u32(key) || !r.u32(value))
+        {
+            return false;
+        }
+        m_ioRegisters[key] = value;
+    }
+
+    uint64_t tlbCount = 0;
+    if (!r.u64(tlbCount))
+    {
+        return false;
+    }
+    m_tlbEntries.clear();
+    for (uint64_t i = 0; i < tlbCount; ++i)
+    {
+        TLBEntry e{};
+        if (!r.pod(e))
+        {
+            return false;
+        }
+        m_tlbEntries.push_back(e);
+    }
+
+    for (EeTimer &t : m_eeTimers)
+    {
+        if (!r.pod(t))
+        {
+            return false;
+        }
+    }
+
+    if (!r.pod(gs_regs))
+    {
+        return false;
+    }
+
+    uint64_t residualSize = 0;
+    if (!r.pod(m_vif1MfifoArmed) || !r.pod(m_vif1DrainStalled) ||
+        !r.u32(m_vif1PendingPath2ImageQwc) || !r.pod(m_vif1PendingPath2DirectHl) ||
+        !r.u64(residualSize))
+    {
+        return false;
+    }
+    m_vif1Residual.resize(static_cast<size_t>(residualSize));
+    if (residualSize != 0 && !r.raw(m_vif1Residual.data(), m_vif1Residual.size()))
+    {
+        return false;
+    }
+
+    return true;
 }

@@ -255,6 +255,11 @@ struct EeThreadCreateParams
     uint32_t option = 0;
 };
 
+// Save state container, runtime/ghpc_state.h. Forward declared so the
+// scheduler header does not pull it in for every translation unit.
+class GhpcStateWriter;
+class GhpcStateReader;
+
 class EeScheduler
 {
 public:
@@ -292,6 +297,24 @@ public:
     // cannot be serialised. See runtime/ghpc_state.h for why this gates saving.
     // Only meaningful on the EE executor, and only at a frame boundary.
     [[nodiscard]] bool isQuiescentForState() const;
+
+    // Write and restore the kernel tables for a save state.
+    //
+    // Only legal on a frame where isQuiescentForState() holds, which is what
+    // makes the omissions safe: every std::function is empty and every
+    // thread's invocation stack is empty, so what is left on GuestThread is
+    // POD plus a variant of PODs. serializeForState asserts that rather than
+    // trusting the caller, and refuses instead of writing a state that would
+    // restore a thread waiting on a callback that no longer exists.
+    //
+    // Host-side members are deliberately not written: m_rdram is rebound by
+    // the loader, the executor thread id and the running/stopping atomics
+    // belong to this process, and the snapshot is a debug-UI mirror rebuilt on
+    // the next publish. ScheduledEvent's wall-clock deadline is rebased on
+    // load, because a deadline recorded in another process's steady_clock is
+    // meaningless in this one.
+    [[nodiscard]] bool serializeForState(GhpcStateWriter &w) const;
+    [[nodiscard]] bool deserializeForState(GhpcStateReader &r);
 
     // Kernel object API. All calls except postEvent/requestStop execute on the
     // EE executor and therefore need no host synchronization.

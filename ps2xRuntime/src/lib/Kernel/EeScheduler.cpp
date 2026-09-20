@@ -965,6 +965,344 @@ bool EeScheduler::isQuiescentForState() const
     return true;
 }
 
+namespace
+{
+    // Containers, written as a count followed by the elements. Everything the
+    // scheduler holds is either POD or a container of POD once quiescence has
+    // ruled out the std::functions, so these four cover all of it.
+    template <typename T>
+    void writeSeq(GhpcStateWriter &w, const T &seq)
+    {
+        w.u64(static_cast<uint64_t>(seq.size()));
+        for (const auto &v : seq)
+        {
+            w.pod(v);
+        }
+    }
+
+    template <typename T>
+    bool readSeq(GhpcStateReader &r, T &seq)
+    {
+        uint64_t n = 0;
+        if (!r.u64(n))
+        {
+            return false;
+        }
+        seq.clear();
+        for (uint64_t i = 0; i < n; ++i)
+        {
+            typename T::value_type v{};
+            if (!r.pod(v))
+            {
+                return false;
+            }
+            seq.push_back(v);
+        }
+        return true;
+    }
+
+    void writeWait(GhpcStateWriter &w, const EeWaitState &wait)
+    {
+        w.pod(wait.reason);
+        w.u32(static_cast<uint32_t>(wait.payload.index()));
+        std::visit([&](const auto &v) {
+            using V = std::decay_t<decltype(v)>;
+            if constexpr (!std::is_same_v<V, std::monostate>)
+            {
+                w.pod(v);
+            }
+        },
+                   wait.payload);
+    }
+
+    bool readWait(GhpcStateReader &r, EeWaitState &wait)
+    {
+        if (!r.pod(wait.reason))
+        {
+            return false;
+        }
+        uint32_t which = 0;
+        if (!r.u32(which))
+        {
+            return false;
+        }
+        switch (which)
+        {
+        case 0: wait.payload = std::monostate{}; return true;
+        case 1: { EeSemaphoreWait v{}; if (!r.pod(v)) return false; wait.payload = v; return true; }
+        case 2: { EeEventFlagWait v{}; if (!r.pod(v)) return false; wait.payload = v; return true; }
+        case 3: { EeVSyncWait v{}; if (!r.pod(v)) return false; wait.payload = v; return true; }
+        case 4: { EeExternalWait v{}; if (!r.pod(v)) return false; wait.payload = v; return true; }
+        default:
+            r.fail("unknown wait payload kind");
+            return false;
+        }
+    }
+}
+
+bool EeScheduler::serializeForState(GhpcStateWriter &w) const
+{
+    // Checked here as well as by the caller. A state written from a
+    // non-quiescent frame loads, looks right, and diverges later, so this
+    // refuses rather than trusting that the gate was consulted.
+    if (!isQuiescentForState())
+    {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_eventMutex);
+
+    w.u64(m_eeCycle);
+    w.u64(m_sliceEndCycle);
+    w.u64(m_vsyncTick);
+    w.u64(m_eventSequence);
+    w.u64(m_invocationSequence);
+    w.u64(m_nextDeadlineCycle.load(std::memory_order_relaxed));
+    w.u32(m_pendingEeTimerInterrupts);
+    w.u32(m_vsyncFlagAddress);
+    w.u32(m_vsyncTickAddress);
+    w.u32(m_gsVSyncCallback);
+    w.u32(m_gsVSyncCallbackGp);
+    w.u32(m_gsVSyncCallbackSp);
+
+    w.pod(m_nextThreadId);
+    w.pod(m_nextInvocationThreadId);
+    w.pod(m_nextSemaphoreId);
+    w.pod(m_nextEventFlagId);
+    w.pod(m_nextAlarmId);
+    w.pod(m_nextIntcHandlerId);
+    w.pod(m_nextDmacHandlerId);
+    w.pod(m_intcHeadOrder);
+    w.pod(m_intcTailOrder);
+    w.pod(m_dmacHeadOrder);
+    w.pod(m_dmacTailOrder);
+    w.pod(m_currentThreadId);
+    w.pod(m_rescheduleRequested);
+    w.pod(m_timeSliceExpired);
+    w.pod(m_insideInterrupt);
+
+    for (const auto &q : m_readyQueues)
+    {
+        writeSeq(w, q);
+    }
+
+    w.u64(static_cast<uint64_t>(m_threads.size()));
+    for (const auto &kv : m_threads)
+    {
+        const GuestThread &t = kv.second;
+        w.pod(t.id);
+        w.pod(t.context);
+        w.u32(t.entry);
+        w.u32(t.stack);
+        w.u32(t.stackSize);
+        w.u32(t.gp);
+        w.u32(t.attr);
+        w.u32(t.option);
+        w.u32(t.arg);
+        w.pod(t.initialPriority);
+        w.pod(t.currentPriority);
+        w.pod(t.status);
+        w.pod(t.suspendCount);
+        w.u32(t.wakeupCount);
+        w.pod(t.ownsStack);
+        w.u32(t.tlsBase);
+        writeWait(w, t.wait);
+    }
+
+    const auto writeMap = [&](const auto &map, auto writeValue) {
+        w.u64(static_cast<uint64_t>(map.size()));
+        for (const auto &kv : map)
+        {
+            w.pod(kv.first);
+            writeValue(kv.second);
+        }
+    };
+
+    writeMap(m_semaphores, [&](const EeSemaphore &s) {
+        w.pod(s.id); w.pod(s.count); w.pod(s.maxCount); w.pod(s.initCount);
+        w.u32(s.attr); w.u32(s.option); writeSeq(w, s.waiters);
+    });
+    writeMap(m_eventFlags, [&](const EeEventFlag &f) {
+        w.pod(f.id); w.u32(f.attr); w.u32(f.option); w.u32(f.initBits); w.u32(f.bits);
+        writeSeq(w, f.waiters);
+    });
+    writeMap(m_alarms, [&](const EeAlarm &a) { w.pod(a); });
+    writeMap(m_intcHandlers, [&](const EeIrqHandler &h) { w.pod(h); });
+    writeMap(m_dmacHandlers, [&](const EeIrqHandler &h) { w.pod(h); });
+
+    writeSeq(w, m_events);
+
+    // The wall-clock half of a deadline is not written. It is rebased on load
+    // against this process's steady_clock, because the saving process's
+    // timeline says nothing here.
+    w.u64(static_cast<uint64_t>(m_deadlines.size()));
+    for (const ScheduledEvent &d : m_deadlines)
+    {
+        w.u64(d.deadlineCycle);
+        w.pod(d.event);
+        w.u64(d.sequence);
+    }
+
+    w.u64(static_cast<uint64_t>(m_invocationStackTops.size()));
+    for (const auto &kv : m_invocationStackTops)
+    {
+        w.u64(kv.first);
+        w.u32(kv.second);
+    }
+
+    return true;
+}
+
+bool EeScheduler::deserializeForState(GhpcStateReader &r)
+{
+    std::lock_guard<std::mutex> lock(m_eventMutex);
+
+    uint64_t nextDeadline = 0;
+    if (!r.u64(m_eeCycle) || !r.u64(m_sliceEndCycle) || !r.u64(m_vsyncTick) ||
+        !r.u64(m_eventSequence) || !r.u64(m_invocationSequence) || !r.u64(nextDeadline) ||
+        !r.u32(m_pendingEeTimerInterrupts) || !r.u32(m_vsyncFlagAddress) ||
+        !r.u32(m_vsyncTickAddress) || !r.u32(m_gsVSyncCallback) ||
+        !r.u32(m_gsVSyncCallbackGp) || !r.u32(m_gsVSyncCallbackSp))
+    {
+        return false;
+    }
+    m_nextDeadlineCycle.store(nextDeadline, std::memory_order_relaxed);
+
+    if (!r.pod(m_nextThreadId) || !r.pod(m_nextInvocationThreadId) ||
+        !r.pod(m_nextSemaphoreId) || !r.pod(m_nextEventFlagId) || !r.pod(m_nextAlarmId) ||
+        !r.pod(m_nextIntcHandlerId) || !r.pod(m_nextDmacHandlerId) ||
+        !r.pod(m_intcHeadOrder) || !r.pod(m_intcTailOrder) || !r.pod(m_dmacHeadOrder) ||
+        !r.pod(m_dmacTailOrder) || !r.pod(m_currentThreadId) ||
+        !r.pod(m_rescheduleRequested) || !r.pod(m_timeSliceExpired) ||
+        !r.pod(m_insideInterrupt))
+    {
+        return false;
+    }
+
+    for (auto &q : m_readyQueues)
+    {
+        if (!readSeq(r, q))
+        {
+            return false;
+        }
+    }
+
+    uint64_t threadCount = 0;
+    if (!r.u64(threadCount))
+    {
+        return false;
+    }
+    m_threads.clear();
+    for (uint64_t i = 0; i < threadCount; ++i)
+    {
+        GuestThread t{};
+        if (!r.pod(t.id) || !r.pod(t.context) || !r.u32(t.entry) || !r.u32(t.stack) ||
+            !r.u32(t.stackSize) || !r.u32(t.gp) || !r.u32(t.attr) || !r.u32(t.option) ||
+            !r.u32(t.arg) || !r.pod(t.initialPriority) || !r.pod(t.currentPriority) ||
+            !r.pod(t.status) || !r.pod(t.suspendCount) || !r.u32(t.wakeupCount) ||
+            !r.pod(t.ownsStack) || !r.u32(t.tlsBase) || !readWait(r, t.wait))
+        {
+            return false;
+        }
+        // The three std::functions stay empty and invocations stays empty, by
+        // construction: the state could only have been written from a frame
+        // where all of them already were.
+        const int id = t.id;
+        m_threads.emplace(id, std::move(t));
+    }
+
+    const auto readMap = [&](auto &map, auto readValue) {
+        uint64_t n = 0;
+        if (!r.u64(n))
+        {
+            return false;
+        }
+        map.clear();
+        for (uint64_t i = 0; i < n; ++i)
+        {
+            int key = 0;
+            if (!r.pod(key))
+            {
+                return false;
+            }
+            typename std::decay_t<decltype(map)>::mapped_type v{};
+            if (!readValue(v))
+            {
+                return false;
+            }
+            map.emplace(key, std::move(v));
+        }
+        return true;
+    };
+
+    if (!readMap(m_semaphores, [&](EeSemaphore &s) {
+            return r.pod(s.id) && r.pod(s.count) && r.pod(s.maxCount) && r.pod(s.initCount) &&
+                   r.u32(s.attr) && r.u32(s.option) && readSeq(r, s.waiters);
+        }))
+        return false;
+    if (!readMap(m_eventFlags, [&](EeEventFlag &f) {
+            return r.pod(f.id) && r.u32(f.attr) && r.u32(f.option) && r.u32(f.initBits) &&
+                   r.u32(f.bits) && readSeq(r, f.waiters);
+        }))
+        return false;
+    if (!readMap(m_alarms, [&](EeAlarm &a) { return r.pod(a); })) return false;
+    if (!readMap(m_intcHandlers, [&](EeIrqHandler &h) { return r.pod(h); })) return false;
+    if (!readMap(m_dmacHandlers, [&](EeIrqHandler &h) { return r.pod(h); })) return false;
+
+    if (!readSeq(r, m_events))
+    {
+        return false;
+    }
+
+    uint64_t deadlineCount = 0;
+    if (!r.u64(deadlineCount))
+    {
+        return false;
+    }
+    m_deadlines.clear();
+    const auto now = std::chrono::steady_clock::now();
+    for (uint64_t i = 0; i < deadlineCount; ++i)
+    {
+        ScheduledEvent d{};
+        if (!r.u64(d.deadlineCycle) || !r.pod(d.event) || !r.u64(d.sequence))
+        {
+            return false;
+        }
+        // Rebased, not restored: a deadline already due lands at now, and one
+        // still ahead keeps its remaining cycle distance converted to host
+        // time. Restoring the saved time_point would fire every deadline at
+        // once or never.
+        const uint64_t remaining = d.deadlineCycle > m_eeCycle ? d.deadlineCycle - m_eeCycle : 0ull;
+        d.hostDeadline = now + eeCyclesToHostDuration(remaining);
+        m_deadlines.push_back(d);
+    }
+
+    uint64_t stackTopCount = 0;
+    if (!r.u64(stackTopCount))
+    {
+        return false;
+    }
+    m_invocationStackTops.clear();
+    for (uint64_t i = 0; i < stackTopCount; ++i)
+    {
+        uint64_t key = 0;
+        uint32_t value = 0;
+        if (!r.u64(key) || !r.u32(value))
+        {
+            return false;
+        }
+        m_invocationStackTops.emplace(key, value);
+    }
+
+    // Guaranteed empty by the quiescence gate, cleared rather than assumed.
+    // Nothing else here is second-guessed: m_rescheduleRequested and friends
+    // are restored exactly as written, because a state that resumes into a
+    // different scheduling decision than the one it captured is not the
+    // situation it claims to reproduce.
+    m_pendingInvocations.clear();
+    return true;
+}
+
 void EeScheduler::setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_t gp)
 {
     assertExecutor();
@@ -2453,6 +2791,7 @@ void EeScheduler::processEvent(const EeEvent &event)
         // rdram in hand; the cost is three guest loads and a string compare.
         ghpc_drive::setCurrentScreen(ghpc_drive::currentScreen(m_rdram, nullptr));
 
+
         // GHPCCLOCK: game time against wall time. GHPC_CLOCKRATE=N, every N ticks.
         //
         // This is the playability gate's core number and it is deliberately not
@@ -2573,6 +2912,46 @@ void EeScheduler::processEvent(const EeEvent &event)
                 }
             }
         }
+        // GHPC_STATE_SAVE=<slot> captures once, unattended, the first time the
+        // chart has advanced past GHPC_STATE_SAVE_AT seconds (default 2).
+        //
+        // Keyed on the song clock rather than wall time or a frame count
+        // because those drift with how fast the host happens to be: at 0.05 of
+        // realtime a fixed 30s wall timer lands in a different bar every run,
+        // and the whole point of a state is landing in the same place twice.
+        //
+        // The request is serviced by the quiescence gate below, so arming it
+        // here does not itself write anything.
+        {
+            static const char *slot = std::getenv("GHPC_STATE_SAVE");
+            static const float at = []() {
+                const char *e = std::getenv("GHPC_STATE_SAVE_AT");
+                return e ? (float)std::atof(e) : 2.0f;
+            }();
+            static bool armed = (slot != nullptr && slot[0] != '\0');
+
+            if (armed)
+            {
+                constexpr uint32_t kTheTaskMgr = 0x005A5870u;
+                const uint32_t clocks = ghpc_drive::guestWord(m_rdram, kTheTaskMgr + 0x28u);
+                if (clocks >= 0x00100000u && clocks < 0x02000000u)
+                {
+                    const uint32_t raw = ghpc_drive::guestWord(m_rdram, clocks + 0x0Cu);
+                    float song = 0.0f;
+                    std::memcpy(&song, &raw, sizeof(song));
+                    // kSeconds only runs in gameplay, so a nonzero value is
+                    // itself the "we are in a song" test.
+                    if (song >= at)
+                    {
+                        std::fprintf(stderr,
+                                     "[ghpc/state] arming save '%s' at song=%.3f\n", slot, (double)song);
+                        ghpcStateRequestSave(slot);
+                        armed = false;
+                    }
+                }
+            }
+        }
+
         // Save-state feasibility probe. GHPC_STATE_PROBE=N, every N ticks.
         //
         // A save state can copy RDRAM, the contexts and the kernel tables, but

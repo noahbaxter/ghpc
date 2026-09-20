@@ -303,6 +303,17 @@ public:
     int32_t tlbProbe(uint32_t vpn) const;
     size_t tlbEntryCount() const { return m_tlbEntries.size(); }
 
+    // Save state, runtime/ghpc_state.h. Covers the host-side machine state
+    // that is not in RDRAM, VRAM or the VU banks: the IO registers, the TLB,
+    // the EE timers and VIF1's residual. Restoring memory without these gives
+    // a machine whose guest pages are right and whose hardware is fresh.
+    //
+    // In-flight DMA is not represented because there is none at a frame
+    // boundary: the guest kicks a channel inside a store and it runs to
+    // completion inline, so there is no partially drained packet to capture.
+    [[nodiscard]] bool serializeForState(class GhpcStateWriter &w) const;
+    [[nodiscard]] bool deserializeForState(class GhpcStateReader &r);
+
     // Hardware register interface
     bool writeIORegister(uint32_t address, uint32_t value);
     uint32_t readIORegister(uint32_t address);

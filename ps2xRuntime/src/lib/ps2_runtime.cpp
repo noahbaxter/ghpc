@@ -14,6 +14,7 @@
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
 #include "ghpc_host_renderer.h"
+#include "runtime/ghpc_state.h"
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 
@@ -3647,6 +3648,27 @@ void PS2Runtime::run()
         try
         {
             m_eeScheduler->reset(m_memory.getRDRAM(), m_cpuContext);
+
+            // GHPC_STATE_LOAD=<slot> resumes a saved machine instead of
+            // booting. After reset, because reset installs the initial thread
+            // and would otherwise overwrite the restored tables; before run,
+            // because the first scheduled slice has to see the loaded state.
+            //
+            // A failed load stops rather than falling through to a normal
+            // boot. Booting anyway would look like the state did not help,
+            // when what happened is that it never loaded.
+            if (const std::string &slot = ghpcStateLoadSlotFromEnv(); !slot.empty())
+            {
+                if (!ghpcStateLoad(*this, slot))
+                {
+                    std::cerr << "[ghpc/state] refusing to boot normally after a failed load of '"
+                              << slot << "'" << std::endl;
+                    requestStop();
+                    gameThreadFinished.store(true, std::memory_order_release);
+                    return;
+                }
+            }
+
             m_eeScheduler->run();
             uint32_t pc = m_debugPc.load(std::memory_order_relaxed);
             RUNTIME_LOG("Game thread returned. PC=0x" << std::hex << pc

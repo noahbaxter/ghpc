@@ -43,7 +43,12 @@ class PS2Runtime;
 // the chunk it is missing instead of silently restoring a partial machine.
 // Layout: magic, version, then repeating { FourCC, uint64 size, payload }.
 constexpr uint64_t kGhpcStateMagic = 0x5441545343504847ull; // "GHPCSTAT"
-constexpr uint32_t kGhpcStateVersion = 1u;
+// 2 added SCHD, the kernel tables. A version 1 state holds only memory and the
+// EE context, so it would restore a machine with a fresh scheduler and diverge
+// immediately; refusing it is the point of the bump.
+// 3 added MEMS, VUST and PADS: IO registers, TLB, EE timers, GS registers,
+// VIF1 residual, the VU register files and the pad ports.
+constexpr uint32_t kGhpcStateVersion = 3u;
 
 class GhpcStateWriter
 {
@@ -107,6 +112,16 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent);
 // Load a slot into a freshly started runtime. Returns false and leaves the
 // runtime untouched on any failure.
 bool ghpcStateLoad(PS2Runtime &runtime, const std::string &slot);
+
+// Pad port state, the host side of ps2_pad.
+//
+// Part of the IOP service state a state has to carry, and the first piece of
+// it that proved necessary rather than theoretical. The guest's pad buffers
+// live in RDRAM and come back with it, but g_padPorts starts disconnected in a
+// fresh process, so a restored game saw a controller that had been unplugged
+// and went straight to pause_controller_screen with the chart frozen.
+void ghpcPadSerializeState(GhpcStateWriter &w);
+bool ghpcPadDeserializeState(GhpcStateReader &r);
 
 // Resolve a slot name to its path under work/states/, creating the directory.
 std::string ghpcStateSlotPath(const std::string &slot);

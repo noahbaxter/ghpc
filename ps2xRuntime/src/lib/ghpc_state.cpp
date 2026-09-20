@@ -226,6 +226,42 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent)
     w.pod(runtime.cpu());
     w.endChunk();
 
+    // The kernel tables. serializeForState re-checks quiescence itself and
+    // refuses if it does not hold, so a refusal here means the gate above and
+    // the scheduler disagreed, which is a bug worth shouting about rather than
+    // writing a state that cannot be trusted.
+    w.beginChunk("SCHD");
+    const bool schedulerWritten = runtime.eeScheduler().serializeForState(w);
+    w.endChunk();
+
+    // IO registers, TLB, EE timers, GS registers, VIF1 residual.
+    w.beginChunk("MEMS");
+    (void)mem.serializeForState(w);
+    w.endChunk();
+
+    // The VU register files. The VUMM chunk above holds only their memory
+    // banks, and a VU restored with the right micromem and a zeroed register
+    // file resumes mid-program with the wrong inputs.
+    w.beginChunk("VUST");
+    w.pod(runtime.vu0().state());
+    w.pod(runtime.vu1().state());
+    w.endChunk();
+
+    w.beginChunk("PADS");
+    ghpcPadSerializeState(w);
+    w.endChunk();
+
+    if (!schedulerWritten)
+    {
+        std::fprintf(stderr,
+                     "[ghpc/state] scheduler refused to serialise on a frame the gate called "
+                     "quiescent; not writing %s\n",
+                     slot.c_str());
+        g_savePending.store(false, std::memory_order_release);
+        g_refusedFrames = 0;
+        return;
+    }
+
     const std::string path = ghpcStateSlotPath(slot);
     const bool wrote = writeWholeFile(path, w.buffer());
     std::fprintf(stderr, "[ghpc/state] %s %s (%.1f MB)%s\n",
@@ -291,6 +327,12 @@ bool ghpcStateLoad(PS2Runtime &runtime, const std::string &slot)
     if (!r.raw(mem.getVU1Code(), PS2_VU1_CODE_SIZE)) return false;
     if (!r.raw(mem.getVU1Data(), PS2_VU1_DATA_SIZE)) return false;
     if (!need("EECX") || !r.pod(runtime.cpu())) return false;
+    if (!need("SCHD") || !runtime.eeScheduler().deserializeForState(r)) return false;
+    if (!need("MEMS") || !mem.deserializeForState(r)) return false;
+    if (!need("VUST")) return false;
+    if (!r.pod(runtime.vu0().state())) return false;
+    if (!r.pod(runtime.vu1().state())) return false;
+    if (!need("PADS") || !ghpcPadDeserializeState(r)) return false;
 
     if (!r.ok())
     {

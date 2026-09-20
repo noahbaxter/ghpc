@@ -1,6 +1,7 @@
 #include "Common.h"
 #include "Pad.h"
 #include "ghpc_drive.h"
+#include "runtime/ghpc_state.h"
 
 namespace ps2_stubs
 {
@@ -1024,4 +1025,45 @@ namespace
         g_padOverrideEnabled = false;
         g_padOverrideState = PadInputState{};
     }
+}
+
+// Save state hooks. Defined here because g_padPorts lives in this file's
+// unnamed namespace, which is the point: nothing outside needs to know the
+// shape of a port, only that it has to survive a save.
+//
+// The override state is deliberately not written. It is the pad driver's own
+// injected input (GHPC_PAD_DRIVE), a property of the run rather than of the
+// machine, and restoring it would replay the capture run's button presses
+// into a session that did not ask for them.
+void ghpcPadSerializeState(GhpcStateWriter &w)
+{
+    std::lock_guard<std::mutex> lock(ps2_stubs::g_padStateMutex);
+    w.u64(static_cast<uint64_t>(ps2_stubs::kPadPortCount));
+    for (size_t i = 0; i < ps2_stubs::kPadPortCount; ++i)
+    {
+        w.pod(ps2_stubs::g_padPorts[i]);
+    }
+}
+
+bool ghpcPadDeserializeState(GhpcStateReader &r)
+{
+    uint64_t count = 0;
+    if (!r.u64(count))
+    {
+        return false;
+    }
+    if (count != ps2_stubs::kPadPortCount)
+    {
+        r.fail("pad port count does not match this build");
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(ps2_stubs::g_padStateMutex);
+    for (size_t i = 0; i < ps2_stubs::kPadPortCount; ++i)
+    {
+        if (!r.pod(ps2_stubs::g_padPorts[i]))
+        {
+            return false;
+        }
+    }
+    return true;
 }
