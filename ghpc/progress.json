@@ -10,7 +10,7 @@
   },
   "build": "build",
   "hold_secs": 60,
-  "rounds_since_gain": 6,
-  "rounds_total": 19,
+  "rounds_since_gain": 7,
+  "rounds_total": 20,
   "recorded": "2026-09-11 13:10:35"
 }

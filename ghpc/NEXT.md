@@ -45,8 +45,8 @@ supersede earlier ones and topic notes supersede both.
 | eerate pct | `4.7` |
 | fps | `2.89` |
 | probes | `GHPC_COUNTIN=0.5` |
-| rounds since gain | 6 of 6 |
-| rounds total | 19 of 30 |
+| rounds since gain | 7 of 6 |
+| rounds total | 20 of 30 |
 
 <!-- PROGRESS:END -->
 
@@ -79,28 +79,65 @@ Sizing it honestly, so no round oversells its result:
 
 ## Current target
 
-**The `Rnd` seam. Write the first native draw.**
+**The native draw is written. It regressed, the cause is found, and the fix
+is the next round.** Round 20, 2026-09-19, commit 972f4b4.
 
-Gameplay is ~5% of realtime and a profile says why
-(`notes/evidence/2026-09-11-vu1-profile.txt`): VU1 interpretation is about
-80% of the busy thread, the software rasteriser under 20%, VIF1 nothing.
-Inside VU1 the cycle-accurate pipeline model is two thirds of it.
+Release, same binary, `GHPC_COUNTIN=0.5`:
 
-So the win is to stop running VU1 for mesh draws, not to make it faster. At
-`PsMesh::DrawFaces`, for a mesh whose geometry is in the host cache, skin the
-cached verts against the bone palette, project by the last camera, and hand
-triangles to `GSCpuBackend` directly, instead of building the PS2 packet and
-kicking it. Keep the PS2 path for cache
-misses and behind an env knob so both arms are the same binary. That skips
-VU1 and keeps the rasteriser: about 4x, so 5% toward 20%. A native GL or
-Vulkan backend takes the rasteriser's share too and is much larger work.
-Do it after this, not instead of it.
+    control, GHPC_NATIVE_DRAW unset            eerate 4.8   fps 2.93
+    mode 2, transform runs, submits nothing    eerate 4.9   fps 2.94
+    mode 1, transform submits, VU1 skipped     eerate 0.9   fps 0.45
 
-**Every input that draw needs is already captured and named**, in
-`notes/rnd-seam.md`: the class hierarchy, the hook addresses, the geometry
-cache, the eight camera quadwords, the material and texture state. Read that
-note before writing code. Seven overrides under `ghpc/override/` do the
-logging; `GHPC_MESH_LOG=1` turns it on.
+**Skipping a mesh microprogram makes a different one run away.**
+`notes/evidence/2026-09-19-vu1-runaway-from-skipping.txt`. Same build, both
+arms holding `game_screen`, `GHPC_VU1_CENSUS=2000` on `build-debug`:
+
+    pc0x30b0            invocations   cut-offs       maxInstr
+    control                    1616   0 / 0M              708
+    native draw on              662   5336 / 349M       65536
+
+pc0x30b0 terminates on its E-bit in about 708 instructions every time in the
+control. With the native draw on, 89% of its invocations burn the full 65536
+cycle budget. The mesh T&L program pc0xcd8 reports `budget=0` in both arms,
+so the program being skipped is not the victim. The native arm also reports
+`song_tick_advanced=no` against the control's `yes`, so the gameplay chain is
+damaged rather than merely slow.
+
+**The seam itself is not refuted.** The MSCAL pairing is exact (`drew=32768`,
+`dropped=0`, `queued=0`) and the transform replays subpixel against VU1's own
+submitted vertices. What is refuted is skipping a microprogram and doing
+nothing else.
+
+**Next round, pick one.** Either make the skip preserve the state pc0x30b0
+depends on, or move the seam to packet granularity at `PsRnd::FlushPacket`
+0x43e400 instead of per MSCAL. Start by extracting pc0x30b0 with
+`scripts/mpgwalk.py` and reading it with `scripts/vudis.py`, and find what it
+consumes that a mesh draw would have written. VU1 state persists across
+MSCALs: TOPS alternates base and base+ofst (`ps2_vu1_core.cpp:1316`), VU
+registers carry over, and VU1 patches NLOOP in place in the qw680 GIFtag
+(`ISW.x` at 0x1180).
+
+**Four theories died getting here, do not re-chase them**
+(`notes/evidence/2026-09-19-native-draw-profile.txt`): the host transform
+being expensive, per-vertex `GS::writeRegister` cost, offscreen vertices
+clamped into the scissor, and triangles straddling the screen edge. The
+profile settles it. `ghpcNativeDrawMscal` is 2% of GameThread and
+`VU1Interpreter::run` is 96%, in the arm where half the MSCALs are skipped.
+
+**Iteration is no longer 6 minutes.** `GHPC_NATIVE_DRAW=2 GHPC_FIXTURE=<path>`
+captures real draws plus the primitives VU1 produced for them, and
+`scripts/fixreplay.sh` replays them through the same transform header the
+runtime compiles and diffs against that oracle in under a second. Use it for
+transform, clipping and lighting work instead of game runs.
+
+**The VU1 microcode is readable now.** `.vutext`, vaddr 0x00437100, file
+offset 0x338100, is a VIF stream; walk it for VIFcode 0x4A and all 18
+overlays come out. Culling, lighting, PRIM flags, clipping and fog are
+answered in `notes/rnd-seam.md`. Three of those contradict the current native
+draw and must be fixed before the picture is right: PRIM belongs to the qw680
+tag (ABE is set for every blend mode except 1, FGE is real), vertices are
+XYZF2 with fog rather than XYZ2, and colour is per-vertex lit rather than a
+0x80 constant.
 
 **The transform is solved to GS subpixel, and nothing blocks the draw**
 (`notes/evidence/2026-09-12-bone-palette.txt`):
@@ -130,9 +167,11 @@ must use the palette for the draw it is in, not the last one captured.
 
 Pass is `eerate_pct` up on the same binary with the rung still 9, the
 gameplay chain alive (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll`
-0x117dd0), and a frame capture that still shows the venue. Fail is a picture
-that loses geometry: then compare the native triangles against the packet
-the PS2 path would have kicked, for one mesh, before going further.
+0x117dd0), and a frame capture that still shows the venue. Add one more check
+that round 20 had to discover the hard way: **pc0x30b0 cut-offs must stay at
+zero**, measured with `GHPC_VU1_CENSUS` on `build-debug`, because a native
+draw can starve a microprogram it never touches and the speed number alone
+reads as a mystery. `song_tick_advanced` must also stay `yes`.
 
 ## Solved, do not re-chase
 
@@ -189,6 +228,13 @@ future round sees a census that will not reproduce, this is prior art.
     GHPC_SONG_HEARTBEAT=N print the song tick every Nth poll, default 120.
     GHPC_VU1_CENSUS=N    census of why microprograms stopped, every N MSCALs.
                          Every run should still show zero cut-offs.
+                         **Debug build only.** The census sits inside
+                         `#if GHPC_DIAG` (ps2_vu1_core.cpp:2767) and
+                         PS2X_GHPC_DIAG is OFF unless build.sh gets --debug,
+                         so on a release build it is compiled out and prints
+                         nothing at all. Silence there is not zero cut-offs,
+                         it is no census. Cost a round on 2026-09-19. The same
+                         applies to every other `[vu1/...]` tap in that file.
     GHPC_VIF1_DUMPCHUNK=<dir>  write the first eight chunks that go wrong
                          (invalid opcode, or OFFSET with NUM != 0) as .bin plus
                          a .txt of tags, chain pieces and the parsed commands.

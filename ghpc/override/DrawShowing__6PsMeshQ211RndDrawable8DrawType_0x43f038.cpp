@@ -62,7 +62,8 @@ void ghpcCaptureInstWorld(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime
     // Off unless a calibration run asks for it: this runs on every draw and
     // the capture turned out to name a different mesh chain than the
     // DrawFaces it precedes, so it is a probe, not a seam input.
-    static const bool s_on = std::getenv("GHPC_TL_CAL") != nullptr;
+    static const bool s_on = std::getenv("GHPC_TL_CAL") != nullptr ||
+                             std::getenv("GHPC_NATIVE_DRAW") != nullptr;
     if (!s_on || xfm == 0u) return;
     for (uint32_t r = 0; r < 4u; ++r) {
         for (uint32_t c = 0; c < 4u; ++c) {
@@ -103,7 +104,8 @@ void ghpcCaptureInstWorld(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime
 // wrote into the packet.
 void ghpcCaptureObjXfm(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
                        uint32_t inst, uint32_t palette) {
-    static const bool s_on = std::getenv("GHPC_TL_CAL") != nullptr;
+    static const bool s_on = std::getenv("GHPC_TL_CAL") != nullptr ||
+                             std::getenv("GHPC_NATIVE_DRAW") != nullptr;
     if (!s_on) return;
 
     const uint32_t bones = READ32(inst + 0x13cu);

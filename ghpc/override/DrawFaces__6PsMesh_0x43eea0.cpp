@@ -43,6 +43,7 @@
 
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "runtime/gs/ghpc_native_draw.h"
 
 #ifdef PS2_FUNCTION_LOG_TRACKER
 #include "ps2_log.h"
@@ -277,6 +278,39 @@ uint32_t ghpcMeshTlCal(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, u
     return self;
 }
 
+// Arm the native draw for this mesh. The transform runs at the MSCAL rather
+// than here, because this body also drives PsRnd::FlushPacket 0x43e400, which
+// is what carries the material and texture registers out as GIF A+D through
+// VIF1 DIRECT. Skipping the body would draw with the previous material and
+// leave the scratchpad cursor growing with nothing draining it. See
+// runtime/gs/ghpc_native_draw.h.
+//
+// Armed only when the cache holds this mesh's geometry and the DrawShowing
+// capture names this same owner, so a stale palette can never be projected
+// against the wrong mesh. Everything else falls through to VU1.
+void ghpcMeshNativeArm(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
+    if (ghpcNativeDrawMode() == 0) return;
+    // Nothing is disarmed here. DrawFaces only appends on the common path and
+    // DrawShowing flushes once after its material loop, so earlier draws are
+    // still queued and waiting for their MSCAL.
+    //
+    // Before StartGame the draws are menu and loading quads under a 2D
+    // camera, and the perspective terms this reads are not staged yet.
+    if (!g_ghpcGameStarted.load(std::memory_order_relaxed)) return;
+    if (g_ghpcInstPath < 0 || g_ghpcInstOwner != self) return;
+
+    GhpcNativeDrawArgs a;
+    if (!ghpcMeshCacheLookup(self, &a.vertCount, &a.faceCount, &a.verts, &a.faces)) return;
+    if (a.vertCount == 0 || a.faceCount == 0) return;
+
+    a.skinned = (g_ghpcInstPath > 0);
+    a.mesh = self;
+    std::memcpy(a.bone, g_ghpcBoneXfm, sizeof(a.bone));
+    std::memcpy(a.world, g_ghpcInstWorld, sizeof(a.world));
+    std::memcpy(a.cam, g_ghpcCamQw, sizeof(a.cam));
+    ghpcNativeDrawArm(a);
+}
+
 } // namespace
 
 // Function: DrawFaces__6PsMesh
@@ -304,6 +338,7 @@ void DrawFaces__6PsMesh_0x43eea0(uint8_t* rdram, R5900Context* ctx, PS2Runtime *
 
     // Fresh entry only (a resume above jumps past this). $a0 is `this`.
     ghpcMeshCacheProbe(rdram, ctx, runtime, GPR_U32(ctx, 4));
+    ghpcMeshNativeArm(rdram, ctx, runtime, GPR_U32(ctx, 4));
     // Tag stays set through the body: the DMA kick and everything under it
     // run inline, so the frontend's submits land while this is current. It is
     // cleared by the next fresh entry rather than at the return, because the

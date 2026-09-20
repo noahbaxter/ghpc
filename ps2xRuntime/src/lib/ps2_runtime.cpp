@@ -5,6 +5,7 @@
 #include "game_overrides.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/ghpc_native_draw.h"
 #include "runtime/ee_scheduler.h"
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
@@ -810,6 +811,21 @@ bool PS2Runtime::syncCoreSubsystems()
                                          const char *e = std::getenv("GHPC_VU1_BUDGET");
                                          return e ? (uint32_t)std::strtoul(e, nullptr, 0) : 65536u;
                                      }();
+                                     // The Rnd seam. When PsMesh::DrawFaces has
+                                     // armed a mesh the host cache holds, the
+                                     // transform runs here instead of the
+                                     // microprogram. Every register this draw
+                                     // needs is already latched: they went out as
+                                     // GIF A+D through VIF1 DIRECT ahead of this
+                                     // MSCAL. Off unless GHPC_NATIVE_DRAW is set.
+                                     if (ghpcNativeDrawMscal(m_gs))
+                                     {
+                                         // No microprogram ran, so neither stop
+                                         // bit can be set. Clear them rather than
+                                         // leaving the previous MSCAL's.
+                                         cpuContext->vu0_vpu_stat &= ~0x0600u;
+                                         return;
+                                     }
                                      m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                    m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                    m_gs, &m_memory, startPC, top, itop, s_vu1Budget);

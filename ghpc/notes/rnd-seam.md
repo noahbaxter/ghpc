@@ -291,7 +291,46 @@ DrawFaces entry covers exactly that draw's submits. The tap is
   `DoPointTests`, `MakeDrawTarget` are "read and dropped" in the decomp. What
   `DrawFaces` hands VU1 (strip layout, skin data, clip flags) has to be read
   out of the packet at runtime.
-- VU1 microcode semantics: 18 overlays, assumed pure T&L, untested.
+- ~~VU1 microcode semantics~~. Settled, and readable statically. The
+  `.DVP.overlay.*` sections are empty metadata; the bytes are in `.vutext`
+  (ELF section 3, vaddr 0x00437100, file offset 0x338100, size 0x3710) as a
+  VIF stream. Walk it for VIFcode 0x4A (MPG) and all 18 overlays come out at
+  their VU load addresses, 13,872 bytes, matching m0's count.
+  `scripts/mpgwalk.py` extracts them, `scripts/vudis.py` disassembles.
+  `MSCAL 0x19B * 8 = 0xCD8`, so the census's pc0xcd8 is the mesh T&L program.
+  Findings in `evidence/2026-09-19-vu1-tl-semantics`:
+
+  - **No backface culling.** Zero OPMULA/OPMSUB in the whole 13,872 bytes and
+    no cross product, signed area or normal dot anywhere. `Striper`'s winding
+    correction is gated on `OneSided` and both callers pass 0
+    (`UpdateFacePacket` 0x43a9d8, `RndMesh::Save` 0x1f2af8). The 45-55% ADC
+    rate in older logs is strip restarts plus clip rejection, not culling. So
+    a triangle list from `Face[]` is a correct substitute for the strips.
+  - **Vertex colour is lit per vertex.** `RGBA = FTOI0(qw695 * vertexQw2)`,
+    where qw2 comes from a lighting subroutine VU1 JALRs at 0x0d10, its
+    address taken from qw688.x and chosen by `PsEnviron::Select 0x1c79c8` on
+    light count. It reads the per-vertex normal, which `UpdateFacePacket`
+    0x43ad14 always uploads at vertex qw1, plus up to three normalized light
+    directions and colours at qw681..687. `mColor` is qw690. A constant 0x80
+    is wrong for any lit mesh.
+  - **PRIM comes from the qw680 tag, and abe is not always 0.** VU1 only
+    patches NLOOP (`ISW.x` at 0x1180). `DrawShowing` builds the tag with
+    NREG 3, REGS 0x412 (ST, RGBAQ, **XYZF2**) and PRIM base 4;
+    `PsMat::Select` 0x43ee14..0x43ee7c ORs in IIP always, TME iff mat+0x134,
+    FGE from mat+0x128, and **ABE for every blend mode except 1** (0x43ee68
+    branches past the OR when blend == 1). FST is never set. A second tag at
+    qw994 is PRIM 5, a fan, for the clipper.
+  - **VU1 really clips and generates vertices.** `FCAND 0x03ffff` on the last
+    three CLIP groups routes any plane-touching triangle to a handler that
+    rejects outright only for the far plane (`FCAND 0x010410`) or all three
+    behind near (`FCOR 0xfdf7df`); everything else enters overlay 0x14d8,
+    which lerps position, uv and colour (`DIV Q, vf01w, vf07w` then
+    SUB/MULq/ADD at 0x1648..0x16a8) and kicks the result as a fan.
+  - **Fog is real.** VU1 computes `clamp(qw696.w * clip.w + qw697.w, 0, 255)`
+    into the .w lane and packs it as F in XYZF2. Those two w lanes are
+    exactly the ones `PsCam::Select` masks off with STMASK 0xC0C0C0C0 and
+    `PsEnviron::Select` writes with the complementary 0x3F3F3F3F. The ADC bit
+    is `vf21.w = 2048.0` added in before FTOI4, since 2048 * 16 = 0x8000.
 - No `RndCam.h` or `RndMat.h` in the decomp, so camera and material field
   layouts are not modelled beyond the frustum params.
 - `RndTex::Type` has 2 of N enumerators; palette and swizzle formats are

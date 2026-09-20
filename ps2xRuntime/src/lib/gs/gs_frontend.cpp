@@ -1,5 +1,6 @@
 #include <chrono>
 #include "runtime/gs/gs_frontend.h"
+#include "runtime/gs/ghpc_fixture.h"
 #include "runtime/gs/gs_cpu_backend.h"
 #include "ps2_log.h"
 #include "runtime/ps2_memory.h"
@@ -1991,6 +1992,11 @@ void GS::vertexKick(bool drawing)
 #endif
         if (g_ghpcTlCalMesh != 0u)
             ghpcTlCalNoteSubmit(batch);
+        // The fixture oracle: what VU1 produced for the draw currently open.
+        // Only live under GHPC_FIXTURE, and only in mode 2 where VU1 still
+        // draws, so this is off in every normal run.
+        if (ghpcFixtureActive())
+            ghpcFixtureNoteSubmit(batch);
         updatePreferredDisplaySourceForDraw(batch);
         m_backend->Submit(batch);
         recordDrawDebugEventUnlocked(needed);

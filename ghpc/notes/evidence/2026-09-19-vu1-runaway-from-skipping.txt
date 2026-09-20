@@ -1,0 +1,60 @@
+Skipping a mesh microprogram makes a different one run away.
+2026-09-19, build-debug (the census is compiled out of release, see below),
+GHPC_COUNTIN=0.5 GHPC_VU1_CENSUS=2000, 200s per arm, both arms held
+game_screen at rung 9/9 so the regime is the same.
+
+THE COMPARISON. Same binary, one env knob apart.
+
+  pc0x30b0            invocations   cut-offs       maxInstr   avgEbit
+  control                   1616    0 / 0M              708        609
+  GHPC_NATIVE_DRAW=1         662    5336 / 349M       65536      65536
+
+In the control pc0x30b0 terminates on its E-bit every time, in about 708
+instructions. With the native draw on, 5336 of its ~5998 invocations, 89%,
+run to the full 65536 cycle budget and are cut off, burning 349M cycles.
+
+The mesh T&L program is pc0xcd8 and it is NOT the victim: budget=0 in both
+arms. It is the program being skipped. Something else starves because of it.
+
+  control    pc0xcd8{ebit=196191/532M budget=0/0M maxInstr=15587}
+  mode 1     pc0xcd8{ebit=63934/162M budget=0/0M maxInstr=14635}
+
+pc0x30b0 is absent from the census at total=2000 and total=4000 and appears
+during gameplay, then accumulates fast: budget=3248 at total=66000, 4291 at
+68000, 5336 at 70000.
+
+WHY THIS IS THE ANSWER. It explains the profile
+(2026-09-19-native-draw-profile): VU1Interpreter::run holds 96% of GameThread
+in the arm where half the MSCALs are skipped, and doing less VU1 work made the
+run 6x slower. A program spinning to its cap is what that looks like.
+
+It also explains a correctness signal that came with it. The native-draw arm
+reports song_tick_advanced=no where the control reports yes, so the gameplay
+chain is not merely slow there. A native draw that skips a microprogram
+wholesale breaks state later programs depend on.
+
+WHAT TO LOOK AT NEXT. Whatever pc0x30b0 reads that a mesh draw's microprogram
+would have written. VU1 programs here are stateful across MSCALs: TOPS
+alternates base and base+ofst on every MSCAL (ps2_vu1_core.cpp:1316), VU
+registers persist, and VU1 patches NLOOP in place in the qw680 GIFtag
+(`ISW.x` at 0x1180). Extract pc0x30b0 with scripts/mpgwalk.py and read it with
+scripts/vudis.py. It is one of the larger overlays.
+
+The seam itself is not refuted. The MSCAL pairing is exact (drew=32768,
+dropped=0, queued=0) and the transform is subpixel against VU1's own output
+(2026-09-19-native-draw-seam). What is refuted is skipping the microprogram
+and doing nothing else. Either the skip has to preserve the side effects
+pc0x30b0 depends on, or the seam belongs at packet granularity rather than
+per MSCAL.
+
+MEASUREMENT TRAP, cost a round. GHPC_VU1_CENSUS is inside `#if GHPC_DIAG`
+(ps2_vu1_core.cpp:2767) and PS2X_GHPC_DIAG is OFF unless build.sh gets
+--debug. On a release build the census is compiled out and prints nothing,
+which reads exactly like zero cut-offs. It is not zero, it is absent. Every
+other [vu1/...] tap in that file has the same gate. NEXT.md now says so.
+
+Debug eerate is not comparable to the release numbers and is not used here:
+this arm's finding is the cut-off count, not speed. For the record the debug
+run reported 3.9 with the native draw on against 2.4 for the control, which
+is inverted from release and further reason to keep speed claims on release
+builds only.

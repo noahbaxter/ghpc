@@ -54,23 +54,72 @@ guest thread inside the store to D1_CHCR (`ps2_memory.cpp:2094`), so a mesh
 tag set at DrawFaces entry covers exactly that draw's submits. `GHPC_TL_CAL=N`
 turns it on.
 
-**Next: the draw itself.** Every input is now captured and exact. At
-`PsMesh::DrawFaces`, for a mesh whose geometry the host cache holds, skin the
-cached verts against the palette, project, and hand triangles to
-`GSCpuBackend`. Keep the PS2 path for cache misses and behind an env knob so
-both arms are the same binary. Pass is `eerate_pct` up on that binary with the
-rung still 9 and the gameplay chain alive (`BeatMatch::Poll` 0x1259c0,
-`PlayerMatcher::Poll` 0x117dd0), plus a frame capture that still shows the
-venue.
+**The native draw is written and it REGRESSED. Round 20, 2026-09-19.**
+Release, same binary both arms, `GHPC_COUNTIN=0.5`:
 
-Watch for: the palette is captured in `DrawShowing`, one draw ahead of the
-`DrawFaces` that consumes it, and the per-material loop calls `DrawFaces`
-several times per upload. A native draw must read the palette for the draw it
-is in, not the last one seen.
+    control, GHPC_NATIVE_DRAW unset               eerate 4.8   fps 2.93
+    mode 2, transform runs, submits nothing       eerate 4.9   fps 2.94
+    mode 1, transform submits, VU1 skipped        eerate 0.9   fps 0.45
 
-**The stored mark of 4.7 does not reproduce.** The tree as of the previous
-round measures 3.0 on this host. Re-measure the mark's own tree before
-claiming a speed win against it.
+**The cause is found and it is not the draw code.** Skipping a mesh
+microprogram makes a *different* microprogram run away
+(`notes/evidence/2026-09-19-vu1-runaway-from-skipping.txt`). Same build, both
+arms holding `game_screen`, `GHPC_VU1_CENSUS=2000` on `build-debug`:
+
+    pc0x30b0        invocations   cut-offs       maxInstr
+    control                1616   0 / 0M              708
+    native draw on          662   5336 / 349M       65536
+
+pc0x30b0 terminates on its E-bit in ~708 instructions every time in the
+control. With the native draw on, 89% of its invocations run to the full
+65536 cycle budget. The mesh T&L program pc0xcd8 shows `budget=0` in both
+arms, so the program being skipped is not the victim. The native arm also
+reports `song_tick_advanced=no` against the control's `yes`, so the gameplay
+chain is damaged, not merely slow.
+
+**What is proven and stays.** The MSCAL seam pairing is exact (`drew=32768`,
+`dropped=0`, `queued=0`) and the transform is subpixel against VU1's own
+submitted vertices, replayed offline: dx +0.027, dy +0.041, q -0.0000%
+against a 0.0625 quantisation floor. The seam is not refuted. Skipping a
+microprogram and doing nothing else is.
+
+**Next, pick one.** Either make the skip preserve the side effects pc0x30b0
+depends on, or move the seam to packet granularity at `PsRnd::FlushPacket`
+0x43e400 rather than per MSCAL. Start by extracting pc0x30b0 with
+`scripts/mpgwalk.py` and reading it with `scripts/vudis.py` to find what it
+consumes that a mesh draw would have written. VU1 state persists across
+MSCALs: TOPS alternates base and base+ofst (`ps2_vu1_core.cpp:1316`), VU
+registers carry over, and VU1 patches NLOOP in place in the qw680 GIFtag
+(`ISW.x` at 0x1180).
+
+**Four theories died on the way, do not re-chase them**
+(`notes/evidence/2026-09-19-native-draw-profile.txt`): the host transform
+being expensive (mode 2 measured 4.9 against 4.8), per-vertex
+`GS::writeRegister` cost (3.6x fewer triangles, speed unchanged), offscreen
+vertices clamped into the scissor (1.96M rejected, speed unchanged), and
+triangles straddling the screen edge (fixture measured 5 to 81 px bounding
+boxes, worst box 1% of the scissor). The profile settles it: `ghpcNativeDrawMscal`
+is 2% of GameThread and `VU1Interpreter::run` is 96%.
+
+**Iteration is no longer 6 minutes.** `GHPC_NATIVE_DRAW=2 GHPC_FIXTURE=<path>`
+captures real draws plus the primitives VU1 produced for them, and
+`scripts/fixreplay.sh` replays them through the same transform header the
+runtime uses and diffs against that oracle in under a second. Use it for the
+transform, clipping and lighting work instead of game runs.
+
+**The VU1 microcode is readable.** `.vutext` at vaddr 0x00437100, file offset
+0x338100, is a VIF stream; walk it for VIFcode 0x4A and all 18 overlays come
+out. Culling, lighting, PRIM flags, clipping and fog are answered in
+`notes/rnd-seam.md` and `notes/evidence/2026-09-19-vu1-tl-semantics.md`.
+Three of those contradict the current native draw: PRIM must come from the
+qw680 tag (ABE is set for every blend mode except 1, FGE is real), vertices
+are XYZF2 with fog rather than XYZ2, and colour is per-vertex lit rather than
+a 0x80 constant.
+
+**The stored 4.7 mark reproduces after all.** 2026-09-19, release, seven
+`[eerate]` samples spanning 4.7 to 4.8 (13.92 to 14.28 Mcycles/sec). The
+2026-09-11 note that it measured 3.0 stands as a record of that day, but the
+gap was the host, not the tree. Treat 4.8 as the current floor.
 
 Also done and still standing: the host mesh cache (99% of gameplay draws find
 their geometry host-side, `[ghpc/mesh/cache] hits=115314 misses=1024`) and all

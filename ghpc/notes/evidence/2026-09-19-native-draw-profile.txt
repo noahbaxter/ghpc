@@ -1,0 +1,82 @@
+Where mode 1 actually spends its time. 2026-09-19, release, 20s sample of
+GameThread during gameplay, GHPC_COUNTIN=0.5 GHPC_NATIVE_DRAW=1.
+macOS `sample`, /tmp/ghpc_prof.txt.
+
+This profile overturns four rounds of reasoning, all of which assumed the
+native draw's submit path was the cost. It is not. It is 2%.
+
+  GameThread total                16511 samples
+  VU1Interpreter::run             15919   96%
+    GSCpuBackend::Submit           7219   nested, reached via progressXgkick
+    GSCpuBackend::SampleTexture    2593   nested under Submit
+  ghpcNativeDrawMscal               330    2%
+  GS::writeRegisterUnlocked         356    2%
+
+The Main Thread is 14088 of 16512 samples in usleep inside EndDrawing, which
+is frame pacing and not work. GameThread is the whole story.
+
+THE HOT PATH, read off the tree:
+
+  EeScheduler::run
+    RndGroup::DrawShowing 0x1e33c8            9193
+      RndDrawable::Draw 0x43f5b8
+        PsMesh::DrawShowing 0x43f038          6858
+          PsRnd::FlushPacket 0x43e400         6856
+            DmaPacket::Send 0x43e6b8          6855
+              PS2Runtime::Store32
+                PS2Memory::writeIORegister
+                  processPendingTransfers
+                    processVIF1Data           6685
+                      the MSCAL callback      6684
+                        VU1Interpreter::run
+                          commitReadyPipelines 1313
+                          progressXgkick       1221
+                            GifArbiter::drain
+                              GS::processGIFPacket
+                                GS::vertexKick
+                                  GSCpuBackend::Submit
+
+So the rasteriser is reached through VU1's XGKICK, and roughly 45% of what
+looks like "VU1 time" is actually GS work underneath it. Bare VU1
+interpretation is about 8700 samples, the rasteriser about 7200.
+
+THE CONTRADICTION THIS EXPOSES. The counters for the same configuration say
+drew=32768 against vu1=36470, so about half the gameplay MSCALs are skipped
+and handled natively. Yet VU1 still holds 96% of the thread, and the arm as a
+whole is 6x slower than the control that runs VU1 on every MSCAL:
+
+  control, VU1 on every MSCAL      eerate 4.8
+  mode 1, VU1 on half the MSCALs   eerate 0.9
+
+Doing less VU1 work made the run slower. The only shape that fits is that
+skipping a microprogram makes the microprograms that follow more expensive.
+
+WHY THAT IS PLAUSIBLE. VU1 programs here are stateful across MSCALs. TOPS
+alternates base and base+ofst on every MSCAL (ps2_vu1_core.cpp:1316), VU
+registers persist, and VU1 patches NLOOP in place in the qw680 GIFtag
+(`ISW.x` at 0x1180, 2026-09-19-vu1-tl-semantics). A program entered with
+state a skipped predecessor should have written can run to the 65536 cycle
+budget instead of terminating. That is the same runaway failure mode that
+cost this project 3.6x before (2026-09-11-mfifo-drain-wrap), and
+commitReadyPipelines plus progressXgkick being the hot children is what a
+microprogram grinding to its cap looks like.
+
+Not yet confirmed. GHPC_VU1_CENSUS counts cut-offs and every run since the
+MFIFO fix has shown zero, so a nonzero count in mode 1 against zero in the
+control is the test. If both are zero this theory is dead too and the next
+lead comes from the profile, not from another guess.
+
+WHAT THIS RETIRES. Four theories, each tested and dead:
+
+  host transform is expensive       mode 2 measured 4.9 against control 4.8
+  per-vertex writeRegister cost     3.6x fewer triangles, speed unchanged
+  clamped offscreen triangles       1.96M rejected, speed unchanged
+  straddling triangles blow up      fixture: 5-81 px bboxes, worst box 1% of
+                                    the scissor, 2.5-3.0x waste, which is
+                                    just what triangle rasterisation costs
+
+PROCESS NOTE. A stray runner survived a stopped task because the run was
+launched in a detached ( ... &) subshell, so killing the wrapper orphaned
+progress.py and it kept cycling its retry attempts. The pgrep -x guard caught
+it and refused to measure. Launch runs directly, not detached, and keep the
+guard on every timed run.
