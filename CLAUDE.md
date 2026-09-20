@@ -6,6 +6,17 @@ source.
 
 Requires a user-supplied disc. No game data or recompiled output is committed.
 
+**`ghpc/NEXT.md` is the standing handoff. Read it first.** It carries the
+current state, the phase order and the working rules. Nothing about where the
+port stands is repeated here, because a second copy drifts: this file claimed
+"menus ~100% of realtime" for weeks after it stopped being true.
+
+    ghpc/NEXT.md            where things stand, what to do next, the rules
+    ghpc/BACKLOG.md         the queue
+    ghpc/notes/gotchas.md   symptoms that are not faults, tooling traps
+    ghpc/notes/decisions.md settled choices, so they are not re-litigated
+    ghpc/notes/             topic notes, which supersede both on their subject
+
 ## Target
 
 One native GH1+2+80s build with mod support and HID guitar controller input.
@@ -23,57 +34,20 @@ one is the scope of this project.
 3. **Input.** HID guitar support and calibration.
 
 Recomp provides the scaffold; decomp replaces it function by function. The build
-stays runnable throughout.
-
-### PS2 rather than Xbox 360
-
-GH2 also shipped on 360, and XenonRecomp is more mature than PS2Recomp
-(Unleashed Recompiled shipped on it; PS2Recomp has no completed game). PS2 was
-chosen on:
-
-- All three titles have symbolized debug builds. Only GH2 exists on 360.
-- One pipeline covers all three. Each reports 18 VU overlays, indicating a
-  shared engine and VU path.
-- GS and VU1 are the usual PS2 obstacles. GH2's VU microcode is ~28 KB across 18
-  named indexed overlays, under 1% of `.text`, and the game has a focus mode
-  that disables world rendering.
-
-A 360 copy is useful as a second build to diff against.
-
-## Stage
-
-**`ghpc/NEXT.md` is the standing handoff. Read it first; this section is only
-the one-paragraph version.**
-
-Boot, storage, RPC and fileio are done. Gameplay is reachable and renders
-correctly: venue, fretboard and gems, in
-`ghpc/notes/evidence/2026-09-11-gameplay-frame-59.png`. What is missing is
-speed and sound.
-
-    menus       ~100% of realtime
-    gameplay      4.9% of realtime, 2.98 fps
-    audio       none, no SPU2 exists
-
-The ceiling is measured rather than estimated. With `GHPC_VU1_OFF=1`, which
-stops VU1 running at all, the same binary reaches 100.1% and 59.15 fps and runs
-a song end to end. So VU1 interpretation is effectively the whole gameplay
-cost, and the recompiled EE code holds realtime on its own. That arm draws no
-geometry, so it is a ceiling, never a build.
-
-The target is a native Vulkan renderer at the `Rnd` seam, which deletes VU1,
-VIF1, GIF, MFIFO and the software rasteriser together. Vulkan native on Linux
-and Windows, MoltenVK on macOS. Phases R0 to R3 in `ghpc/NEXT.md`.
+stays runnable throughout. Why PS2 and not the 360 release: `notes/decisions.md`.
 
 ## Layout
 
 ```
 ghpc/               everything specific to this port
   scripts/build.sh  ELF -> C++ -> native binary. --from/--to run a slice.
+  scripts/play.sh   play it by hand. --ingame stops in a song.
   scripts/run.sh    launch (cwd must be work/ so the game resolves GEN/)
   scripts/checkrun.sh  run the debug build and assert boot still progresses
+  scripts/fixreplay.sh replay captured draws against VU1's own output, ~1s
   scripts/dtb.py    decrypt and inspect any DTB straight out of the ARK
   config/           stub-denylist.txt, symbols excluded from handler binding
-  notes/            milestone findings, m0..m5
+  notes/            findings, gotchas, decisions, evidence/
   reference/        gitignored: stills captured from the game
 ps2xRecomp/         upstream: the recompiler, ELF -> C++
 ps2xRuntime/        upstream: PS2 hardware emulation and host layer
@@ -83,6 +57,9 @@ third_party/        gitignored: shallow clones of reference projects
 ```
 
 ## Constraints
+
+Both of these break things silently when ignored. Everything else that bites is
+in `notes/gotchas.md`.
 
 **Name-collision binding.** PS2Recomp binds runtime handlers by symbol name. The
 ELF is symbolized and GH2 statically links Sony's libraries, so those names
@@ -96,33 +73,13 @@ port built on top. Engine changes are ordinary commits. Take upstream with
 rewrites the port's commits on every pull. Keep upstream directory names so
 rename detection stays cheap. Nothing has been submitted upstream yet.
 
-**Disk.** The ARK is 3.1 GB; reference clones reached 9 GB. `third_party/`
-clones are all re-clonable.
-
-**CHD format.** `chdman info` reports 2448-byte units, so `extractdvd` produces
-raw sectors rather than an ISO. Convert by taking the first 2048 bytes of each
-2448-byte unit. `CD001` then lands at 0x8000.
-
-**Magenta framebuffer** is the runtime's "GS never wrote a pixel" sentinel from
-`GenImageColor(..., MAGENTA)`, not a rendering fault.
-
-**Debug UI.** The runtime ships an ImGui panel with IOP/SIF, RPC History and
-File/CD tabs exposing IOP and file state.
-
-**Logging.** `PS2X_ENABLE_RUNTIME_LOGS=ON`, or `PS2X_ENABLE_AGRESSIVE_LOGS=ON`
-for a per-function call trace using symbol names. The latter covers 12,664
-functions.
-
 ## Build
 
 ```sh
 ./ghpc/scripts/build.sh              # full pipeline, ~5 min cold
 ./ghpc/scripts/build.sh --from=build # rebuild only
-./ghpc/scripts/run.sh --quiet
+./ghpc/scripts/play.sh               # main menu at t=6
 ```
 
-Requires cmake, ninja, ccache, pkg-config, llvm (`llvm-readelf`,
-`llvm-objdump`), chdman, 7z. Builds on arm64 macOS with no upstream changes.
-
-Linux is required for the decomp toolchain (32-bit GCC, i386 multiarch), and is
-the better host for rendering work since macOS OpenGL is capped at 4.1.
+Builds on arm64 macOS with no upstream changes. Toolchain and host
+requirements are in `notes/gotchas.md`.
