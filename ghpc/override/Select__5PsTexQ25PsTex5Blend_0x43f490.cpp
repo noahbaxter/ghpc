@@ -86,6 +86,77 @@ void ghpcTexLog(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t
         w[2], w[3], w[4], w[5], w[6]);
 }
 
+// The texture format census a native backend needs. GHPC_TEX_CENSUS=1.
+//
+// Called from 0x43f520, the instruction that reads +0x70 to send it, so the
+// image is post-patch: 0x43f4bc has already written TFX into bits 35..36 and
+// the render-target branch has already written TBP0. An entry hook reads
+// neither, which is why the histogram in rnd-seam.md is not a census.
+//
+// TEX0 field layout, GS manual:
+//   0..13  TBP0    14..19 TBW     20..25 PSM
+//   26..29 TW      30..33 TH      34     TCC    35..36 TFX
+//   37..50 CBP     51..54 CPSM    55     CSM    56..60 CSA   61..63 CLD
+//
+// PSM values that matter here: 0 PSMCT32, 2 PSMCT16, 19 PSMT8, 20 PSMT4.
+// The T8 and T4 ones are paletted, so CBP and CPSM are what a decoder needs
+// as much as PSM is.
+static void ghpcTexCensus(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
+    static const bool s_on = std::getenv("GHPC_TEX_CENSUS") != nullptr;
+    if (!s_on) return;
+
+    const uint64_t tex0 = READ64(self + 0x70u);
+    const uint32_t psm = (uint32_t)((tex0 >> 20) & 0x3Full);
+    const uint32_t tw = (uint32_t)((tex0 >> 26) & 0xFull);
+    const uint32_t th = (uint32_t)((tex0 >> 30) & 0xFull);
+    const uint32_t tcc = (uint32_t)((tex0 >> 34) & 0x1ull);
+    const uint32_t tfx = (uint32_t)((tex0 >> 35) & 0x3ull);
+    const uint32_t cpsm = (uint32_t)((tex0 >> 51) & 0xFull);
+    const uint32_t csm = (uint32_t)((tex0 >> 55) & 0x1ull);
+
+    // Counted by PSM, and the dimensions counted with them, because a decoder
+    // is written per format and the sizes say how much VRAM a cache needs.
+    static unsigned long long s_byPsm[64] = {0};
+    static unsigned long long s_byCpsm[16] = {0};
+    static unsigned long long s_tfx[4] = {0};
+    static unsigned long long s_csmNonZero = 0, s_tccNonZero = 0, s_calls = 0;
+    static uint32_t s_maxTw = 0, s_maxTh = 0;
+
+    ++s_calls;
+    ++s_byPsm[psm];
+    ++s_byCpsm[cpsm];
+    ++s_tfx[tfx];
+    s_csmNonZero += csm ? 1u : 0u;
+    s_tccNonZero += tcc ? 1u : 0u;
+    if (tw > s_maxTw) s_maxTw = tw;
+    if (th > s_maxTh) s_maxTh = th;
+
+    // Powers of two, so a long run reports a handful of times and a short one
+    // still reports at all.
+    if ((s_calls & (s_calls - 1)) != 0ull && (s_calls % 5000ull) != 0ull) return;
+
+    char psmBuf[256];
+    int off = 0;
+    for (uint32_t p = 0; p < 64u && off < (int)sizeof(psmBuf) - 24; ++p) {
+        if (s_byPsm[p] == 0ull) continue;
+        off += std::snprintf(psmBuf + off, sizeof(psmBuf) - (size_t)off, " %u=%llu", p, s_byPsm[p]);
+    }
+    char cpsmBuf[128];
+    int coff = 0;
+    for (uint32_t p = 0; p < 16u && coff < (int)sizeof(cpsmBuf) - 24; ++p) {
+        if (s_byCpsm[p] == 0ull) continue;
+        coff += std::snprintf(cpsmBuf + coff, sizeof(cpsmBuf) - (size_t)coff, " %u=%llu", p, s_byCpsm[p]);
+    }
+
+    std::fprintf(stderr,
+        "[ghpc/tex/census] selects=%llu psm{%s } cpsm{%s } tfx=%llu/%llu/%llu/%llu"
+        " tcc=%llu csm=%llu maxTW=%u maxTH=%u (max %ux%u)\n",
+        s_calls, psmBuf, cpsmBuf,
+        s_tfx[0], s_tfx[1], s_tfx[2], s_tfx[3],
+        s_tccNonZero, s_csmNonZero, s_maxTw, s_maxTh,
+        1u << s_maxTw, 1u << s_maxTh);
+}
+
 } // namespace
 
 // Function: Select__5PsTexQ25PsTex5Blend
@@ -268,6 +339,15 @@ label_43f51c:
     // 0x43f51c: 0x26102780  addiu       $s0, $s0, 0x2780
     ctx->pc = 0x43f51cu;
     SET_GPR_S32(ctx, 16, (int32_t)ADD32(GPR_U32(ctx, 16), 10112));
+    // The only honest place to read TEX0. GHPC_TEX_CENSUS=1.
+    //
+    // 0x43f4bc patches TFX into bits 35..36 and the render-target branch at
+    // 0x43f4c0 patches TBP0, both storing back to +0x70, so an entry hook
+    // reads the pre-patch image. That is why rnd-seam.md's PSM histogram
+    // (0, 2, 19, 20) is not a format census: it includes uninitialised first
+    // selects. This instruction is the read that goes to the GS, so the image
+    // here is the one the hardware sees. `this` is $s1.
+    ghpcTexCensus(rdram, ctx, runtime, GPR_U32(ctx, 17));
     // 0x43f520: 0xde260070  ld          $a2, 0x70($s1)
     ctx->pc = 0x43f520u;
     SET_GPR_U64(ctx, 6, READ64(ADD32(GPR_U32(ctx, 17), 112)));
