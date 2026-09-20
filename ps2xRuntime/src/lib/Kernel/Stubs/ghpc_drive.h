@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -120,6 +121,43 @@ namespace ghpc_drive
         if (settled) *settled = guestWord(rdram, kTheUI + kOffTransition) == 0u;
         if (screen == 0u) return std::string();
         return guestString(rdram, guestWord(rdram, screen + kOffScreenName));
+    }
+
+    // Where the speed reporters get the screen to tag their lines with.
+    //
+    // A frame rate is meaningless without the screen it was measured on, and
+    // progress.py has already been burned by exactly that: on 2026-09-10 it
+    // handed back the loading screen's 20.9% as the gameplay figure, because
+    // "last value seen" cannot tell the two apart. Tagging the line at the
+    // source is what makes the filter exact instead of a guess about timing.
+    //
+    // Written once per vblank off the scheduler thread, read by whichever
+    // thread is printing. Contention is two accesses per frame, so a plain
+    // mutex is cheaper than being clever.
+    inline std::mutex &screenMutex()
+    {
+        static std::mutex m;
+        return m;
+    }
+
+    inline std::string &screenSlot()
+    {
+        static std::string s;
+        return s;
+    }
+
+    inline void setCurrentScreen(const std::string &name)
+    {
+        std::lock_guard<std::mutex> lock(screenMutex());
+        screenSlot() = name;
+    }
+
+    // "none" rather than empty, so a tag is always a word and a log line never
+    // ends in a bare "screen=".
+    inline std::string taggedScreen()
+    {
+        std::lock_guard<std::mutex> lock(screenMutex());
+        return screenSlot().empty() ? std::string("none") : screenSlot();
     }
 
     class Driver

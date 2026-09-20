@@ -1,6 +1,7 @@
 #include "runtime/ee_scheduler.h"
 
 #include "runtime/ghpc_state.h"
+#include "Stubs/ghpc_drive.h"
 #include "ps2_log.h"
 #include "ps2_runtime_macros.h"
 
@@ -2393,6 +2394,101 @@ void EeScheduler::processEvent(const EeEvent &event)
         break;
     case EeEventType::VBlankStart:
         ++m_vsyncTick;
+        // The screen every speed reporter tags its line with. Read here because
+        // vblank is the one place already guaranteed to run once a frame with
+        // rdram in hand; the cost is three guest loads and a string compare.
+        ghpc_drive::setCurrentScreen(ghpc_drive::currentScreen(m_rdram, nullptr));
+
+        // GHPCCLOCK: game time against wall time. GHPC_CLOCKRATE=N, every N ticks.
+        //
+        // This is the playability gate's core number and it is deliberately not
+        // eerate. eerate measures how fast emulated cycles retire, so the moment
+        // the guest clock is driven off wall time it reads 100% by construction
+        // and stops being evidence. This reads the clock the game itself runs
+        // on, so it still reports slow motion when that change lands.
+        //
+        // TheTaskMgr is 0x5a5870 and mClocks is a pointer at +0x28. The clock
+        // array has stride 0x14 with mCurrent at +0x0c, both pinned by
+        // noteGameCall's UISeconds address: UISeconds is clock index 2 and sits
+        // at +0x34, and 2*0x14+0x0c is 0x34. kSeconds is index 0, so +0x0c.
+        //
+        // Read here rather than off PlayerMatcher::Poll because that only runs
+        // inside a song, and the menus are in slow motion too. This sees every
+        // screen, and it costs two guest loads a frame instead of a compare on
+        // every guest call.
+        {
+            static const int every = []() {
+                const char *e = std::getenv("GHPC_CLOCKRATE");
+                return e ? std::atoi(e) : 0;
+            }();
+            if (every > 0)
+            {
+                static auto firstAt = std::chrono::steady_clock::now();
+                static auto lastAt = firstAt;
+                static float lastGame = 0.0f;
+                static float lastUi = 0.0f;
+                static bool anchored = false;
+                static uint32_t ticks = 0;
+
+                if (++ticks >= (uint32_t)every)
+                {
+                    ticks = 0;
+                    constexpr uint32_t kTheTaskMgr = 0x005A5870u;
+                    const uint32_t clocks = ghpc_drive::guestWord(m_rdram, kTheTaskMgr + 0x28u);
+                    // Before the UI is up mClocks is null and the read would be
+                    // a number rather than a time. Say nothing instead.
+                    if (clocks >= 0x00100000u && clocks < 0x02000000u)
+                    {
+                        // All four clocks, because which one carries the time
+                        // depends on the screen: the menus run on UISeconds
+                        // (UIList polls it), the chart on Seconds and Beat. A
+                        // gate that watched only one would read a real zero on
+                        // half the run and call it a stopped clock.
+                        auto clockAt = [&](uint32_t index) {
+                            const uint32_t raw =
+                                ghpc_drive::guestWord(m_rdram, clocks + index * 0x14u + 0x0Cu);
+                            float v = 0.0f;
+                            std::memcpy(&v, &raw, sizeof(v));
+                            return v;
+                        };
+                        const float game = clockAt(0u);
+                        const float ui = clockAt(2u);
+                        const float beat = clockAt(1u);
+
+                        const auto nowAt = std::chrono::steady_clock::now();
+                        if (!anchored)
+                        {
+                            firstAt = nowAt;
+                            lastAt = nowAt;
+                            lastGame = game;
+                            lastUi = ui;
+                            anchored = true;
+                        }
+
+                        const double wall = std::chrono::duration<double>(nowAt - firstAt).count();
+                        const double wallDelta = std::chrono::duration<double>(nowAt - lastAt).count();
+                        // A backwards clock is a load or a reset, not a rate.
+                        auto rateOf = [&](double now, double then) {
+                            const double delta = now - then;
+                            return (wallDelta > 0.0 && delta >= 0.0) ? (delta / wallDelta) : -1.0;
+                        };
+                        const double gameRate = rateOf(game, lastGame);
+                        const double uiRate = rateOf(ui, lastUi);
+                        lastAt = nowAt;
+                        lastGame = game;
+                        lastUi = ui;
+
+                        std::fprintf(stderr,
+                                     "[ghpc/clock] game=%.3f ui=%.3f beat=%.3f wall=%.3f "
+                                     "rate=%.3f uirate=%.3f clocks=0x%08x screen=%s\n",
+                                     (double)game, (double)ui, (double)beat, wall,
+                                     gameRate, uiRate, clocks,
+                                     ghpc_drive::taggedScreen().c_str());
+                    }
+                }
+            }
+        }
+
         // Guest time is gated on m_eeCycle, so if emulated cycles advance
         // slower than real time the game plays in slow motion however high the
         // render frame rate is. Report the ratio. GHPC_EERATE=N, every N ticks.
@@ -2412,10 +2508,11 @@ void EeScheduler::processEvent(const EeEvent &event)
                     const double secs = std::chrono::duration<double>(now - last).count();
                     const uint64_t cycles = m_eeCycle - lastCycle;
                     std::fprintf(stderr,
-                                 "[eerate] %.1f%% of realtime  (%.2f Mcycles/sec vs %.2f nominal)  %.1f vblanks/sec\n",
+                                 "[eerate] %.1f%% of realtime  (%.2f Mcycles/sec vs %.2f nominal)  %.1f vblanks/sec  screen=%s\n",
                                  100.0 * (double)cycles / (secs * (double)kEeClockHz),
                                  (double)cycles / secs / 1e6, (double)kEeClockHz / 1e6,
-                                 ticks / secs);
+                                 ticks / secs,
+                                 ghpc_drive::taggedScreen().c_str());
                     last = now;
                     lastCycle = m_eeCycle;
                     ticks = 0;

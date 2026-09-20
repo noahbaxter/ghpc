@@ -9,6 +9,7 @@
 #include "runtime/ee_scheduler.h"
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
+#include "Kernel/Stubs/ghpc_drive.h"
 #include "Kernel/Stubs/GS.h"
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
@@ -616,8 +617,9 @@ static const std::vector<uint8_t> *UploadFrame(PS2Runtime *rt, uint32_t &outWidt
             {
                 const auto now = std::chrono::steady_clock::now();
                 const double secs = std::chrono::duration<double>(now - last).count();
-                std::fprintf(stderr, "[fps] %.2f frames/sec  %.2f ms/frame  over %d frames\n",
-                             frames / secs, (secs * 1000.0) / frames, frames);
+                std::fprintf(stderr, "[fps] %.2f frames/sec  %.2f ms/frame  over %d frames  screen=%s\n",
+                             frames / secs, (secs * 1000.0) / frames, frames,
+                             ghpc_drive::taggedScreen().c_str());
                 last = now;
                 frames = 0;
             }
@@ -1984,9 +1986,43 @@ void PS2Runtime::noteSongCall(uint8_t *rdram, R5900Context *ctx, uint32_t target
     {
         return;
     }
+
+    // Correct speed, measured. `ms` is the song position the whole chart is
+    // drawn from, so song seconds over wall seconds is 1.0 when the game is
+    // playing at the right rate and 0.43 when it is in slow motion. This is
+    // the number the playability gate turns on, and unlike eerate it survives
+    // the guest clock being driven off wall time: eerate would then read 100%
+    // by construction, while this still reports whatever the chart actually
+    // did.
+    //
+    // Instantaneous rather than cumulative, because the count-in and any
+    // reload sit in the average forever and hide what the run is doing now.
+    static auto firstAt = std::chrono::steady_clock::now();
+    static auto lastAt = firstAt;
+    static float lastMs = ms;
+    static bool anchored = false;
+    const auto nowAt = std::chrono::steady_clock::now();
+    if (!anchored)
+    {
+        firstAt = nowAt;
+        lastAt = nowAt;
+        lastMs = ms;
+        anchored = true;
+    }
+
+    const double wall = std::chrono::duration<double>(nowAt - firstAt).count();
+    const double wallDelta = std::chrono::duration<double>(nowAt - lastAt).count();
+    const double songDelta = ((double)ms - (double)lastMs) / 1000.0;
+    // A negative delta is a new song or a seek, not a rate. Report it as such
+    // rather than as a nonsense ratio.
+    const double rate = (wallDelta > 0.0 && songDelta >= 0.0) ? (songDelta / wallDelta) : -1.0;
+    lastAt = nowAt;
+    lastMs = ms;
+
     std::fprintf(stderr,
-                 "[ghpc/song] #%llu this=0x%08x ms=%.3f tick=%.3f\n",
-                 n, self, (double)ms, (double)tick);
+                 "[ghpc/song] #%llu this=0x%08x ms=%.3f tick=%.3f wall=%.3f rate=%.3f screen=%s\n",
+                 n, self, (double)ms, (double)tick, wall, rate,
+                 ghpc_drive::taggedScreen().c_str());
 }
 
 // GHPCGAME: why the chart never starts.
