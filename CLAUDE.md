@@ -40,12 +40,8 @@ stays runnable throughout. Why PS2 and not the 360 release: `notes/decisions.md`
 
 ```
 ghpc/               everything specific to this port
-  scripts/build.sh  ELF -> C++ -> native binary. --from/--to run a slice.
-  scripts/play.sh   play it by hand. --ingame stops in a song.
-  scripts/run.sh    launch (cwd must be work/ so the game resolves GEN/)
-  scripts/checkrun.sh  run the debug build and assert boot still progresses
-  scripts/fixreplay.sh replay captured draws against VU1's own output, ~1s
-  scripts/dtb.py    decrypt and inspect any DTB straight out of the ARK
+  scripts/          build.sh, play.sh, checkrun.sh, fixreplay.sh, dtb.py
+                    NEXT.md documents which loop to reach for
   config/           stub-denylist.txt, symbols excluded from handler binding
   notes/            findings, gotchas, decisions, evidence/
   reference/        gitignored: stills captured from the game
