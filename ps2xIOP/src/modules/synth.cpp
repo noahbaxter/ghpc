@@ -36,9 +36,19 @@ namespace ps2x::iop::detail
         // silently dropped.
         constexpr uint32_t kCmdTerminate = 1u;      // SynthEE::Terminate
         constexpr uint32_t kCmdStreamInfo = 0x190u; // StreamEE Poll, state 2
-        // Not handled, only counted. Believed to be the SPU sample chunk that
-        // SPUSendPoll (0x26e4c8) ships, 0x5000 bytes at a time; it is seen once
-        // per run because nothing acknowledges it, so the count is the probe.
+        // The SPU upload pair, read off SPUSendPoll 0x26e4c8 rather than
+        // inferred from the 0x5000 length:
+        //
+        //   SPUStartSend(src, len, dst)  0x26e3f0 stores src at 0x444D90,
+        //     len at 0x51A9A0 and the SPU RAM destination at 0x51A99C.
+        //   SPUSendPoll  0x26e4c8 returns early unless 0x444D90 is set and
+        //     0x444D94 (gSpuInFlight) is clear, then sets inflight, takes
+        //     min(0x5000, remaining) and issues
+        //       CtlClientCall<int>(0xC8, *(int*)0x51A99C)   the destination
+        //       CtlClientCall(0xC9, src, chunkLen)          the bytes
+        //     and advances src, dst and remaining by the chunk regardless of
+        //     any answer. So the ack paces the upload; it never gates data.
+        constexpr uint32_t kCmdSpuSetAddr = 0xc8u;
         constexpr uint32_t kCmdSpuChunk = 0xc9u;
 
         // IOP -> EE replies. These are indexes into CtlDispatch_impl's jump
@@ -52,12 +62,43 @@ namespace ps2x::iop::detail
         //   entry 14 -> 0x3EBA10  sw 1, 0x4130(this), the only writer of the
         //                         word SynthEE::Terminate spins on outside the
         //                         constructor.
+        //   entry 13 -> 0x3EBA00  jal SPUSetSendDone 0x26e4b8, which is the
+        //                         only writer that clears gSpuInFlight
+        //                         (0x444D94). Read out of the table at
+        //                         0x4EB680 (.rodata, file offset 0x3EC680),
+        //                         not inferred.
         constexpr uint32_t kReplyStreamOp = 2u;
+        constexpr uint32_t kReplySpuSendDone = 13u;
         constexpr uint32_t kReplyTerminated = 14u;
+
+        // Only one guest call fits in an RPC result, so when a flush carries
+        // several answerable records the highest rank wins. Terminate outranks
+        // everything because the EE is already spinning in it. StreamInfo
+        // outranks the SPU ack because it is a one-shot latch that gates the
+        // song load, while a missed SPU ack only leaves gSpuInFlight set and
+        // the next poll retries.
+        constexpr int kRankNone = 0;
+        constexpr int kRankSpuSendDone = 1;
+        constexpr int kRankStreamOp = 2;
+        constexpr int kRankTerminated = 3;
+
+        // Control arm on one binary: GHPC_SPU_ACK=0 restores the behaviour
+        // where nothing answers a chunk, so gSpuInFlight latches and the
+        // upload stops after the first one. Counting still runs, so both arms
+        // report the same line.
+        bool spuAckEnabled()
+        {
+            static const bool enabled = []() {
+                const char *value = std::getenv("GHPC_SPU_ACK");
+                return value == nullptr || value[0] != '0';
+            }();
+            return enabled;
+        }
 
         constexpr uint32_t kRecordHeaderBytes = 8u;
         constexpr uint32_t kMaxPayloadLogs = 8u;
         constexpr uint32_t kMaxUnknownLogs = 16u;
+        constexpr uint32_t kSpuChunkLogEvery = 32u;
 
         class SynthService final : public IopService
         {
@@ -83,6 +124,8 @@ namespace ps2x::iop::detail
                 m_recordsSeen = 0u;
                 m_spuChunks = 0u;
                 m_spuBytes = 0u;
+                m_spuSetAddrSeen = 0u;
+                m_spuDest = 0u;
             }
 
             [[nodiscard]] RpcResult handleRpc(const RpcRequest &request) override
@@ -101,14 +144,13 @@ namespace ps2x::iop::detail
                 result.signalNowaitCompletion = true;
 
                 // Only one guest call can be dispatched per RPC (RPC.cpp builds
-                // a single GuestInvocation from guestFunction). Both blocking
-                // commands are latched one-shots on the EE side, so in practice
-                // a flush carries at most one record that needs an answer, but
-                // when it carries more the extra is counted rather than hidden.
+                // a single GuestInvocation from guestFunction). A flush that
+                // carries several answerable records keeps the highest ranked
+                // one and counts the rest rather than hiding them.
                 uint32_t replyCmd = 0u;
                 uint32_t replyData = 0u;
                 uint32_t replyLen = 0u;
-                bool haveReply = false;
+                int replyRank = kRankNone;
                 unsigned unreplied = 0u;
 
                 uint32_t offset = 0u;
@@ -138,12 +180,16 @@ namespace ps2x::iop::detail
                     if (cmd == kCmdStreamInfo)
                     {
                         noteStreamInfo(payload, len);
-                        if (haveReply)
+                        if (replyRank >= kRankStreamOp)
                         {
                             ++unreplied;
                         }
                         else
                         {
+                            if (replyRank != kRankNone)
+                            {
+                                ++unreplied;
+                            }
                             // Entry 2's handler reads the stream id straight out
                             // of the buffer it is handed, so the EE's own
                             // payload can be passed through rather than copied
@@ -154,7 +200,7 @@ namespace ps2x::iop::detail
                             replyCmd = kReplyStreamOp;
                             replyData = payload;
                             replyLen = len;
-                            haveReply = true;
+                            replyRank = kRankStreamOp;
                         }
                     }
                     else if (cmd == kCmdTerminate)
@@ -163,24 +209,48 @@ namespace ps2x::iop::detail
                             std::lock_guard<std::mutex> lock(m_mutex);
                             ++m_terminateSeen;
                         }
-                        // Terminate outranks a stream answer: the EE is already
+                        // Terminate outranks everything: the EE is already
                         // spinning in it with the main thread, so nothing else
                         // it asked for can still matter.
-                        if (haveReply)
+                        if (replyRank != kRankNone)
                         {
                             ++unreplied;
                         }
                         replyCmd = kReplyTerminated;
                         replyData = 0u;
                         replyLen = 0u;
-                        haveReply = true;
+                        replyRank = kRankTerminated;
+                    }
+                    else if (cmd == kCmdSpuSetAddr)
+                    {
+                        // A bare int payload holding the SPU RAM destination
+                        // for the chunk that follows in the same flush. It
+                        // needs no answer; it is kept so the upload can be
+                        // reassembled in address order once there is something
+                        // to play it.
+                        noteSpuSetAddr(payload, len);
+                    }
+                    else if (cmd == kCmdSpuChunk)
+                    {
+                        noteSpuChunk(payload, len);
+                        if (!spuAckEnabled())
+                        {
+                            // Counted, deliberately unanswered.
+                        }
+                        else if (replyRank >= kRankSpuSendDone)
+                        {
+                            ++unreplied;
+                        }
+                        else
+                        {
+                            replyCmd = kReplySpuSendDone;
+                            replyData = 0u;
+                            replyLen = 0u;
+                            replyRank = kRankSpuSendDone;
+                        }
                     }
                     else
                     {
-                        if (cmd == kCmdSpuChunk)
-                        {
-                            noteSpuChunk(len);
-                        }
                         noteUnknown(cmd, len);
                     }
 
@@ -193,7 +263,7 @@ namespace ps2x::iop::detail
                     m_unrepliedRecords += unreplied;
                 }
 
-                if (haveReply)
+                if (replyRank != kRankNone)
                 {
                     {
                         std::lock_guard<std::mutex> lock(m_mutex);
@@ -215,6 +285,8 @@ namespace ps2x::iop::detail
                 metrics.push_back({"stream_info_requests", m_streamInfoSeen, false});
                 metrics.push_back({"replies_dispatched", m_repliesSent, false});
                 metrics.push_back({"records_left_unanswered", m_unrepliedRecords, false});
+                metrics.push_back({"spu_set_addr", m_spuSetAddrSeen, false});
+                metrics.push_back({"spu_chunks", m_spuChunks, false});
             }
 
         private:
@@ -252,14 +324,32 @@ namespace ps2x::iop::detail
                 m_host.log(LogLevel::Info, message.str());
             }
 
+            void noteSpuSetAddr(uint32_t payload, uint32_t len)
+            {
+                if (len < sizeof(uint32_t))
+                {
+                    return;
+                }
+                uint32_t dest = 0u;
+                if (!m_host.readGuest(payload, &dest, sizeof(dest)))
+                {
+                    return;
+                }
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_spuDest = dest;
+                ++m_spuSetAddrSeen;
+            }
+
             // Uncapped on purpose: the chunk count is the progress signal the
             // oracle reads, and a capped line stops moving exactly when it
-            // matters.
-            void noteSpuChunk(uint32_t len)
+            // matters. Logged every kSpuChunkLogEvery now that the count
+            // climbs, so a song's upload does not bury the rest of the log.
+            void noteSpuChunk(uint32_t payload, uint32_t len)
             {
                 uint32_t chunks = 0u;
                 uint64_t bytes = 0u;
                 uint32_t records = 0u;
+                uint32_t dest = 0u;
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
                     ++m_spuChunks;
@@ -267,10 +357,18 @@ namespace ps2x::iop::detail
                     chunks = m_spuChunks;
                     bytes = m_spuBytes;
                     records = m_recordsSeen;
+                    dest = m_spuDest;
+                    m_spuDest += len;
+                }
+                (void)payload;
+                if (chunks != 1u && (chunks % kSpuChunkLogEvery) != 0u)
+                {
+                    return;
                 }
                 std::ostringstream message;
                 message << "[ghpc/spu2] chunks=" << chunks << " bytes=" << bytes
-                        << " records=" << records;
+                        << " records=" << records << " dest=0x" << std::hex << dest
+                        << std::dec;
                 m_host.log(LogLevel::Info, message.str());
             }
 
@@ -308,6 +406,8 @@ namespace ps2x::iop::detail
             uint32_t m_recordsSeen = 0u;
             uint32_t m_spuChunks = 0u;
             uint64_t m_spuBytes = 0u;
+            uint32_t m_spuSetAddrSeen = 0u;
+            uint32_t m_spuDest = 0u;
         };
     }
 
