@@ -83,14 +83,24 @@ submitted vertices, replayed offline: dx +0.027, dy +0.041, q -0.0000%
 against a 0.0625 quantisation floor. The seam is not refuted. Skipping a
 microprogram and doing nothing else is.
 
-**Next, pick one.** Either make the skip preserve the side effects pc0x30b0
-depends on, or move the seam to packet granularity at `PsRnd::FlushPacket`
-0x43e400 rather than per MSCAL. Start by extracting pc0x30b0 with
-`scripts/mpgwalk.py` and reading it with `scripts/vudis.py` to find what it
-consumes that a mesh draw would have written. VU1 state persists across
-MSCALs: TOPS alternates base and base+ofst (`ps2_vu1_core.cpp:1316`), VU
-registers carry over, and VU1 patches NLOOP in place in the qw680 GIFtag
-(`ISW.x` at 0x1180).
+**Move the seam, do not attempt a fifth fix per MSCAL.**
+`notes/evidence/2026-09-19-vu1-shared-state.txt`. The coupling is named:
+qw1022 and qw1023 are a saved register frame, written by the mesh T&L program
+pc0xcd8 as eight `ISW` (one per lane) and restored by the clipper pc0x14d8
+into exactly the registers its loop exits test. Only those two overlays of 18
+touch it. Skipping the T&L program leaves that frame holding an older draw's
+counters.
+
+Double buffering was checked and cleared: the VIF1 MSCAL branch toggles DBF
+and advances tops whether or not the microprogram runs.
+
+Still open, and do not assume otherwise: the exact path from skipping pc0xcd8
+to starving pc0x30b0, which touches neither 1022 nor 1023. The qw1022/1023
+frame is the coupling that has been found, not necessarily the only one.
+
+The seam belongs where no program is half-skipped. Either `PsRnd::FlushPacket`
+0x43e400, replacing a whole packet, or the `Rnd` layer, where VU1 never runs
+and there is no shared state to corrupt.
 
 **Four theories died on the way, do not re-chase them**
 (`notes/evidence/2026-09-19-native-draw-profile.txt`): the host transform

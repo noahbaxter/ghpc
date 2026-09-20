@@ -108,14 +108,28 @@ damaged rather than merely slow.
 submitted vertices. What is refuted is skipping a microprogram and doing
 nothing else.
 
-**Next round, pick one.** Either make the skip preserve the state pc0x30b0
-depends on, or move the seam to packet granularity at `PsRnd::FlushPacket`
-0x43e400 instead of per MSCAL. Start by extracting pc0x30b0 with
-`scripts/mpgwalk.py` and reading it with `scripts/vudis.py`, and find what it
-consumes that a mesh draw would have written. VU1 state persists across
-MSCALs: TOPS alternates base and base+ofst (`ps2_vu1_core.cpp:1316`), VU
-registers carry over, and VU1 patches NLOOP in place in the qw680 GIFtag
-(`ISW.x` at 0x1180).
+**Move the seam. Do not attempt a fifth fix at MSCAL granularity.**
+`notes/evidence/2026-09-19-vu1-shared-state.txt`. VU1 programs here are
+mutually stateful and the coupling is now named: qw1022 and qw1023 are a saved
+register frame, written by the mesh T&L program pc0xcd8 as eight `ISW`, one
+per lane, and restored by the clipper pc0x14d8 into exactly the registers its
+loop exits test. Across all 18 overlays only those two touch it. Skipping the
+T&L program leaves that frame holding an older draw's counters.
+
+Double buffering was checked and is not the mechanism: the VIF1 MSCAL branch
+toggles DBF and advances tops whether or not the microprogram runs, so
+skipping `m_vu1.execute` does not desync the input buffers.
+
+What is not established is the exact path from skipping pc0xcd8 to starving
+pc0x30b0, which touches neither 1022 nor 1023 and takes its loop bound from a
+pointer chain rooted at qw688. Do not assume the qw1022/1023 frame is the only
+coupling. It is the one that has been found.
+
+So the seam belongs at a granularity where no program is half-skipped. Two
+candidates: `PsRnd::FlushPacket` 0x43e400, replacing a whole packet at once,
+or the `Rnd` layer, where VU1 is never invoked and there is no shared state to
+corrupt. The second is the native backend this file already sizes as the
+larger win.
 
 **Four theories died getting here, do not re-chase them**
 (`notes/evidence/2026-09-19-native-draw-profile.txt`): the host transform
