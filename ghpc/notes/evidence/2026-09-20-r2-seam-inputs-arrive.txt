@@ -1,0 +1,67 @@
+The Rnd seam's four inputs all arrive, measured. And a save state cannot yet
+be used to iterate on them.
+
+2026-09-20, release build, GHPC_RND_SCENE=1, game_screen.
+
+WHAT ARRIVES, per frame
+
+  [ghpc/scene] draws=504 verts=41912 tris=42162 skinned=310 noIndices=0
+               cam=1 bones=310 world=198
+
+  Steady across a whole song: about 500 draws, 42k verts, 42k triangles, no
+  mesh missing indices, a camera every frame, and every draw classified
+  skinned or unskinned. That is the whole geometry and transform side of the
+  seam, and it is enough to render from.
+
+WHERE THE GEOMETRY COMES FROM, and why not from the guest
+
+  PsMesh::Sync frees the engine-level vertex and face vectors, so every mesh
+  reports verts=0 faces=0 by the time DrawFaces runs. The host mesh cache in
+  the Sync override copies them out first, keyed by the owning PsMesh, and
+  DrawFaces looks them up. 99% hit rate, measured earlier.
+
+WHERE THE MATRICES COME FROM, and the trap
+
+  DrawShowing exposes g_ghpcInstWorld, which looks exactly like the per-draw
+  object matrix a backend wants. It is not. Its own file says so:
+
+    "the capture turned out to name a different mesh chain than the DrawFaces
+     it precedes, so it is a probe, not a seam input"
+
+  Wiring it produces geometry that renders, looks plausible, and is attached
+  to the wrong meshes. The matrices are instead read out of the scratchpad
+  packet at DrawFaces time by scanning back from the cursor at 0x70000008 for
+  a VIF header:
+
+    0x6C140294   20 quadwords at VU1 660, of which qw660..675 are four bone
+                 matrices. Its presence is what marks a draw skinned.
+    0x6C0402A4   4 quadwords at VU1 676, the unskinned world matrix.
+
+  Read there, they name the right draw by construction, and it is the path the
+  vertex transform was verified on to GS subpixel over 171 matched pairs.
+
+  The camera is different: qw696..703 are captured by Select__5PsCam into
+  g_ghpcCamQw, ungated, once per select. A global is the right shape for it
+  because it is per frame rather than per draw.
+
+THE GAP: a resumed state has no geometry
+
+  Same build, two arms, GHPC_RND_SCENE=1:
+
+    driven (pad driver)          draws=504  verts=41912  tris=42162
+    resumed (GHPC_STATE_LOAD)    draws=0    verts=0      tris=0
+                                 cam=1 bones=310 world=240
+
+  The transforms still arrive on the resumed arm, so nothing is broken. The
+  mesh cache is empty: it is filled at PsMesh::Sync, which ran before the save
+  was written, and the save state does not capture it.
+
+  This matters more than it looks. Save states were built this session to make
+  R2 iteration fast, and R2 is exactly the work that cannot use them until the
+  cache is carried. Serialising it is not hard, it is an unordered_map of byte
+  vectors keyed by a guest address, but until it is done a render change has
+  to be tested on a driven run.
+
+  It is also a second instance of the class that produced the pad bug: host
+  state that the guest's RDRAM implies but that lives in C++ and was not
+  written. Worth asking of every host-side cache before trusting a state.

@@ -64,22 +64,37 @@ still cost. `.vutext` is already extracted and disassembled if it comes to that.
 
 One exit criterion each. Do not start the next before it holds.
 
-**Save states are parked, deliberately.** They are half
-built: the container and the quiescent-frame gate are in and measured, the
-remaining chunks and the acceptance gate are in `BACKLOG.md` under Later.
+**Save states work, with one gap that matters.** Capture and resume both run:
 
-Parked because R0 and R1 do not need them. R0 presents a cleared frame and R1
-checks blit parity on the main menu at t=6; neither cares that gameplay is 25s
-away. R2 is the first phase that wants fast gameplay iteration, and even there
-`fixreplay.sh` already covers the risky part (is the skinned transform right)
-at about a second. What is left to build is also the hard part: hand-written
-serialisation of the scheduler tables, VU and GS registers, `PS2Memory` state
-and IOP state, then a determinism gate whose failure mode is an open-ended
-hunt for whatever went uncaptured.
+    GHPC_STATE_SAVE=song GHPC_STATE_SAVE_AT=2.0   capture once, unattended
+    GHPC_STATE_LOAD=song                          resume straight into the song
 
-Pick them up at the start of R2 if the drive is actually hurting by then.
-Never load a state that has not passed the determinism gate: one that loads
-and diverges later is worse than no state at all.
+A resume restores the chart exactly. `game`, `ui` and `beat` come back at the
+capture point and advance at the same rate as a driven run, +0.781 beat per
+sample against the driven arm's +0.781. The state is 132 MB, almost all of it
+the 128 MB devkit RDRAM. The save trigger keys on the song clock rather than
+wall time, so it lands at the same chart position every run; both captures
+fired at `song=2.016`.
+
+Chunks: RDRM, SPAD, VRAM, VUMM, EECX, SCHD (kernel tables), MEMS (IO
+registers, TLB, EE timers, GS registers, VIF1 residual), VUST (VU register
+files), PADS (pad ports).
+
+**The gap: the host mesh cache is not carried, so a resumed run has no
+geometry.** `GHPC_RND_SCENE=1` reports `draws=0` resumed against 504 driven.
+The cache fills at `PsMesh::Sync`, which ran before the save. Until it is
+serialised, a save state cannot be used to iterate on R2, which is the work it
+was built for.
+
+That is the same class as the pad bug this found: host state the guest's RDRAM
+implies but which lives in C++ and was never written. The pad announced itself
+by pausing the game. A cache does not announce anything, it just goes quiet.
+Ask it of every host-side cache before trusting a state.
+
+**There is still no determinism gate.** Matching clocks and a matching beat
+rate are encouraging, not proof. Treat a loaded state as a fast way back to
+roughly where you were, not as ground truth for a measurement, and do not
+judge R2's rendering output from one.
 
 ### R0: Vulkan bring-up, done 2026-09-20
 SDL3 window, Vulkan instance, device, swapchain, cleared frame, selected by
@@ -103,22 +118,41 @@ vulkan-validationlayers glslang`, plus `sdl3`. CMake takes an installed SDL3
 and falls back to FetchContent. `PS2X_ENABLE_VULKAN=OFF` drops the backend.
 `GHPC_VK_VALIDATION=1` turns the layer on.
 
-### R1: blit parity
-Present the existing software GS framebuffer as a Vulkan texture. Vulkan now
-owns the window; the picture must be identical because nothing about drawing
-changed.
+### R1: blit parity, done 2026-09-20
+The software GS framebuffer presents through Vulkan, verified by reading the
+swapchain back and comparing it to the bytes handed to `uploadFrame` on a 1:1
+blit: 10 checks, 0 mismatched pixels out of 229k to 287k, 0 validation errors,
+and no measurable speed cost against raylib (43.3% vs 43.5% eerate, same
+binary). `GHPC_VK_PARITY=N` runs the check every Nth frame.
 
-**Exit:** `play.sh --ingame` produces the same frame on both renderers, checked
-by frame signature, not by eye.
+The planned gate, the same frame signature on both renderers, is not
+measurable and was replaced deliberately. The signature in
+`gs_cpu_backend.cpp:1211` hashes the GS source buffer before either renderer
+touches it, so it is identical on both arms by construction, and this file
+already says hashes are not stable across runs. Neither form of that
+comparison can fail. The readback can, and it covers the swizzle, the filter
+and the rect, which a source-side hash never could.
 
-### R2: the Rnd seam
-Stub `PsRnd::FlushPacket` 0x43e400 so no packet reaches DMA, keeping its
-close/swap/reopen bookkeeping and dropping only the MFIFO spin and
-`DmaPacket::Send`. Own `PsMesh::DrawShowing` 0x43f038 for geometry and the
-three `Select` hooks already written for material, texture and camera. Upload
-to GPU buffers, do the skinned transform in a vertex shader.
+### R2: the Rnd seam, inputs in, pipeline not started
+The seam collects. `GHPC_RND_SCENE=1` gathers every draw and draws nothing,
+and on `game_screen` it reports about 500 draws, 42k verts and 42k triangles
+per frame with a camera and a transform on every one
+(`notes/evidence/2026-09-20-r2-seam-inputs-arrive.txt`). Contract in
+`include/ghpc_scene.h`.
 
-Everything this needs is already measured and in `notes/rnd-seam.md`: the host
+What is left is the Vulkan mesh pipeline itself, sequenced in `BACKLOG.md`:
+GPU buffers keyed by mesh, a vertex shader doing the measured transform, a
+depth buffer and a render pass, then material and texture, then stubbing the
+packet path last.
+
+Two things that will cost a day each if taken on trust. `g_ghpcInstWorld` is
+a probe and not a seam input, by its own file's account: it names a different
+mesh chain than the DrawFaces it precedes, so the object matrix comes from the
+packet scan in `ghpcSceneSubmit` instead. And a blunt `FlushPacket` stub
+wedges the guest, which `ghpc/override/FlushPacket__5PsRnd_0x43e400.cpp`
+records in full.
+
+Everything else this needs is measured and in `notes/rnd-seam.md`: the host
 mesh cache at 99% hit rate, the four backend inputs, and the vertex transform
 verified to GS subpixel over 171 matched pairs.
 

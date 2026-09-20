@@ -20,7 +20,59 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**R2: the Rnd seam.** Exit criteria in `NEXT.md`. R0 and R1 are done.
+**R2: the Rnd seam.** Exit criteria in `NEXT.md`. R0 and R1 are done, and R2's
+inputs are in: `GHPC_RND_SCENE=1` collects them and draws nothing.
+
+What arrives per frame on `game_screen`, measured
+(`notes/evidence/2026-09-20-r2-seam-inputs-arrive.txt`):
+
+    draws=504 verts=41912 tris=42162 skinned=310 noIndices=0 cam=1
+
+The contract is `ps2xRuntime/include/ghpc_scene.h`. The collector is
+`src/lib/gs/ghpc_scene.cpp`, the submit is `ghpcSceneSubmit` in the DrawFaces
+override, and the frame boundary is vblank in `EeScheduler`.
+
+**The bulk of R2 is the Vulkan mesh pipeline, and it is not started.** In
+order:
+
+1. Vertex and index buffers on the GPU, keyed by `meshKey`, reused across
+   frames. The host mesh cache already gives 99% hits, so a per-key upload
+   happens once and not per draw.
+2. A vertex shader doing the measured transform, from
+   `evidence/2026-09-12-bone-palette.txt`:
+
+       world = sum over b of weight[b] * (pos * Bone[b])   skinned, b = 0..3
+       world = pos * World                                 unskinned
+       clip  = world * M                M = qw700..703 as rows, row vectors
+       q     = 1 / clip.w
+       x,y,z = clip.xyz * q * qw696.xyz + qw697.xyz
+       s,t   = uv * q
+
+   `Vertex::weights` is the Vert's `Hmx::Color` at +0x20 and is bone weights,
+   not colour. The four sum to 1.0.
+3. A depth buffer and a render pass. R1 deliberately needed neither, so the
+   Vulkan backend has no pipeline object at all yet.
+4. Material and texture from the two `Select` hooks already written.
+5. Only then stub the packet path, so the rasteriser stops doing the work
+   twice. Note that a blunt `FlushPacket` stub wedges the guest (see Parked).
+
+VU1 semantics the pipeline must honour
+(`evidence/2026-09-19-vu1-tl-semantics.md`): PRIM comes from the qw680 tag
+with ABE set for every blend mode except 1, vertices are XYZF2 with fog rather
+than XYZ2, colour is per-vertex lit rather than a 0x80 constant, and there is
+no backface culling anywhere in the 13,872 bytes, so a triangle list off
+`Face[]` is a correct substitute for the strips.
+
+**Do not use `g_ghpcInstWorld` as the object matrix.** DrawShowing's own file
+calls it a probe and not a seam input, because it names a different mesh chain
+than the DrawFaces it precedes. The matrices come from the packet scan in
+`ghpcSceneSubmit`, which names the right draw by construction.
+
+**Save states cannot iterate R2 yet.** A resumed run reports `draws=0` while
+a driven run on the same build reports 504: the host mesh cache is filled at
+`PsMesh::Sync`, which ran before the save, and the state does not carry it.
+Serialising it is an unordered_map of byte vectors keyed by a guest address.
+Until that lands, a render change has to be tested on a driven run.
 
 R1 landed with a different gate than the one written here, deliberately. The
 planned check was the same frame on both renderers by frame signature, and that
