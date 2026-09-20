@@ -36,6 +36,12 @@ LADDER = [
     "bootup_load", "cut_scene_screen", "guitar_help_screen", "splash_screen",
     "main_screen", "qp_selsong_screen", "qp_diff_screen", "loading_screen",
     "game_screen",
+    # Reached first on 2026-09-19 under GHPC_VU1_OFF. Losing is not the goal,
+    # but arriving here at all means a song ran from StartGame to its end
+    # inside the run cap, which no arm had managed before. It ranks above
+    # game_screen because sitting on game_screen is strictly less than getting
+    # off it, and it un-saturates a ladder that had nothing left to say.
+    "lose_screen",
 ]
 RUNG = {name: i + 1 for i, name in enumerate(LADDER)}
 

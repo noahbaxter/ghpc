@@ -1,0 +1,60 @@
+TURNING VU1 OFF ENTIRELY REACHES 100% OF REALTIME AND 59 FPS
+
+2026-09-19, release build, GHPC_VU1_OFF added at both VU1 entry points in
+ps2_runtime.cpp. Measured with ghpc/scripts/progress.py, 300s per arm, 60s
+hold.
+
+    control      GHPC_VU1_OFF unset    eerate 4.9    fps 2.98
+    treatment    GHPC_VU1_OFF=1        eerate 100.1  fps 59.15
+
+The treatment arm also ran a song from StartGame to its end and arrived at
+`lose_screen`, a screen no arm had ever reached inside the run cap. It is now
+rung 10 in progress.py's LADDER. Losing is expected with no input driving it;
+getting there at all is the result.
+
+This confirms the sizing in NEXT.md rather than refuting it. VU1 interpretation
+is not merely the largest term, it is effectively the whole gameplay cost. With
+it gone the recompiled EE code holds full realtime on its own, which is what
+2026-09-11-vu1-profile.txt implied when it could barely find EE code in the
+profile at all.
+
+THE FIRST ATTEMPT AT THIS MEASUREMENT WAS WRONG, AND HOW
+
+The knob initially gated only `setVu1MscalCallback`. VU1 has a second entry,
+`setVu1MscntCallback`, which calls `m_vu1.resume(...)`. MSCNT resumes a
+stopped program, so skipping starts while still resuming ran VU1 from
+whatever PC and state the last real program left behind. That is a selective
+skip wearing a total skip's name, and it measured:
+
+    treatment, MSCAL gated only          eerate 0.8    fps 0.49
+
+which was briefly written up here as a refutation of the whole seam. It was
+MEASUREMENT_FAILED. The tell was in the profile: `VU1Interpreter::run` still
+held about 3000 GameThread samples in an arm that claimed not to run VU1. A
+knob that turns a subsystem off has to be checked against a profile showing
+the subsystem gone, not against the number it produces.
+
+Gate MSCAL and MSCNT together or neither.
+
+WHAT THIS SAYS ABOUT ROUND 20
+
+Round 20's native draw regressed to eerate 0.9, and the broken half-skip here
+landed at 0.8. Those are the same failure, and it is the failure mode round 20
+named: a microprogram entered with state a skipped predecessor should have
+written. The qw1022/1023 register frame in
+2026-09-19-vu1-shared-state.txt stands.
+
+The correct reading is that a *selective* skip at MSCAL granularity is
+unworkable, exactly as the backlog already concluded, while removing VU1
+wholesale is worth roughly 20x. The seam belongs where no program is ever
+half-skipped.
+
+KNOWN DEFECT IN THE CONTROL MEASUREMENT
+
+The 4.9 control above was taken on the immediately preceding binary, which
+differs from the current one only by the cached `ghpcVu1Off()` bool check.
+Two control runs on the current binary ended on game_screen but emitted no
+`[eerate]` line on it at all, so progress.py reported no eerate_pct. A
+control that cannot produce its own number is a reporter defect and should be
+fixed before the next speed claim: at 2.98 fps a run can sit on game_screen
+for the whole hold without the reporter's interval landing on it.

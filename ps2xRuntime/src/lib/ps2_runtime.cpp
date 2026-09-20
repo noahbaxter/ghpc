@@ -771,6 +771,19 @@ ps2x::iop::DebugSnapshot PS2Runtime::iopDebugSnapshot() const
     return m_iopSubsystem->debugSnapshot();
 }
 
+// Ceiling measurement, not a feature. GHPC_VU1_OFF=1 stops VU1 running at
+// all, which is what a native Rnd backend does by never invoking it. It must
+// gate MSCAL and MSCNT together: skipping starts while still resuming is a
+// selective skip, and a selective skip is what collapsed round 20.
+static bool ghpcVu1Off()
+{
+    static const bool off = []() {
+        const char *e = std::getenv("GHPC_VU1_OFF");
+        return e != nullptr && e[0] != '0';
+    }();
+    return off;
+}
+
 bool PS2Runtime::syncCoreSubsystems()
 {
     uint8_t *const rdram = m_memory.getRDRAM();
@@ -818,6 +831,15 @@ bool PS2Runtime::syncCoreSubsystems()
                                      // needs is already latched: they went out as
                                      // GIF A+D through VIF1 DIRECT ahead of this
                                      // MSCAL. Off unless GHPC_NATIVE_DRAW is set.
+                                     //
+                                     // GHPC_VU1_OFF, see ghpcVu1Off above. The
+                                     // MSCNT callback gates on it too; skipping
+                                     // one and not the other is a selective skip.
+                                     if (ghpcVu1Off())
+                                     {
+                                         cpuContext->vu0_vpu_stat &= ~0x0600u;
+                                         return;
+                                     }
                                      if (ghpcNativeDrawMscal(m_gs))
                                      {
                                          // No microprogram ran, so neither stop
@@ -844,6 +866,17 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
+                                     // MSCNT resumes a stopped program. Under
+                                     // GHPC_VU1_OFF no program was ever started,
+                                     // so resuming here would run from whatever
+                                     // PC and state the last real run left, which
+                                     // is the selective-skip pathology the knob
+                                     // exists to avoid. Skip both or neither.
+                                     if (ghpcVu1Off())
+                                     {
+                                         cpuContext->vu0_vpu_stat &= ~0x0600u;
+                                         return;
+                                     }
                                      m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
                                                   m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
                                                   m_gs, &m_memory, top, itop, 65536);
