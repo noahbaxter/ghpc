@@ -50,6 +50,23 @@ still cost. `.vutext` is already extracted and disassembled if it comes to that.
 
 One exit criterion each. Do not start the next before it holds.
 
+**Save states are parked, deliberately, and start R0 instead.** They are half
+built: the container and the quiescent-frame gate are in and measured, the
+remaining chunks and the acceptance gate are in `BACKLOG.md` under Later.
+
+Parked because R0 and R1 do not need them. R0 presents a cleared frame and R1
+checks blit parity on the main menu at t=6; neither cares that gameplay is 25s
+away. R2 is the first phase that wants fast gameplay iteration, and even there
+`fixreplay.sh` already covers the risky part (is the skinned transform right)
+at about a second. What is left to build is also the hard part: hand-written
+serialisation of the scheduler tables, VU and GS registers, `PS2Memory` state
+and IOP state, then a determinism gate whose failure mode is an open-ended
+hunt for whatever went uncaptured.
+
+Pick them up at the start of R2 if the drive is actually hurting by then.
+Never load a state that has not passed the determinism gate: one that loads
+and diverges later is worse than no state at all.
+
 ### R0: Vulkan bring-up
 raylib is OpenGL-only and owns the window today (`ps2_runtime.cpp`,
 `ps2_debug_panel.cpp`, behind the `ps2_host_backend` INTERFACE target). Vulkan
