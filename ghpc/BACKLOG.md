@@ -41,6 +41,18 @@ Still unsettled from R1: whether ImGui keeps the raylib path (rlImGui) or moves
 to the Vulkan backend. The Vulkan path has no debug panel and no pad input at
 all, since both are raylib's and `IsWindowReady()` is false there.
 
+**The R2 ceiling arm is not measured yet, and the blunt version of it is a
+dead end.** Returning early from `PsRnd::FlushPacket` wedges the guest: `ui`
+froze at 0.505 for 90s while `eerate` read 100.0% of realtime, and nothing past
+`main_screen` was reachable. The reason is in
+`ghpc/override/FlushPacket__5PsRnd_0x43e400.cpp`, which keeps the knob only as
+a recorded dead end. A surgical stub has to keep the bookkeeping calls and drop
+only the MMIO kick and the spin.
+
+Until that exists, the live-guest proxy for the size of the win is
+`GHPC_VBLANK_SCALE=4`, which rasterises a quarter of the frames and takes
+gameplay from 0.050 to 0.192 with the chart still advancing.
+
 R2 is where the speed arrives, and everything it needs is already measured:
 
 - Host mesh cache, 99% of gameplay draws find geometry host-side
