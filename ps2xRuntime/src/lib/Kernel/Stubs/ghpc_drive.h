@@ -308,6 +308,9 @@ namespace ghpc_drive
             m_enabled = true;
             parseRules(env);
             if (const char *d = std::getenv("GHPC_PAD_DRIVE_DELAY")) m_bootDelay = std::atof(d);
+            // Seconds to sit on each screen before the first press. Raise it
+            // to let GHPC_STATE_SAVE_SCREENS catch every screen on the way.
+            if (const char *s = std::getenv("GHPC_PAD_DRIVE_SETTLE")) m_settleDelay = std::atof(s);
             std::fprintf(stderr, "[drive] enabled, %zu rule(s), fallback=0x%04x\n",
                          m_rules.size(), m_fallback);
         }

@@ -259,6 +259,10 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent)
     ghpcCdSerializeState(w);
     w.endChunk();
 
+    w.beginChunk("GSST");
+    runtime.gs().serializeForState(w);
+    w.endChunk();
+
     if (!schedulerWritten)
     {
         std::fprintf(stderr,
@@ -360,6 +364,15 @@ bool ghpcStateLoad(PS2Runtime &runtime, const std::string &slot)
     {
         std::fprintf(stderr, "[ghpc/state] %s has no CDFS chunk; a streamed song will stall "
                              "on its next disc read\n", path.c_str());
+    }
+    if (r.seekChunk("GSST"))
+    {
+        if (!runtime.gs().deserializeForState(r)) return false;
+    }
+    else
+    {
+        std::fprintf(stderr, "[ghpc/state] %s has no GSST chunk; the software GS resumes with "
+                             "reset drawing state\n", path.c_str());
     }
 
     if (!r.ok())

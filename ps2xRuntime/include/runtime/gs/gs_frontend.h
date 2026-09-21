@@ -124,6 +124,14 @@ public:
         return m_ctx[(index != 0) ? 1 : 0].frame;
     }
     GSDebugSnapshot getDebugSnapshot() const;
+
+    // The drawing state a save state has to carry: both contexts, PRIM,
+    // the current vertex, the transfer registers and the display source.
+    // VRAM and the privileged registers are saved elsewhere; without this a
+    // resumed menu that set any of it once drew with reset defaults.
+    void serializeForState(class GhpcStateWriter &w) const;
+    bool deserializeForState(class GhpcStateReader &r);
+
     std::vector<GSDebugHistoryEntry> getDebugHistory() const;
     void clearDebugHistory();
     bool isDebugHistoryPaused() const;

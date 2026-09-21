@@ -4,6 +4,8 @@
 #include "runtime/gs/gs_cpu_backend.h"
 #include "ps2_log.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/ghpc_state.h"
+#include <type_traits>
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -235,6 +237,55 @@ const uint8_t *GS::lockDisplaySnapshot(uint32_t &outSize)
 
     outSize = static_cast<uint32_t>(m_displaySnapshot.size());
     return m_displaySnapshot.data();
+}
+
+// Every field written by pod() below has to be plain data; a pointer or a
+// container in one would save an address that means nothing after a load.
+static_assert(std::is_trivially_copyable<GSContext>::value, "GSContext must be POD to save");
+static_assert(std::is_trivially_copyable<GSPrimReg>::value, "GSPrimReg must be POD to save");
+static_assert(std::is_trivially_copyable<GSVertex>::value, "GSVertex must be POD to save");
+static_assert(std::is_trivially_copyable<GSFrameReg>::value, "GSFrameReg must be POD to save");
+static_assert(std::is_trivially_copyable<GSBitBltBuf>::value, "GSBitBltBuf must be POD to save");
+
+void GS::serializeForState(GhpcStateWriter &w) const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    w.pod(m_ctx);
+    w.pod(m_prim);
+    w.pod(m_primRegister);
+    w.pod(m_prmodeRegister);
+    w.pod(m_curR); w.pod(m_curG); w.pod(m_curB); w.pod(m_curA);
+    w.pod(m_curQ); w.pod(m_curS); w.pod(m_curT);
+    w.pod(m_curU); w.pod(m_curV);
+    w.pod(m_curFog); w.pod(m_fogR); w.pod(m_fogG); w.pod(m_fogB);
+    w.pod(m_prmodecont); w.pod(m_pabe);
+    w.pod(m_scanmsk); w.pod(m_dimx); w.pod(m_dthe); w.pod(m_colclamp);
+    w.pod(m_texa); w.pod(m_texclut);
+    w.pod(m_bitbltbuf); w.pod(m_trxpos); w.pod(m_trxreg); w.pod(m_trxdir);
+    w.pod(m_vtxQueue); w.pod(m_vtxCount); w.pod(m_vtxIndex);
+    w.pod(m_lastDisplayBaseBytes);
+    w.pod(m_preferredDisplaySourceFrame);
+    w.pod(m_preferredDisplayDestFbp);
+    w.pod(m_hasPreferredDisplaySource);
+}
+
+bool GS::deserializeForState(GhpcStateReader &r)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+    return r.pod(m_ctx) && r.pod(m_prim) && r.pod(m_primRegister) && r.pod(m_prmodeRegister) &&
+           r.pod(m_curR) && r.pod(m_curG) && r.pod(m_curB) && r.pod(m_curA) &&
+           r.pod(m_curQ) && r.pod(m_curS) && r.pod(m_curT) &&
+           r.pod(m_curU) && r.pod(m_curV) &&
+           r.pod(m_curFog) && r.pod(m_fogR) && r.pod(m_fogG) && r.pod(m_fogB) &&
+           r.pod(m_prmodecont) && r.pod(m_pabe) &&
+           r.pod(m_scanmsk) && r.pod(m_dimx) && r.pod(m_dthe) && r.pod(m_colclamp) &&
+           r.pod(m_texa) && r.pod(m_texclut) &&
+           r.pod(m_bitbltbuf) && r.pod(m_trxpos) && r.pod(m_trxreg) && r.pod(m_trxdir) &&
+           r.pod(m_vtxQueue) && r.pod(m_vtxCount) && r.pod(m_vtxIndex) &&
+           r.pod(m_lastDisplayBaseBytes) &&
+           r.pod(m_preferredDisplaySourceFrame) &&
+           r.pod(m_preferredDisplayDestFbp) &&
+           r.pod(m_hasPreferredDisplaySource);
 }
 
 GSDebugSnapshot GS::getDebugSnapshot() const

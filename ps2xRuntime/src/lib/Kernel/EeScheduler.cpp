@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <iostream>
+#include <unordered_set>
 #include <cassert>
 #include <cstring>
 #include <cstdlib>
@@ -2962,6 +2963,39 @@ void EeScheduler::processEvent(const EeEvent &event)
                         ghpcStateRequestSave(slot);
                         armed = false;
                     }
+                }
+            }
+        }
+
+        // GHPC_STATE_SAVE_SCREENS=1 saves slot `menu_<screen>` once per
+        // distinct screen, after the screen has held for
+        // GHPC_STATE_SAVE_SETTLE vblanks (default 120), so its intro has
+        // played out. Menus have no song clock to key on, and a screen that
+        // holds still is the same picture on every load, which is what makes
+        // two renderers comparable on it. Works under the pad driver or by
+        // hand: navigate the menus and each one lands in work/states.
+        {
+            static const bool on = std::getenv("GHPC_STATE_SAVE_SCREENS") != nullptr;
+            static const int settle = []() {
+                const char *e = std::getenv("GHPC_STATE_SAVE_SETTLE");
+                return e ? std::atoi(e) : 120;
+            }();
+            static std::string current;
+            static int held = 0;
+            static std::unordered_set<std::string> saved;
+            if (on)
+            {
+                const std::string screen = ghpc_drive::taggedScreen();
+                if (screen != current)
+                {
+                    current = screen;
+                    held = 0;
+                }
+                else if (++held == settle && screen != "none" && saved.insert(screen).second)
+                {
+                    std::fprintf(stderr, "[ghpc/state] arming save 'menu_%s' after %d vblanks\n",
+                                 screen.c_str(), settle);
+                    ghpcStateRequestSave("menu_" + screen);
                 }
             }
         }
