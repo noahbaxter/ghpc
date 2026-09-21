@@ -133,17 +133,101 @@ already says hashes are not stable across runs. Neither form of that
 comparison can fail. The readback can, and it covers the swizzle, the filter
 and the rect, which a source-side hash never could.
 
-### R2: the Rnd seam, inputs in, pipeline not started
-The seam collects. `GHPC_RND_SCENE=1` gathers every draw and draws nothing,
-and on `game_screen` it reports about 500 draws, 42k verts and 42k triangles
-per frame with a camera and a transform on every one
-(`notes/evidence/2026-09-20-r2-seam-inputs-arrive.txt`). Contract in
-`include/ghpc_scene.h`.
+### R2: the Rnd seam, geometry on the GPU, exit not met
+**Steps 1 to 3 are in, and the depth half of step 4 with them.** Gameplay
+geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
+measured transform in a vertex shader, a depth buffer and a render pass.
+Every number below, and the knobs, are in
+`notes/evidence/2026-09-20-r2-vulkan-mesh-pipeline.txt`.
 
-What is left is the Vulkan mesh pipeline itself, sequenced in `BACKLOG.md`:
-GPU buffers keyed by mesh, a vertex shader doing the measured transform, a
-depth buffer and a render pass, then material and texture, then stubbing the
-packet path last.
+    GHPC_VK_MESH=1   native geometry over the software blit
+    GHPC_VK_MESH=2   native only, no blit, clear to dark grey
+    GHPC_VK_SHOT=N   write the presented swapchain to a PPM every Nth frame
+    GHPC_VK_SHOT_SCREEN=game_screen   hold the shots until gameplay
+
+Release, 260s driven, on `game_screen`:
+
+    submitted=537 drawn=537 tris=41689 cached=536 hits=7442368 misses=536
+
+**536 uploads in a 15,499-frame run.** Every mesh reaches the GPU once and is
+drawn from its own buffers after that, which is what step 1 existed to do.
+`drawn == submitted` on every frame, so no draw is being silently discarded
+once it arrives.
+
+`GHPC_VK_SHOT` is the change that makes this phase judgeable at all. The
+picture is the evidence and a log line cannot be one; before it existed,
+checking a render change meant watching the window.
+
+**The picture is not verified against the software path yet, and the attempt
+to do it produced two opposite wrong answers.** Read
+`notes/gotchas.md`, "Screenshots pair on serial", before running that
+comparison. In short: shots were paired by index and then by present frame,
+neither of which is a chart position, and coverage moves about 0.2 iou over
+240 present frames as the chart advances. Mispaired shots therefore gave a
+large, smooth, entirely convincing difference between two depth modes, held
+across seven pairings, and it was the pairing error. `[ghpc/vk/shot]` now
+carries `serial=`, the guest frame, which is the only field two runs pair on.
+Capturing on a serial interval rather than a present-frame interval is the
+piece still missing.
+
+`nvOnly` was large in every arm, 45k of about 208k native pixels, so the
+native path covers ground the software path leaves empty. Most likely the
+alpha test, which this pipeline ignores completely (TEST_1 bits 0..3, ATE and
+ATST), so geometry the GS punches out arrives solid. Cheap to test, and the
+fields are already in the image being read.
+
+**What settled the depth question was a log, not a picture.**
+`[ghpc/vk/pipeline]` prints the resolved compare op and write flag for every
+pipeline created, at most 32 of them, and one 60s run shows ZTST mapping
+through and ZMSK turning the write off where it is set:
+
+    ztst=1 zmsk=1 depthMode=3 compare=7 write=0     compare 7 is ALWAYS
+    ztst=3 zmsk=0 depthMode=3 compare=4 write=1     compare 4 is GREATER
+
+So `GHPC_VK_MESH_DEPTH` defaults to 3, the material's own state, because that
+is what the hardware does. Whether a forced state gives a better picture is
+**open**; no coverage number from this session bears on it.
+
+**The transform is proved, offline, in about a second.**
+`ghpc/tools/vkxform.cpp` reimplements the shader's arithmetic and compares it
+to the calibrated `ghpc_transform.h` over 19,075 random inputs: worst relative
+error 2.2e-05. It exists because the shader deliberately does *not* divide by
+w, so it is a different expression of the same transform. Run it before
+suspecting the transform of anything.
+
+    c++ -std=c++17 -O2 -I ps2xRuntime/include -o /tmp/vkxform ghpc/tools/vkxform.cpp
+
+**The seam drops 1.08% of draws and none for want of faces.**
+`[ghpc/scene/drop] served=356167 cacheMiss=3833 noFaces=0`. The noFaces=0 is
+the useful half: every mesh the host cache holds has usable `Face[]`, so the
+fretboard is not missing because its triangles live in the PS2 packet. The
+1.08% is lost at `PsMesh::Sync`, before the seam, which is the
+mutable-geometry case `notes/rnd-seam.md` already names.
+
+**The first picture found a real bug, and it was not the transform.** One
+uniform depth state for every draw put a single surface over 87% of the frame.
+The cause is in `PsMat::Select`'s own registers: `TEST_1` at +0x148 carries
+ZTE and ZTST, `ZBUF_1` at +0x158 carries ZMSK, and a PS2 overlay is drawn with
+ZTST always and ZMSK set so it covers the frame without touching depth. A
+backend that ignores ZMSK writes depth for it and loses everything behind it.
+So per-material depth state is a precondition for a correct frame rather than
+step-4 polish, and it moved forward into this change.
+
+Two settled sub-results, so they are not re-derived:
+
+- **GREATER, not LESS.** GS z is 29490.8 * (1 - clip.z/w), so it counts up
+  towards the viewer: the test stays GEQUAL/GREATER and the buffer clears to
+  zero. Measured rather than assumed, on one binary: the forced-LESS arm
+  collapses the frame to two colours against 192 for GREATER.
+  `GHPC_VK_MESH_DEPTH` keeps the mapping falsifiable.
+- **XYOFFSET is 2048 minus half the framebuffer**, read live and not
+  hardcoded: `ofx=1792 ofy=1824` at `src=512x448`, and it does move mid-run.
+
+**Exit, unchanged and not met:** venue and fretboard render through Vulkan
+above 30 fps with the gameplay chain alive (`BeatMatch::Poll` 0x1259c0,
+`PlayerMatcher::Poll` 0x117dd0) and `song_tick_advanced=yes`. No speed claim
+belongs to R2 yet: step 5 has not landed, so the software rasteriser still
+does all of the work. What is left is sequenced in `BACKLOG.md`.
 
 Two things that will cost a day each if taken on trust. `g_ghpcInstWorld` is
 a probe and not a seam input, by its own file's account: it names a different
@@ -151,14 +235,6 @@ mesh chain than the DrawFaces it precedes, so the object matrix comes from the
 packet scan in `ghpcSceneSubmit` instead. And a blunt `FlushPacket` stub
 wedges the guest, which `ghpc/override/FlushPacket__5PsRnd_0x43e400.cpp`
 records in full.
-
-Everything else this needs is measured and in `notes/rnd-seam.md`: the host
-mesh cache at 99% hit rate, the four backend inputs, and the vertex transform
-verified to GS subpixel over 171 matched pairs.
-
-**Exit:** venue and fretboard render through Vulkan above 30 fps with the
-gameplay chain alive (`BeatMatch::Poll` 0x1259c0, `PlayerMatcher::Poll`
-0x117dd0) and `song_tick_advanced=yes`.
 
 ### R3: coverage
 Whatever the native path does not cover yet (2D UI, particles, movie) keeps

@@ -20,41 +20,121 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**R2: the Rnd seam.** Exit criteria in `NEXT.md`. R0 and R1 are done, and R2's
-inputs are in: `GHPC_RND_SCENE=1` collects them and draws nothing.
+**R2: the Rnd seam.** Exit criteria in `NEXT.md`, and they are not met. Steps
+1 to 3 are in, with the depth half of step 4. Numbers and knobs in
+`notes/evidence/2026-09-20-r2-vulkan-mesh-pipeline.txt`.
 
-What arrives per frame on `game_screen`, measured
-(`notes/evidence/2026-09-20-r2-seam-inputs-arrive.txt`):
+What arrives per frame on `game_screen`, and what the GPU does with it:
 
-    draws=504 verts=41912 tris=42162 skinned=310 noIndices=0 cam=1
+    [ghpc/scene]   draws=537 verts=41732 tris=41979 skinned=296 cam=1
+    [ghpc/vk/mesh] submitted=537 drawn=537 tris=41689 cached=536
+                   hits=7442368 misses=536
 
-The contract is `ps2xRuntime/include/ghpc_scene.h`. The collector is
+536 uploads in a 15,499-frame run, so every mesh reaches the GPU once. The
+contract is `ps2xRuntime/include/ghpc_scene.h`. The collector is
 `src/lib/gs/ghpc_scene.cpp`, the submit is `ghpcSceneSubmit` in the DrawFaces
-override, and the frame boundary is vblank in `EeScheduler`.
+override, the frame boundary is vblank in `EeScheduler`, and the backend is
+`src/lib/ghpc_vulkan_renderer.cpp`.
 
-**The bulk of R2 is the Vulkan mesh pipeline, and it is not started.** In
-order:
+The sequence, with what is left:
 
-1. Vertex and index buffers on the GPU, keyed by `meshKey`, reused across
-   frames. The host mesh cache already gives 99% hits, so a per-key upload
-   happens once and not per draw.
-2. A vertex shader doing the measured transform, from
-   `evidence/2026-09-12-bone-palette.txt`:
+1. ~~Vertex and index buffers on the GPU, keyed by `meshKey`.~~ Done.
+   misses=536 against hits=7442368.
+2. ~~A vertex shader doing the measured transform.~~ Done, and proved offline
+   against the calibrated `ghpc_transform.h` by `ghpc/tools/vkxform.cpp`:
+   19,075 inputs, worst relative error 2.2e-05. The shader does not divide by
+   w, so it is a different expression of the same transform and needed its own
+   check. Run it before suspecting the transform of anything.
+3. ~~A depth buffer and a render pass.~~ Done. D32_SFLOAT, compare GREATER,
+   clear zero, because GS z counts up towards the viewer.
+4. **Material and texture. Depth and blend are in, texture is not, and
+   texture is the larger half.** Three things already known about it:
+   - The format census is in: `GHPC_TEX_CENSUS=1` reads TEX0 at 0x43f520,
+     the instruction that sends it, so it is past the TFX and TBP0 patches
+     that an entry hook misses. It reports PSM, CBP, CPSM, CSM, TFX, TCC and
+     the largest TW/TH. rnd-seam.md's histogram was read at entry and is not
+     a census. Run this before writing a decoder.
+   - `GSCpuBackend::SampleTexture` (`gs_cpu_backend.cpp:2059`) already does
+     the PS2 swizzle and the CLUT for the formats this game uses, and
+     `g_samplesByPsm` (:550) counts them. Reuse it; do not rewrite it from
+     the GS manual.
+   - `Material::texKey` already carries the PsTex per draw, so a GPU texture
+     cache keys off it the way the geometry cache keys off `meshKey`.
 
-       world = sum over b of weight[b] * (pos * Bone[b])   skinned, b = 0..3
-       world = pos * World                                 unskinned
-       clip  = world * M                M = qw700..703 as rows, row vectors
-       q     = 1 / clip.w
-       x,y,z = clip.xyz * q * qw696.xyz + qw697.xyz
-       s,t   = uv * q
-
-   `Vertex::weights` is the Vert's `Hmx::Color` at +0x20 and is bone weights,
-   not colour. The four sum to 1.0.
-3. A depth buffer and a render pass. R1 deliberately needed neither, so the
-   Vulkan backend has no pipeline object at all yet.
-4. Material and texture from the two `Select` hooks already written.
+   Also left here: the real blend equation. `ALPHA_1` at PsMat+0x138 carries
+   it; what went in is source-alpha-over for any `mBlend` but 1, which only
+   stops a blended draw writing an opaque rectangle over the frame.
 5. Only then stub the packet path, so the rasteriser stops doing the work
    twice. Note that a blunt `FlushPacket` stub wedges the guest (see Parked).
+   **No speed claim belongs to R2 until this lands**, because until it does
+   the software rasteriser still does all of the work.
+
+**The seam drops draws before the backend sees them, and that gap is now
+counted.** `[ghpc/scene/drop]` reports `served`, `cacheMiss` and `noFaces`
+from the DrawFaces override. `ghpcSceneSubmit` serves a draw only when the
+host mesh cache has it *and* `Face[]` is non-empty, so a mesh whose triangles
+live in the converted PS2 packet rather than the engine's face vector never
+reaches Vulkan at all. rnd-seam.md's miss census is `verts=4 faces=0` for the
+mutable-geometry mesh and `verts=0 faces=0` for two others, which is exactly
+that shape. Read the counter before concluding anything about missing
+geometry, and note that R2's exit names the fretboard specifically.
+
+**The picture is NOT verified against the software path, and the coverage
+comparison is the first thing to fix.** `ghpc/scripts/vkcoverage.py` works and
+its masks are sound; the pairing is not. Shots were paired by index and then
+by `frame=`, and neither is a chart position: the present loop runs free at
+about 60 Hz while the guest advances at about a tenth of that, so two arms of
+one batch sat at guest serials 653 and 857 at the same present frame. Coverage
+moves about 0.2 iou over 240 present frames as the chart advances, so
+mispaired shots gave a large, smooth, convincing difference between two depth
+modes across seven pairings, and it was the pairing error. Full account in
+`notes/gotchas.md`, "Screenshots pair on serial".
+
+`[ghpc/vk/shot]` now carries `serial=`, the guest frame, which is the only
+field two runs pair on. **What is missing is capturing on a serial interval
+rather than a present-frame interval**; do that before quoting any iou.
+
+**Next on rendering correctness, in order:**
+
+1. **Make the coverage comparison valid.** Capture on serial, then pair on it.
+   Everything below is easier to judge once this works.
+2. **The alpha test, and it is cheap.** `nvOnly` was 45k of about 208k native
+   pixels in every arm, so the native path covers ground the software path
+   leaves empty. TEST_1 bits 0..3 are ATE and ATST and this pipeline ignores
+   them, so geometry the GS punches out arrives solid. The fields are already
+   in the image being read.
+3. **Texture**, step 4's other half, below.
+
+**Per-material depth is the default and its mapping is verified by log, not by
+picture.** `[ghpc/vk/pipeline]` prints the resolved compare op and write flag
+for every pipeline created, and one 60s run shows ZTST mapping through with
+ZMSK turning the write off where set (compare 7 is ALWAYS, 4 is GREATER):
+
+    ztst=1 zmsk=1 depthMode=3 compare=7 write=0
+    ztst=3 zmsk=0 depthMode=3 compare=4 write=1
+
+Whether a forced state (`GHPC_VK_MESH_DEPTH=1`) gives a better picture is
+open. Two places the mapping could still be wrong, neither a known fault:
+
+- The 16 ZTST=always draws. An unconditional test that also writes depth
+  writes a near value and blocks geometry behind it. If they are overlays they
+  should carry ZMSK too, and 48 draws do, so the question is whether the two
+  sets are the same. `[ghpc/scene]` reports both counts; cross-tabulate them.
+- Material attribution. A draw gets whichever material was selected last, and
+  one frame has 263 binds for 532 draws. If any draw is served by another
+  draw's material, its depth state is another draw's too. Needs a per-draw tap;
+  `[ghpc/vk/pipeline]` shows states created, not which draw got which.
+
+**Depth sense is settled, three arms on one binary.** Distinct colours in the
+same frame: GREATER 192, no-depth 3, LESS 2. GS z is 29490.8 * (1 - clip.z/w),
+so it counts up towards the viewer and GREATER is right.
+`GHPC_VK_MESH_RANGE=first:count` isolates a slice of the 532 draws, but note
+that `0:64` covers nothing visible at all: the low indices are the wrong place
+to look for a named mesh, so sweep the range rather than assuming front to
+back.
+
+**XYOFFSET is 2048 minus half the framebuffer**, read live from the GS and not
+hardcoded: `ofx=1792 ofy=1824` at `src=512x448`. It moves mid-run.
 
 VU1 semantics the pipeline must honour
 (`evidence/2026-09-19-vu1-tl-semantics.md`): PRIM comes from the qw680 tag
@@ -105,34 +185,15 @@ Until that exists, the live-guest proxy for the size of the win is
 `GHPC_VBLANK_SCALE=4`, which rasterises a quarter of the frames and takes
 gameplay from 0.050 to 0.192 with the chart still advancing.
 
-R2 is where the speed arrives, and everything it needs is already measured:
+R2 is where the speed arrives, and every input it needs was measured before
+the pipeline was written. Where each one lives, rather than a fourth copy of
+it here:
 
-- Host mesh cache, 99% of gameplay draws find geometry host-side
-  (`[ghpc/mesh/cache] hits=115314 misses=1024`). The misses are three named
-  meshes, not a class.
-- All four backend inputs captured and named in `notes/rnd-seam.md`: geometry,
-  material, texture, camera.
-- The vertex transform, solved to GS subpixel over six meshes and 171 matched
-  pairs, dx and dy medians 0.03 to 0.04 px against a 0.0625 quantisation floor
-  (`notes/evidence/2026-09-12-bone-palette.txt`):
-
-      world = sum over b of weight[b] * (pos * Bone[b])   b = 0..3, skinned
-      world = pos * World                                 unskinned, qw676..679
-      clip  = world * M              M = qw700..703 as rows, row vectors
-      q     = 1 / clip.w
-      x,y,z = clip.{x,y,z} * q * qw696.{x,y,z} + qw697.{x,y,z}
-      s,t   = uv * q
-
-  Gameplay meshes are skinned. The weights are the Vert's four `Hmx::Color`
-  floats at +0x20, summing to 1.0, indexing the palette `DrawShowing` uploads
-  at qw660..675. qw698 is not subtracted: M carries the view transform.
-- VU1 semantics read out of `.vutext`
-  (`notes/evidence/2026-09-19-vu1-tl-semantics.md`). Three contradict the old
-  MSCAL-era native draw and the Vulkan path must honour them: PRIM comes from
-  the qw680 tag (ABE set for every blend mode except 1, FGE real), vertices are
-  XYZF2 with fog rather than XYZ2, and colour is per-vertex lit rather than a
-  0x80 constant. There is no backface culling anywhere in the 13,872 bytes, so
-  a triangle list from `Face[]` is a correct substitute for the strips.
+- The vertex transform: `notes/evidence/2026-09-12-bone-palette.txt` for the
+  calibration, `ps2xRuntime/include/runtime/gs/ghpc_transform.h` for the code
+  the replay tool and the shader checker both run.
+- The four backend inputs, and the host mesh cache: `notes/rnd-seam.md`.
+- VU1's own semantics: `notes/evidence/2026-09-19-vu1-tl-semantics.md`.
 
 **A1 audio, in parallel.** The SPU upload protocol is solved and the ack is
 implemented; it is not sufficient. `chunks=1` in both arms, control

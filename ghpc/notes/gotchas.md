@@ -51,6 +51,38 @@ builds. Prove a knob does what it says before trusting a number it produced: a
 profile showing the subsystem gone is the check, not the number the knob
 prints.
 
+**Screenshots pair on `serial`, never on shot index or present frame.** This
+one cost most of a session and produced two confident and opposite wrong
+conclusions before it was found, so it is worth reading in full.
+
+`[ghpc/vk/shot]` carries `frame=` (the host present counter) and `serial=`
+(the guest frame the scene came from). Only `serial` pairs two runs. Measured
+2026-09-20, two arms of one batch at the same present frames sat at guest
+serials 653, 764, 859, 1015 and 857, 1091, 1121, 1150.
+
+The ratio is what makes it so sharp. Measured on the same build: shots 40
+present frames apart came back at serials 1075, 1076, 1077, 1078, so about 40
+presents per guest frame on `game_screen`. The present loop runs free while
+the guest advances at gameplay speed, so a 40-present shot interval steps the
+chart by one frame and any phase difference between runs lands on a different
+one. The ratio is not stable within a run either, since it tracks load.
+
+Why it is so easy to be fooled: a coverage comparison against the software
+path moves about 0.2 iou over 240 present frames as the chart advances. That
+is far larger than anything a render change does, so mispaired shots produce a
+large, smooth, entirely convincing difference. Two arms differing only in a
+depth knob "separated cleanly" into a 0.78 band and a 0.63 band, held that
+separation across seven pairings, and the separation was the pairing error.
+Arms whose shot sequences happened to align matched to four decimal places,
+which looked like proof of reproducibility and was proof of nothing.
+
+So: pair on `serial`. If the serials do not match, the comparison is not
+evidence, whatever it shows. And prefer a log that states what the code did
+over an outcome number that implies it: the depth question above was settled
+in one 60s run by `[ghpc/vk/pipeline]`, which prints the compare op and the
+write flag for every pipeline created, after coverage had "answered" it twice
+in opposite directions.
+
 ## Environment
 
 **Toolchain.** cmake, ninja, ccache, pkg-config, llvm (`llvm-readelf`,

@@ -1,0 +1,344 @@
+R2, the Vulkan mesh pipeline: geometry reaches the GPU
+======================================================
+2026-09-20. Release build, MoltenVK on an Apple M4 Pro, api=1.1.357.
+
+What went in
+------------
+Steps 1 to 3 of the R2 sequence in BACKLOG.md, plus the depth and blend half
+of step 4. The per-material depth path is built and measured and is switched
+OFF by default, because it regressed the coverage gate; see "The per-material
+depth state regressed it". That was not the expected outcome.
+
+  1. GPU vertex and index buffers keyed by meshKey, uploaded once.
+  2. A vertex shader doing the measured transform.
+  3. A depth buffer and a render pass.
+  4. (part) The material's own depth test, depth write and blend state.
+
+The seam is unchanged in shape: the overrides push, the backend consumes,
+neither includes the other's headers. What changed is that the collector now
+retains what it used to count. Contract in ps2xRuntime/include/ghpc_scene.h.
+
+Knobs, all release-safe:
+
+  GHPC_VK_MESH=1        native geometry over the software blit
+  GHPC_VK_MESH=2        native only, no blit, clear to dark grey
+  GHPC_VK_MESH_DEPTH=N  0 none, 1 GREATER (default), 2 LESS, 3 from material
+  GHPC_VK_MESH_RANGE=f:c draw only c draws starting at f
+  GHPC_VK_MESH_LOG=N    the [ghpc/vk/mesh] line every Nth frame
+  GHPC_VK_SHOT=N        write the presented swapchain to a PPM every Nth frame
+  GHPC_VK_SHOT_SCREEN=s hold the shots until the guest is on screen s
+  GHPC_VK_SHOT_LIMIT=N  cap the shots
+
+GHPC_VK_SHOT is what makes this phase measurable unattended. The picture is
+the evidence and a log line cannot be one; before it existed, judging a render
+change meant sitting in front of the window.
+
+The shader matches the measured transform, proved offline
+---------------------------------------------------------
+ghpc/tools/vkxform.cpp, ~1s, no game run:
+
+  c++ -std=c++17 -O2 -I ps2xRuntime/include -o /tmp/vkxform ghpc/tools/vkxform.cpp
+  /tmp/vkxform
+
+  compared=19075 skippedBehindEye=925
+  worst relative xy error = 2.210e-05
+  worst relative q  error = 2.210e-05
+  SHADER MATCHES THE MEASURED TRANSFORM
+
+This matters because the shader does NOT compute the transform the way
+ghpc_transform.h does, and that file is the one calibrated to GS subpixel over
+171 matched pairs. The host version divides by w and drops any vertex with
+w <= 0, because it cannot generate one. The shader hands the rasteriser the
+homogeneous coordinate instead, so the hardware does the near-plane clipping
+and the perspective-correct interpolation. Same transform, different
+expression, and "same" is a claim worth checking rather than asserting.
+
+The two things it pins that reasoning alone would not:
+
+  - The matrix layout. The seam hands over row-major float[16]; the shader
+    reads it as a GLSL mat4, which is column major. That transposes it, and
+    the transpose is exactly what turns `M * v` into the row-vector `v * M`
+    the measurement calls for. No transpose appears in the shader because the
+    layout mismatch IS the transpose. A stray transpose "fixing" this would
+    break it.
+  - The screen mapping, below.
+
+The screen mapping needed no calibration
+----------------------------------------
+The transform lands in GS pixels, 2048-centred, and the rasteriser subtracts
+XYOFFSET>>4 before it tests the scissor (gs_frontend.cpp:2137). So the native
+path subtracts the same thing. Read from the GS at present time rather than
+assumed, and what comes back is:
+
+  ofx=1792.0 ofy=1824.0 src=512x448
+
+2048 - 512/2 = 1792 and 2048 - 448/2 = 1824. XYOFFSET is exactly 2048 minus
+half the framebuffer, so GS 2048 is the centre of the picture and the mapping
+to NDC is the identity up to a scale. rnd-seam.md records a sample of
+ofx=1984 ofy=1920, which is the same rule at a different framebuffer size
+(2048-64 and 2048-128); it is not a contradiction and neither is a constant to
+hardcode. Two frames in the 260s arm reported 1984/1920 mid-run, so it does
+move and reading it live is the right call.
+
+What arrives, and what the GPU does with it
+-------------------------------------------
+Release, 260s, driven (--ingame's pad rules), on game_screen:
+
+  [ghpc/scene]   draws=537 verts=41732 tris=41979 skinned=296 world=249 cam=1
+  [ghpc/vk/mesh] submitted=537 drawn=537 tris=41689 cached=536
+                 hits=7442368 misses=536 noGeom=0 noCam=686
+
+Read that last line carefully, because it is the whole point of step 1:
+**536 misses in a 15,499-frame run against 7.44M hits.** Every mesh is
+uploaded exactly once and drawn from GPU buffers thereafter. noGeom=0 says the
+collector's durable geometry store answered every miss, so nothing was dropped
+for want of vertices.
+
+drawn == submitted on every frame, so no draw is being silently discarded.
+noCam=686 is the boot and menu frames before the first PsCam::Select, counted
+rather than drawn through a stale camera.
+
+What the seam drops before a backend ever sees it, over a whole run:
+
+  [ghpc/scene/drop] served=356167 cacheMiss=3833 noFaces=0
+
+**1.08% lost to cache misses, and nothing at all to an empty Face[].** The
+noFaces=0 is the useful half. The worry was that meshes whose triangles live
+in the converted PS2 packet rather than the engine's face vector would be
+invisible to Vulkan, and R2's exit names the fretboard specifically. That does
+not happen: every mesh the host cache holds has usable faces. The 1.08% that
+is lost is lost at PsMesh::Sync, before the seam, which is the known
+mutable-geometry case rnd-seam.md already names.
+
+So the fretboard is not missing for that reason. It has not been identified in
+the frame either way, and the range probe below is why that is still open.
+
+The coverage comparison does not work yet, and it produced two opposite
+wrong answers before that was found
+-------------------------------------------------------------------------
+Read this before quoting any iou number from this session. There are none in
+here worth quoting.
+
+The idea is sound. Colours are not comparable while the native path has no
+texture (194 distinct against the software rasteriser's 1071), and hashes are
+not stable across runs, but coverage should be: both arms are captured from
+the same swapchain by GHPC_VK_SHOT, so the masks are the same size with the
+same letterbox. ghpc/scripts/vkcoverage.py reports it.
+
+**The pairing was wrong.** Shots were paired by index, and then by the
+`frame=` field, and neither is a chart position. `frame=` is the host present
+counter. The present loop runs free at about 60 Hz while the guest advances at
+about a tenth of that under a varying load, so at the same present frame two
+arms of one batch sat at guest serials:
+
+    arm A   653   764   859  1015
+    arm B   857  1091  1121  1150
+
+**Why it was convincing.** Coverage against the software path moves about 0.2
+iou over 240 present frames as the chart advances, which is far larger than
+anything a render change does. So mispaired shots gave a large, smooth,
+consistent difference. Two arms differing only in GHPC_VK_MESH_DEPTH split
+into a 0.78 band and a 0.63 band and held that split across seven pairings.
+The split was the pairing error. Separately, two arms whose shot sequences
+happened to align matched to four decimal places, which read as proof of
+reproducibility and was proof of nothing.
+
+The sequence of conclusions, all from the same data: per-material depth
+regresses coverage, then that it was run noise, then that it regressed after
+all, then that the arm which was supposed to show it had the knob forced and
+measured the other band anyway. None of them was supported.
+
+**The fix, and it is in.** `[ghpc/vk/shot]` now carries `serial=`, the guest
+frame the scene came from. Pair on that. If the serials do not match, the
+comparison is not evidence, whatever it shows. To make the pairing land,
+capture on a serial interval rather than a present-frame interval, which
+GHPC_VK_SHOT does not do yet.
+
+**What settled the depth question instead was a log, not a picture.**
+`[ghpc/vk/pipeline]` prints the resolved compare op and write flag for every
+pipeline created, at most 32 of them, and one 60s run says exactly what the
+knob did:
+
+    ztst=1 zte=1 zmsk=1 blend=1 depthMode=3 compare=7 write=0
+    ztst=1 zte=1 zmsk=0 blend=1 depthMode=3 compare=7 write=1
+    ztst=3 zte=1 zmsk=0 blend=1 depthMode=3 compare=4 write=1
+
+compare 7 is ALWAYS and 4 is GREATER, so ZTST maps through and ZMSK turns the
+write off where it is set. That is the mapping doing what it claims, which is
+what the project's own rule asks for: prove a knob does what it says, and a
+profile or a log is the check, not the number the knob produced.
+
+So the per-material depth path is the default, because it is what the hardware
+does. Whether a forced state produces a better picture is **open**, and no
+coverage number in this session bears on it.
+
+What the metric still cannot see, once pairing is fixed:
+
+- **nvOnly is large**, 45k of about 208k native pixels, in every arm. The
+  native path covers ground the software path leaves empty. Named and not
+  tested: the alpha test. TEST_1 bits 0..3 are ATE and ATST, this pipeline
+  ignores them, so geometry the GS punches out arrives solid. Cheap to test,
+  the fields are already in the image being read.
+- A wrong colour, a wrong texture, or a depth ordering error between two
+  surfaces that both cover the same pixel.
+- **swOnly is a lower bound even once pairing is fixed.** "Covered" is a
+  brightness threshold, so dark geometry counts as background. The software
+  reference reports 165,936 covered of the 229,376-pixel picture rect, and the
+  difference is not all empty frame: some of it is dark content classified as
+  background. Every such pixel is one swOnly cannot charge the native path
+  for. Raising the threshold's floor, or differencing against a brightened
+  pair, would tighten it.
+
+Two things about per-material depth still worth checking
+-------------------------------------------------------
+Neither is a known fault. They are the two places this mapping could be wrong,
+written down so the next pass has somewhere to start once shots pair on
+serial.
+
+1. **The ZTST=always draws, 16 in one frame.** An unconditional test that also
+   writes depth writes a near value and blocks real geometry behind it. If
+   those draws are overlays they should be carrying ZMSK too, and 48 draws do
+   carry it, so the question is whether the always draws and the no-write
+   draws are the same set. `[ghpc/scene]` reports both counts already;
+   cross-tabulate them rather than assuming.
+2. **Material attribution.** The latch gives a draw whichever material was
+   selected last, and one frame has 263 material binds for 532 draws, so
+   roughly two draws per bind. If any draw is served by a material other than
+   its own, its depth state is another draw's. `[ghpc/vk/pipeline]` shows the
+   states being created but not which draw got which, so this needs a
+   per-draw tap.
+
+The visible frame is not in the first 64 draws
+----------------------------------------------
+GHPC_VK_MESH_RANGE=0:64, same binary, same screen: nvCovered=0 and one
+distinct colour, so those 64 draws put nothing on screen at all. They are
+drawn (103 meshes, 909,795 draws accumulated over the run), they simply do not
+land in the visible rect.
+
+Worth knowing before hunting a named mesh by slicing the draw list: the low
+indices are the wrong place to look. Sweep the range rather than assuming the
+order is front to back.
+
+What the first picture showed
+----------------------------
+The step-3 build drew with one depth state for every draw: test on, write on,
+GREATER. The picture (arms/depth-greater), on game_screen:
+
+  199782 px (64,64,64)    the shade floor
+   23162 px (115,115,115)
+   57344 px (15,15,26)    the clear, i.e. exactly the letterbox bars
+
+192 distinct colours. Two separate things are in that, and it is worth keeping
+them apart, because conflating them is how this project has lost sessions
+before.
+
+**The flat 87% was a shading artifact, not occlusion.** The fragment shader
+had `max(dot(n, L), 0)` with the normal in world space and L an arbitrary
+constant, so every surface whose normal pointed away from that constant landed
+on the floor value at once. That reads as missing geometry and is a one-sided
+dot product. `abs()` fixes it. The shade is a legibility device, not lighting,
+and it was never evidence about depth.
+
+**Depth was already working.** The three depth arms, one binary, distinct
+colours in the same frame:
+
+  GREATER   192
+  no depth    3
+  LESS        2
+
+So the test was doing real work and GREATER is the right sense. The claim that
+a single surface was occluding the frame does not survive those numbers, and
+it is not made here.
+
+**What the material depth state is for is correctness, not that picture.**
+The registers say so plainly, and this is the part that had to move forward
+from step 4:
+
+  +0x148  TEST_1   ZTST at bits 17..18, and NOT ZTE, see below
+  +0x158  ZBUF_1   ZMSK at bit 32, set meaning do NOT write depth
+
+Measured on one gameplay frame: 49 of 531 draws set ZMSK, and ZTST varies over
+454 greater, 60 gequal and 17 always. A single baked depth state cannot be
+right for all of them, whatever any one frame happens to look like. 49 draws
+asking not to write depth and being made to write it changes what occludes
+what, and 17 asking to pass unconditionally is a different frame again.
+
+**ZTE is not in the material's image, and reading it anyway costs the frame.**
+This is worth not rediscovering. The first material build read depth-test
+enable from TEST_1 bit 16, and the histogram it produced says why that is
+wrong:
+
+  mats=268 ztst=0/17/60/454 noZWrite=49 noZTest=531 blend=238 tex=502
+
+noZTest=531 of 531 draws, while ZTST is meaningfully spread over 454 greater,
+60 gequal and 17 always. Those two cannot both be true: ZTST only means
+anything when ZTE is set. The mask settles it. PsMat::Select passes 0x6FFFF
+for TEST_1:
+
+  ATE bit 0, ATST bit 1, AREF bit 4, AFAIL bit 12, DATE bit 14, DATM bit 15
+  all in the mask. ZTE bit 16 is NOT. ZTST bits 17..18 are.
+
+So the material writes ATE, ATST, AREF, AFAIL, DATE, DATM and ZTST, and leaves
+ZTE at whatever the register already held. Depth testing is a global setting
+here and only ZTST varies per material. Reading bit 16 returns 0 on every
+material, reports the whole frame as depth-test-off, and makes the "material
+depth" arm silently identical to the no-depth arm.
+
+That is the same class as the TEX0 caveat below: a field read from a register
+image that does not carry it. When taking a value off one of these images,
+check the SetRegister mask first; the mask is the list of what the material
+actually owns.
+
+Vulkan ties depth writes to depthTestEnable, so a not-tested draw is modelled
+as an ALWAYS test rather than a disabled one. Disabling the test would
+silently drop the write that ZMSK still asks for.
+
+The same histogram says where the picture comes from: 502 of 531 draws carry a
+texture. Untextured, this phase can judge shape and placement and nothing
+else.
+
+The GS test maps straight through without inverting, because the shader keeps
+the GS's sense of depth. GS z is 29490.8 * (1 - clip.z/w) from the measured
+qw696/697 z lanes, so it counts up towards the viewer: GEQUAL stays
+GEQUAL, the buffer clears to zero and not one, and D32_SFLOAT carries the
+range, which lands near 0.0035 and would lose most of its precision in a
+fixed-point buffer.
+
+State that has to be baked into a pipeline cannot be dynamic on a driver that
+reports 1.1, so there is one pipeline per (ZTST, ZTE, ZMSK, blend). That key
+is five bits, so the cache is bounded at 32 whatever a frame does.
+
+What is not done
+----------------
+- **Texture.** Step 4's other half, and the larger half. Until it lands the
+  fragment shader uses the material's mColor with a legibility shade, which is
+  enough to judge shape and placement and nothing else. Three things are
+  already known about it and are worth not rediscovering:
+
+    - **Read TEX0 after the patch, not at entry.** PsTex::Select's own
+      override file says the body edits TFX (bits 35-36) and TBP0 (bits 0-13)
+      of the +0x70 image before sending it, and the existing hook logs the
+      image at entry. So the PSM histogram in rnd-seam.md (0, 2, 19, 20)
+      includes uninitialised first selects and is not a format census. The
+      hook has to move to a later PC.
+    - **The decode already exists.** `GSCpuBackend::SampleTexture` at
+      gs_cpu_backend.cpp:2059 fetches a texel through the PS2 swizzle and the
+      CLUT for the formats this game actually uses, and
+      `g_samplesByPsm` (gs_cpu_backend.cpp:550) already counts them by PSM.
+      A native path wants whole-surface decode rather than per-texel, but the
+      swizzle and palette logic is written and measured, and rewriting it from
+      the GS manual would be the expensive mistake here.
+    - **The texture is already keyed at the seam.** Material::texKey carries
+      the PsTex pointer per draw, so a GPU texture cache keys off it the same
+      way the geometry cache keys off meshKey. The [ghpc/scene] line reports
+      how many draws carry one.
+- **The blend equation.** ALPHA_1 at +0x138 carries it. What went in is source
+  alpha over destination for any mBlend but 1, which stops a blended draw
+  writing an opaque rectangle over the frame and is not the real equation.
+- **Step 5, stubbing the packet path.** Not started, and it is where the speed
+  arrives: until it lands the software rasteriser still does all of the work,
+  so no speed claim belongs to this change. A blunt FlushPacket stub wedges
+  the guest (ghpc/override/FlushPacket__5PsRnd_0x43e400.cpp).
+- **The R1 parity gate is mutually exclusive with the mesh path**, on purpose:
+  the mesh pass writes over the blit, so the gate would report a mismatch that
+  is the point of R2. GHPC_VK_MESH != 0 turns it off.

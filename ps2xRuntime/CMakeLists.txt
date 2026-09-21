@@ -287,6 +287,44 @@ if(PS2X_ENABLE_VULKAN)
 
     target_link_libraries(ps2_vulkan_backend INTERFACE Vulkan::Vulkan SDL3::SDL3)
     target_compile_definitions(ps2_vulkan_backend INTERFACE GHPC_ENABLE_VULKAN=1)
+
+    # R2's mesh pipeline needs real shaders, so it needs a shader compiler.
+    # glslangValidator's -x writes the SPIR-V as a comma-separated list of
+    # hex words, which #includes straight into a uint32_t array: no runtime
+    # file loading, no install step, and the binary cannot end up paired with
+    # a stale .spv.
+    #
+    # Missing compiler is not a build failure. The mesh pipeline turns itself
+    # off and says so, the same way a missing Vulkan turns the whole backend
+    # off, because everything before R2 works without it.
+    find_program(GHPC_GLSLANG NAMES glslangValidator glslang)
+
+    if(GHPC_GLSLANG)
+        set(GHPC_SHADER_DIR "${CMAKE_CURRENT_BINARY_DIR}/ghpc_shaders")
+        file(MAKE_DIRECTORY "${GHPC_SHADER_DIR}")
+        set(GHPC_SHADER_OUTPUTS "")
+
+        foreach(shader ghpc_mesh.vert ghpc_mesh.frag)
+            string(REPLACE "." "_" shader_stem "${shader}")
+            set(shader_out "${GHPC_SHADER_DIR}/${shader_stem}.inc")
+            add_custom_command(
+                OUTPUT "${shader_out}"
+                COMMAND "${GHPC_GLSLANG}" -V -x
+                        -o "${shader_out}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/gs/shaders/${shader}"
+                DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/gs/shaders/${shader}"
+                COMMENT "Compiling ${shader} to SPIR-V"
+                VERBATIM
+            )
+            list(APPEND GHPC_SHADER_OUTPUTS "${shader_out}")
+        endforeach()
+
+        add_custom_target(ghpc_shaders DEPENDS ${GHPC_SHADER_OUTPUTS})
+        target_include_directories(ps2_vulkan_backend INTERFACE "${GHPC_SHADER_DIR}")
+        target_compile_definitions(ps2_vulkan_backend INTERFACE GHPC_ENABLE_VULKAN_MESH=1)
+    else()
+        message(WARNING "glslangValidator not found; building without the Vulkan mesh pipeline")
+    endif()
 endif()
 
 if(PS2X_IS_ANDROID)
@@ -573,6 +611,13 @@ target_include_directories(ps2_runtime PUBLIC
 )
 
 target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ps2_vulkan_backend ffmpeg ps2_iop)
+
+# The generated SPIR-V is #included, so it has to exist before the renderer
+# compiles. An INTERFACE library cannot carry a target dependency, which is why
+# this is here rather than up with the rest of the Vulkan block.
+if(TARGET ghpc_shaders)
+    add_dependencies(ps2_runtime ghpc_shaders)
+endif()
 target_link_libraries(ps2EntryRunner
     PRIVATE
     ps2_runtime
