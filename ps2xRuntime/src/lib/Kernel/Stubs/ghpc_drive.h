@@ -152,6 +152,77 @@ namespace ghpc_drive
         screenSlot() = name;
     }
 
+    // TaskMgr's own clocks, which are the only chart position anything host
+    // side can pair on.
+    //
+    // TheTaskMgr is 0x5a5870 with mClocks a pointer at +0x28. The array has
+    // stride 0x14 with mCurrent at +0x0c, both pinned by noteGameCall's
+    // UISeconds address: UISeconds is index 2 and sits at +0x34, and
+    // 2*0x14+0x0c is 0x34. Index 0 is Seconds, 1 is Beat.
+    //
+    // Why this is published rather than read where it is needed: a host frame
+    // counter is not a chart position. About 40 presents pass per guest frame
+    // on game_screen, so anything sampled on the present loop drifts against
+    // the chart, and two runs at the same present frame sit at different
+    // beats. Screenshots and any cross-run comparison pair on `beat`.
+    struct GameClocks
+    {
+        float game = 0.0f;
+        float ui = 0.0f;
+        float beat = 0.0f;
+        uint32_t clocksPtr = 0u;
+        bool valid = false;
+    };
+
+    inline GameClocks readGameClocks(const uint8_t *rdram)
+    {
+        constexpr uint32_t kTheTaskMgr = 0x005A5870u;
+        GameClocks out;
+        const uint32_t clocks = guestWord(rdram, kTheTaskMgr + 0x28u);
+        // Before the UI is up mClocks is null and the read would be a number
+        // rather than a time.
+        if (clocks < 0x00100000u || clocks >= 0x02000000u)
+        {
+            return out;
+        }
+        auto at = [&](uint32_t index) {
+            const uint32_t raw = guestWord(rdram, clocks + index * 0x14u + 0x0Cu);
+            float v = 0.0f;
+            std::memcpy(&v, &raw, sizeof(v));
+            return v;
+        };
+        out.game = at(0u);
+        out.beat = at(1u);
+        out.ui = at(2u);
+        out.clocksPtr = clocks;
+        out.valid = true;
+        return out;
+    }
+
+    inline std::mutex &clockMutex()
+    {
+        static std::mutex m;
+        return m;
+    }
+
+    inline GameClocks &clockSlot()
+    {
+        static GameClocks c;
+        return c;
+    }
+
+    inline void setGameClocks(const GameClocks &c)
+    {
+        std::lock_guard<std::mutex> lock(clockMutex());
+        clockSlot() = c;
+    }
+
+    inline GameClocks gameClocks()
+    {
+        std::lock_guard<std::mutex> lock(clockMutex());
+        return clockSlot();
+    }
+
     // "none" rather than empty, so a tag is always a word and a log line never
     // ends in a bare "screen=".
     inline std::string taggedScreen()
