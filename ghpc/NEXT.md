@@ -16,9 +16,11 @@ there is still no audio.
 
 **As of 2026-09-21 the whole career loop runs under `--native`**, menus,
 song, fail, quit and back, and holds game rate 0.98-1.00 under host load.
-What is wrong now is what it draws: flashing, missing chart geometry, a cyan
-wedge in the venue. `BACKLOG.md` `Now` has the plan, in order, starting with
-a route harness that every later item is judged on.
+What is wrong now is what it draws: flashing, textures on the wrong things,
+missing geometry (chart note tops, the kick drum). The cyan wedge that grows
+over the venue as a song fails is the game's own effect, not a fault.
+`BACKLOG.md` `Now` has the plan, in order, starting with a route harness
+that every later item is judged on.
 
 Hand play: `play.sh --native --guitar`. Keys 1-5 frets, arrows D-pad (up/down
 strum), X/C/Z/V face buttons, Enter start. F5 saves the screen on show as

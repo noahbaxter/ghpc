@@ -24,8 +24,8 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 right.** As of 2026-09-21 the loop main → career → expert → song → fail →
 quit → main → song runs unattended, holds game rate 0.98-1.00 under host
 load, and shows 99-100% of guest frames in order. What is still wrong is
-all on screen, reported by hand play: flashing, missing chart geometry, a
-cyan wedge. In order, each with the number that says it moved:
+all on screen, reported by hand play: flashing, textures on the wrong
+things, missing geometry. In order, each with the number that says it moved:
 
 1. **A route harness, first, because every item below is judged on it.**
    Wrap the working driver line in `ghpc/scripts/route.sh`: career, expert,
@@ -54,22 +54,24 @@ cyan wedge. In order, each with the number that says it moved:
    EndDrawing override, and re-present the last complete frame rather than
    a blank one.
 
-3. **Missing chart geometry**: the white tops of notes and sustains, and the
-   kick drum, which animates. Census first: `GHPC_SCENE_DROP_LOG` on
+3. **Textures on the wrong things, sometimes**, reported by hand play. First
+   suspect is the same fault the mesh caches had: the texture cache keys on
+   PsTex and bitmap pointers plus dims, and the game reuses those addresses
+   once a menu unloads, so a new texture at an old address is served the old
+   image. Give it a generation the way `meshcache::generation` works (bump on
+   PsTex rebuild or bitmap change), then run the route and compare shots
+   after a menu change. Metric: a `texStale=` count, and wrong textures gone
+   on the second lap.
+
+4. **Missing chart geometry**: the white tops of notes and sustains, and the
+   kick drum, which animates. Hand play also reports geometry missing more
+   widely than the chart; the census below covers it. Census first: `GHPC_SCENE_DROP_LOG` on
    game_screen for cacheMiss and noFaces, then `GHPC_VK_MESH_ID` and
    `vkdrawid.py` against a reference shot to name the missing draws.
    Suspects: mutable meshes served in strip order when they are not strips,
    meshes that never pass through DrawFaces (particles, RndMultiMesh), and
    skinned meshes with more than four bones. Metric: `swOnly` on the
    gameplay buckets, 3700-4600 now.
-
-4. **The cyan wedge**, a venue light cone gone solid as the song starts
-   failing. Not the packet decoder (it persists with GHPC_SCENE_PACKET=0).
-   Name the draw with `GHPC_VK_MESH_ID` on the route's fail frames, then
-   check its blend and vertex alpha: the cones are additive (ALPHA_1), and
-   the fail lighting animates their colour. Two shots of that run also
-   squashed to half height; check whether that is the same draw or the
-   128x256 offscreen target (Later).
 
 5. **Audio (A1).** With speed and pacing stable, the next thing between the
    port and playable. Two candidates in `notes/audio-path.md`, neither
