@@ -458,6 +458,9 @@ private:
     bool m_insideInterrupt = false;
     uint32_t m_pendingEeTimerInterrupts = 0;
     uint64_t m_eeCycle = 0;
+    // GHPC_WALL_PACE: cycles handed out to keep game time on the wall clock.
+    uint64_t m_wallPaceSkipped = 0;
+    uint64_t m_wallPaceSkips = 0;
     uint64_t m_sliceEndCycle = kDefaultTimeSliceCycles;
     std::thread::id m_executorThread{};
     std::atomic<bool> m_running{false};

@@ -2695,6 +2695,41 @@ void EeScheduler::processPendingEvents()
 
 void EeScheduler::processDueDeadlines()
 {
+    // GHPC_WALL_PACE=1: game time follows the wall clock when the host falls
+    // behind. A vblank fires only once both its cycle and its wall deadline
+    // have passed, and every game clock derives from cycles, so a host that
+    // cannot retire a frame's cycles in 16.7 ms played the game in slow
+    // motion. Here, a vblank whose wall deadline is past is given its missing
+    // cycles at once, through accountCycles so COP0 Count and the EE timers
+    // move with them. The game sees a long frame, which TaskMgr's delta time
+    // already handles, rather than a slow one.
+    static const bool s_wallPace = []() {
+        const char *e = std::getenv("GHPC_WALL_PACE");
+        return e != nullptr && e[0] != '0';
+    }();
+    if (s_wallPace)
+    {
+        uint64_t skipTo = 0u;
+        {
+            std::unique_lock lock(m_eventMutex);
+            const auto late = std::chrono::steady_clock::now() - std::chrono::milliseconds(2);
+            for (const ScheduledEvent &item : m_deadlines)
+            {
+                if (item.event.type == EeEventType::VBlankStart && item.deadlineCycle > m_eeCycle &&
+                    item.hostDeadline <= late)
+                {
+                    skipTo = std::max(skipTo, item.deadlineCycle);
+                }
+            }
+        }
+        if (skipTo > m_eeCycle)
+        {
+            m_wallPaceSkipped += skipTo - m_eeCycle;
+            ++m_wallPaceSkips;
+            accountCycles(static_cast<uint32_t>(std::min<uint64_t>(skipTo - m_eeCycle, 0xFFFFFFFFull)));
+        }
+    }
+
     for (;;)
     {
         std::vector<ScheduledEvent> due;
@@ -2809,6 +2844,28 @@ void EeScheduler::processEvent(const EeEvent &event)
         // enough to drive presentation.
         ghpc::scene::endFrame();
         ghpc::scene::beginFrame();
+
+        // GHPC_CLOCKTRACE=path: one CSV line per vblank, wall seconds against
+        // TaskMgr's clocks. GHPC_CLOCKRATE averages over N vblanks, which
+        // hides game time that stalls and then catches up; this does not.
+        {
+            static FILE *trace = []() -> FILE * {
+                const char *e = std::getenv("GHPC_CLOCKTRACE");
+                FILE *f = (e && *e) ? std::fopen(e, "w") : nullptr;
+                if (f) std::fprintf(f, "wall,vblank,screen,game,beat,ui,skippedMs\n");
+                return f;
+            }();
+            if (trace)
+            {
+                static const auto t0 = std::chrono::steady_clock::now();
+                const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                const ghpc_drive::GameClocks c = ghpc_drive::gameClocks();
+                std::fprintf(trace, "%.6f,%llu,%s,%.6f,%.6f,%.6f,%.3f\n", wall, (unsigned long long)m_vsyncTick,
+                             ghpc_drive::taggedScreen().c_str(), c.game, c.beat, c.ui,
+                             (double)m_wallPaceSkipped * 1000.0 / (double)kEeClockHz);
+                if ((m_vsyncTick & 63u) == 0u) std::fflush(trace);
+            }
+        }
 
         // GHPCCLOCK: game time against wall time. GHPC_CLOCKRATE=N, every N ticks.
         //
