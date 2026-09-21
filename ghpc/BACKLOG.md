@@ -40,9 +40,19 @@ In order:
    Gameplay decodes two small quads the same way and its picture is
    unchanged.
 
-   Not yet shot: career, multiplayer, training, options, results. Capture by
-   hand with `GHPC_STATE_SAVE_SCREENS=1`, or give the driver a route.
-   `lose_screen` drew a solid black panel behind its text in an earlier run.
+   **All 26 menu states compared (2026-09-21), none broken.** Captured by
+   hand with F5 (`play.sh --guitar`, not `--native`). iou 0.87-0.998,
+   swOnly under 100 on every menu but sel_character (500), multi (250) and
+   loading (2900). What is left is two faults, both seen in the shots:
+   - **Native is brighter**, by a curve rather than an offset: +6 to +7 in
+     the darks, +3 in the mids, -1 near white, on every menu. Mean error
+     3-6 per channel. This, not missing geometry, is most of `nvOnly`,
+     since the masks are a brightness threshold.
+   - **The loading screen's glow** behind the cassette logo is bigger and
+     whiter natively (ratio 0.889, error 10.7, the worst screen).
+
+   Not yet shot: results, win and lose screens. `lose_screen` drew a solid
+   black panel behind its text in an earlier run.
 
    Material programs still unreproduced, from `[ghpc/scene/light]` on
    gameplay: 8 draws sphere map (0x347), 9 others. The texture transform
