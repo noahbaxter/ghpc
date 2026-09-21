@@ -47,8 +47,22 @@ The sequence, with what is left:
    check. Run it before suspecting the transform of anything.
 3. ~~A depth buffer and a render pass.~~ Done. D32_SFLOAT, compare GREATER,
    clear zero, because GS z counts up towards the viewer.
-4. **Material and texture. Depth and blend are in, texture is not, and
-   texture is the larger half.** Three things already known about it:
+4. **Material and texture. Depth and blend are in. TEXTURE IS THE NEXT TASK
+   AND IT GATES THE PICTURE.**
+
+   189 of 528 gameplay draws enable the GS alpha test, all of them ATST
+   GREATER with AREF 0, which is a punch-out: pass only where the texel has
+   alpha. This pipeline ignores TEST_1 bits 0..13, so those 189 render as
+   full solid quads and cover the frame with opaque rectangles. 36% of draws
+   have no correct silhouette without texel alpha, so nothing about the
+   picture can be judged until this lands, and the alpha test cannot be
+   implemented before it either.
+
+   `GHPC_VK_MESH_SKIP_ATE=1` drops those draws and `GHPC_VK_MESH_TINT=1`
+   tints per mesh, which is how to look at the other 339 meanwhile. Both are
+   deliberately wrong pictures.
+
+   Three things already known about texture:
    - The format census is in: `GHPC_TEX_CENSUS=1` reads TEX0 at 0x43f520,
      the instruction that sends it, so it is past the TFX and TBP0 patches
      that an entry hook misses. It reports PSM, CBP, CPSM, CSM, TFX, TCC and
@@ -90,20 +104,62 @@ mispaired shots gave a large, smooth, convincing difference between two depth
 modes across seven pairings, and it was the pairing error. Full account in
 `notes/gotchas.md`, "Screenshots pair on serial".
 
-`[ghpc/vk/shot]` now carries `serial=`, the guest frame, which is the only
-field two runs pair on. **What is missing is capturing on a serial interval
-rather than a present-frame interval**; do that before quoting any iou.
+**Fixed, and this is how to use it.** `GHPC_VK_SHOT_BEAT=N` captures every N
+beats of the chart instead of every N present frames. It fires on the first
+present past a beat boundary, which lands within a few hundredths of a beat
+(measured: buckets at 1.015, 2.004, 3.019, 4.008), and names the file after
+the bucket, so two runs write the same filenames for the same chart positions.
+`ghpc/scripts/vkcompare.sh <refdir> <armdir>...` joins two capture
+directories on that.
+
+N=1 is about right: the measured rate is roughly 1563 present frames per beat,
+so N=4 yielded 2 shots in a 300s arm and N=1 gives about 9. Always include an
+arm identical to the one under test. That control measured the noise floor at
+8 of 12 buckets pixel-identical and 0.05 iou otherwise, which is what makes
+everything else interpretable, and without it this metric already produced two
+confident wrong answers.
+
+**What it says now, beat-paired on one binary, twelve buckets.** `swOnly` is
+pixels the software path covered and the native path did not:
+
+    forced GREATER (mode 1)      iou 0.61-0.80  swOnly 0 in all 12
+    per-material depth (mode 3)  iou 0.59-0.79  swOnly 107-4243
+
+So placement is confirmed: with a forced depth state the native path covers
+every pixel the PS2 path covers. Per-material depth loses about 4k a frame,
+which clears the noise floor and is therefore real, and is also five times
+smaller than the mispaired comparison claimed.
+
+`nvOnly` is 44k to 90k in both arms, an order of magnitude larger than the gap
+between them, and it is the punch-out draws rendering solid. **The depth
+default is not settled on this**; re-run after texture when nvOnly collapses.
+
+**A second fault, found by counting the tinted meshes.** With the punch-outs
+skipped and each remaining mesh tinted its own colour, one frame holds about
+three distinct colours once the chart is running (617 distinct at beat bucket
+0, then 4 and 10 at buckets 1 and 2). 339 meshes are drawn and roughly three
+are visible, so a few large surfaces cover everything else. Independent of the
+alpha test, and bucket 0's 617 says the geometry arrives and then gets hidden
+rather than never arriving.
+
+Chase it with `GHPC_VK_MESH_RANGE` to find which draws own the big surfaces.
+Note that `0:64` covers nothing visible, so the low indices are the wrong
+place to start. This is also the likeliest home of whatever is left of the
+depth question, since occlusion is what depth state decides.
 
 **Next on rendering correctness, in order:**
 
-1. **Make the coverage comparison valid.** Capture on serial, then pair on it.
-   Everything below is easier to judge once this works.
-2. **The alpha test, and it is cheap.** `nvOnly` was 45k of about 208k native
-   pixels in every arm, so the native path covers ground the software path
-   leaves empty. TEST_1 bits 0..3 are ATE and ATST and this pipeline ignores
-   them, so geometry the GS punches out arrives solid. The fields are already
-   in the image being read.
-3. **Texture**, step 4's other half, below.
+1. **Texture.** It gates everything else, for the punch-out reason under step
+   4. Start with `GHPC_TEX_CENSUS=1` and reuse
+   `GSCpuBackend::SampleTexture`.
+2. **The alpha test**, which texture unblocks rather than precedes: 189 draws
+   test ATST GREATER against AREF 0, and there is nothing to test until texel
+   alpha exists. It was also the `nvOnly` those coverage arms kept reporting,
+   45k of about 208k native pixels covered where the software path drew
+   nothing.
+3. **Then re-run the coverage comparison** with `GHPC_VK_SHOT_BEAT`, which is
+   now the only valid way to pair two runs. Judging placement before texture
+   means judging it through opaque rectangles.
 
 **Per-material depth is the default and its mapping is verified by log, not by
 picture.** `[ghpc/vk/pipeline]` prints the resolved compare op and write flag
