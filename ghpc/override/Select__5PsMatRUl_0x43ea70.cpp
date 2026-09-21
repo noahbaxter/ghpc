@@ -156,6 +156,12 @@ static void ghpcSceneMaterial(uint8_t* rdram, R5900Context* ctx, PS2Runtime* run
     // the same evidence.
     m.depthTest = true;
     m.ztst = (uint32_t)((test >> 17) & 3ull);
+    // The alpha test. Unlike ZTE these bits ARE in the mask (0x6FFFF covers
+    // 0..15), so the material owns them and reading them is honest.
+    m.alphaTest = (test & 1ull) != 0ull;
+    m.atst = (uint32_t)((test >> 1) & 7ull);
+    m.aref = (uint32_t)((test >> 4) & 0xFFull);
+    m.afail = (uint32_t)((test >> 12) & 3ull);
     m.depthWrite = ((zbuf >> 32) & 1ull) == 0ull;
     // mBlend 1 is the opaque mode; every other value the census saw (3 and
     // two others) blends. ALPHA_1 at +0x138 carries the actual equation and
