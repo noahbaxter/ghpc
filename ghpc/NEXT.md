@@ -179,10 +179,12 @@ fixed:
 native path drawing everything it is the fast path, and on `game_screen` the
 software GS draws nothing at all without VU1.
 
-**Do this next: decode PsMesh's converted face packet**, so meshes whose
-geometry lives only there (the menu button icons) draw natively. The packet
-is already dumped and read, and the plan is written out in `BACKLOG.md`,
-`Now` item 1.
+Meshes whose geometry lives only in PsMesh's converted face packet (the menu
+button icons) are decoded from it and draw natively since 2026-09-21. The
+window title names the renderer path that came up, e.g.
+`[Vulkan: native, VU1 off]` or `[raylib: software GS]`.
+
+**Do this next:** `BACKLOG.md` `Now`, the menus not yet shot, then item 2.
 
 Geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
 measured transform in a vertex shader, a depth buffer, a render pass, one

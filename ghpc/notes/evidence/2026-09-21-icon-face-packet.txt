@@ -28,8 +28,31 @@ whose first word is the buffer, +0x154 its size in quadwords:
     qw8  0          1.0        32.0       16.0         v1 n, v2 pos (32,16,...)
     qw9  0          0          0          1.0
     qw10 0          16.0       0          0            v3 pos (0,16,0)
-    qw11 0          1.0        0x01000104 0x6c048003   STCYCL, UNPACK V4-32 NUM 4 ADDR 3 (UVs)
+    qw11 0          1.0        0x01000104 0x6c048003   STCYCL 4/1, UNPACK V4-32 NUM 4 ADDR 3 (colour)
+    qw12..15                                            colour, 1.0 x 4 per vertex
+    qw16 0x64048004 ...                                 UNPACK V2-32 NUM 4 ADDR 4 (uv)
+    qw18 .. 0x01000101                                  STCYCL 1/1
+    qw19 0x1400019b                                     MSCAL 0xcd8
 
 A 32x32 quad: the icon. The layout matches vu1-tl-semantics.md section 2 (4
 quadwords per vertex: position, normal, colour, uv; indices stored as
-localIndex * 4 + 1 and negated at a strip boundary).
+localIndex * 4 + 1 and negated at a strip boundary). The stream starts at
+buffer + 0x10, which is what MemHandle::Lock 0x321150 returns; qw0 is the
+allocator's header. Its first UNPACK comes before any STCYCL, so it runs on
+whatever cycle VIF1 was left in.
+
+Decoded, same day: ghpcDecodeFacePacket in the DrawFaces override walks the
+stream into a VU1 memory image and unrolls each batch at its MSCAL/MSCNT,
+drawing the triangle closing at every index > 0. Every icon mesh comes out
+as 4 verts, 2 tris, uv 0..1. vkscreens.sh, one binary, control arm
+GHPC_SCENE_PACKET=0, 3 ui buckets each (identical within each arm):
+
+                  control           packet
+  main            iou 0.887  swOnly 575    iou 0.890  swOnly 53
+  setlist         iou 0.973  swOnly 25     iou 0.974  swOnly 1
+  difficulty      iou 0.875  swOnly 639    iou 0.878  swOnly 13
+
+Shots show the green CONTINUE button and the grey UP/DOWN bar, absent from
+the control. Gameplay, vkarms.sh from songmesh: the packet arm is pixel
+identical to the control in all 4 buckets. Its two cache misses
+(0x00884890, 0x00884d40) decode to 1x1 quads the same way.

@@ -31,6 +31,7 @@
 //   Vert stride 64: VertVector::resize 0x1f1d94 `sll $a0, $s1, 6`; layout
 //   pos@0 norm@0x10 color@0x20 uv@0x30 is the decomp's (RndMesh.h:279), pinned
 //   by which words resize's initialiser writes.
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -230,6 +231,136 @@ static void ghpcReadQuads(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime
     }
 }
 
+// Geometry out of PsMesh's converted face packet, for a mesh whose vectors are
+// empty at draw time and which Sync never cached: the menu button icons.
+//
+// The packet is the VIF1 stream UpdateFacePacket 0x43a810 built and
+// DrawFaces copies out verbatim, starting at MemHandle::Lock's return
+// (buffer + 0x10, 0x321150) and running +0x154 quadwords. Walked into a VU1
+// memory image the way VIF1 would write it, with TOPS held at 0 since every
+// batch addresses itself from TOPS. A batch ends at its MSCAL / MSCNT and
+// reads, per vu1-tl-semantics.md section 5:
+//   qw0          x vertex count, y index start, z index end (in quadwords)
+//   qw1 + 4*i    position, normal, colour, uv of vertex i
+//   qw y..z      indices, localIndex * 4 + 1, sign-extended, the first two
+//                of each strip negated; the tail pads with 0 (0x43ab94)
+// VU1 draws the triangle closing at each index unless its ADC is set, and
+// ADC is set exactly for index <= 0, so that is the whole unroll.
+bool ghpcDecodeFacePacket(const uint8_t* rdram, uint32_t self,
+                          std::vector<ghpc::scene::Vertex>& verts, std::vector<uint16_t>& indices,
+                          uint32_t* batchesOut) {
+    verts.clear();
+    indices.clear();
+    *batchesOut = 0u;
+    const uint32_t handle = *reinterpret_cast<const uint32_t*>(rdram + ((self + 0x150u) & PS2_RAM_MASK));
+    const uint32_t qwc = *reinterpret_cast<const uint32_t*>(rdram + ((self + 0x154u) & PS2_RAM_MASK)) & 0xFFFFu;
+    if (handle == 0u || qwc == 0u || PS2Runtime::isSpecialAddress(handle)) return false;
+    const uint32_t buf = *reinterpret_cast<const uint32_t*>(rdram + (handle & PS2_RAM_MASK));
+    if (buf == 0u || PS2Runtime::isSpecialAddress(buf)) return false;
+    const uint32_t start = (buf & PS2_RAM_MASK) + 0x10u;
+    if (start + qwc * 16u > PS2_RAM_SIZE) return false;
+    const uint8_t* s = rdram + start;
+    const uint32_t words = qwc * 4u;
+    auto word = [&](uint32_t w) { uint32_t v; std::memcpy(&v, s + w * 4u, 4u); return v; };
+
+    static uint32_t mem[1024][4];
+    // The packet opens with single-vector unpacks before its first STCYCL,
+    // relying on whatever cycle VIF1 was left in; for NUM 1 any cycle
+    // writes the same quadword, so 1/1 stands in for it.
+    uint32_t cl = 1u, wl = 1u;
+    bool pending = false;
+
+    auto flush = [&]() -> bool {
+        pending = false;
+        const uint32_t n = mem[0][0], ys = mem[0][1], ze = mem[0][2];
+        if (n == 0u || n * 4u + 1u > ys || ze <= ys || ze > 1024u) return false;
+        const uint32_t base = (uint32_t)verts.size();
+        if (base + n > 0xFFFFu) return false;
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t* q = mem[1u + 4u * i];
+            ghpc::scene::Vertex v{};
+            std::memcpy(v.pos, q, sizeof(v.pos));
+            std::memcpy(v.norm, q + 4, sizeof(v.norm));
+            std::memcpy(v.weights, q + 8, sizeof(v.weights));
+            std::memcpy(v.uv, q + 12, sizeof(v.uv));
+            verts.push_back(v);
+        }
+        auto local = [&](int32_t a, uint32_t* out) {
+            if (a < 0) a = -a;
+            if (a < 1 || ((uint32_t)(a - 1) & 3u) != 0u || (uint32_t)(a - 1) / 4u >= n) return false;
+            *out = base + (uint32_t)(a - 1) / 4u;
+            return true;
+        };
+        const uint32_t count = (ze - ys) * 4u;
+        for (uint32_t k = 2; k < count; ++k) {
+            const int32_t c = (int32_t)mem[ys + k / 4u][k % 4u];
+            if (c <= 0) continue;
+            uint32_t a, b, d;
+            if (!local((int32_t)mem[ys + (k - 2u) / 4u][(k - 2u) % 4u], &a) ||
+                !local((int32_t)mem[ys + (k - 1u) / 4u][(k - 1u) % 4u], &b) ||
+                !local(c, &d)) continue;
+            indices.push_back((uint16_t)a);
+            indices.push_back((uint16_t)b);
+            indices.push_back((uint16_t)d);
+        }
+        ++*batchesOut;
+        return true;
+    };
+
+    uint32_t w = 0u;
+    while (w < words) {
+        const uint32_t cmd = word(w);
+        const uint32_t op = (cmd >> 24) & 0x7Fu;
+        const uint32_t num = (cmd >> 16) & 0xFFu;
+        const uint32_t imm = cmd & 0xFFFFu;
+        ++w;
+        if ((op & 0x60u) == 0x60u) {
+            const uint32_t vn = (op >> 2) & 3u, vl = op & 3u;
+            // Masked writes and V4-5 do not appear in these packets; stop
+            // rather than guess at them.
+            if ((op & 0x10u) != 0u || vl == 3u || wl == 0u || wl > cl) return false;
+            const uint32_t comps = vn + 1u, bytes = 4u >> vl;
+            const uint32_t vnum = num ? num : 256u;
+            const uint32_t dataWords = (vnum * comps * bytes + 3u) / 4u;
+            if (w + dataWords > words) return false;
+            const bool usn = (imm & 0x4000u) != 0u;
+            const uint8_t* d = s + w * 4u;
+            for (uint32_t n = 0; n < vnum; ++n) {
+                const uint32_t addr = (imm & 0x3FFu) + (n / wl) * cl + (n % wl);
+                if (addr >= 1024u) return false;
+                for (uint32_t c = 0; c < 4u; ++c) {
+                    const uint32_t e = (comps == 1u) ? 0u : c;
+                    if (e >= comps) break;
+                    const uint8_t* p = d + (n * comps + e) * bytes;
+                    uint32_t v;
+                    if (bytes == 4u) std::memcpy(&v, p, 4u);
+                    else if (bytes == 2u) { uint16_t h; std::memcpy(&h, p, 2u); v = usn ? h : (uint32_t)(int32_t)(int16_t)h; }
+                    else v = usn ? p[0] : (uint32_t)(int32_t)(int8_t)p[0];
+                    mem[addr][c] = v;
+                }
+            }
+            w += dataWords;
+            pending = true;
+            continue;
+        }
+        switch (op) {
+        case 0x01: cl = imm & 0xFFu; wl = (imm >> 8) & 0xFFu; break;
+        case 0x14: case 0x15: case 0x17:
+            if (pending && !flush()) return false;
+            break;
+        case 0x20: w += 1u; break;
+        case 0x30: case 0x31: w += 4u; break;
+        case 0x4A: w += (num ? num : 256u) * 2u; break;
+        case 0x50: case 0x51: w += (imm ? imm : 65536u) * 4u; break;
+        case 0x00: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06:
+        case 0x07: case 0x10: case 0x11: case 0x13: break;
+        default: return false;
+        }
+    }
+    if (pending && !flush()) return false;
+    return !indices.empty();
+}
+
 void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
     if (!ghpc::scene::active()) return;
 
@@ -353,7 +484,8 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
                 std::fprintf(stderr, "\n");
                 const uint32_t buf = READ32(handle);
                 if (buf != 0u && !PS2Runtime::isSpecialAddress(buf)) {
-                    for (uint32_t q = 0; q < 12u; ++q) {
+                    const uint32_t qn = std::min<uint32_t>(READ32(self + 0x154u) + 1u, 24u);
+                    for (uint32_t q = 0; q < qn; ++q) {
                         std::fprintf(stderr, "[ghpc/scene/packet]   qw%-2u 0x%08x 0x%08x 0x%08x 0x%08x\n", q,
                                      READ32(buf + q * 16u), READ32(buf + q * 16u + 4u),
                                      READ32(buf + q * 16u + 8u), READ32(buf + q * 16u + 12u));
@@ -415,6 +547,30 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
                 }
             }
             ghpc::scene::submitDynamicMesh(self, s_verts.data(), liveCnt,
+                                           s_indices.data(), (uint32_t)s_indices.size());
+        }
+        return;
+    }
+    // GHPC_SCENE_PACKET=0 drops these draws again, the control arm.
+    static const bool s_packet = []() {
+        const char* e = std::getenv("GHPC_SCENE_PACKET");
+        return e == nullptr || std::atoi(e) != 0;
+    }();
+    if (!cached && s_packet) {
+        uint32_t batches = 0u;
+        const bool ok = ghpcDecodeFacePacket(rdram, self, s_verts, s_indices, &batches);
+        static int s_decodeLogged = 0;
+        if (s_dropEvery > 0 && s_decodeLogged < 12) {
+            ++s_decodeLogged;
+            std::fprintf(stderr, "[ghpc/scene/packet] decode self=0x%08x ok=%d batches=%u verts=%zu tris=%zu",
+                         self, ok ? 1 : 0, batches, s_verts.size(), s_indices.size() / 3u);
+            for (size_t i = 0; i < s_verts.size() && i < 4u; ++i)
+                std::fprintf(stderr, " v%zu=(%g %g %g uv %g %g)", i, s_verts[i].pos[0], s_verts[i].pos[1],
+                             s_verts[i].pos[2], s_verts[i].uv[0], s_verts[i].uv[1]);
+            std::fprintf(stderr, "\n");
+        }
+        if (ok) {
+            ghpc::scene::submitDynamicMesh(self, s_verts.data(), (uint32_t)s_verts.size(),
                                            s_indices.data(), (uint32_t)s_indices.size());
         }
         return;
