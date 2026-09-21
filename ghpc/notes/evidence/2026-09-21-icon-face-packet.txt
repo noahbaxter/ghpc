@@ -1,0 +1,35 @@
+The menu button icons: geometry only in the converted face packet
+2026-09-21, release, resumed from menu_main_screen, GHPC_SCENE_DROP_LOG=600
+
+The CONTINUE / BACK / UP/DOWN icons are missing from every --native menu.
+Their meshes are not mutable and have empty vectors when DrawFaces runs, and
+Sync never caches them:
+
+  [ghpc/scene/miss] self=0x007d2780 owner=0x007d2780 flags140=0x0 verts=0 faces=0
+  [ghpc/scene/miss] self=0x007d2dc0 owner=0x007d2dc0 flags140=0x0 verts=0 faces=0
+
+(The mutable quad beside each icon, 0x007c6070, flags140 0x1f, is a
+different mesh and is now served from its live vectors; its texture is
+blank in RAM and VRAM, so it is not the icon.)
+
+The geometry exists in the converted packet. PsMesh+0x150 is a MemHandle
+whose first word is the buffer, +0x154 its size in quadwords:
+
+  [ghpc/scene/packet] self=0x007d2780 handle=0x007d21f0 qwc=19 h158=0x0000 h15a=0x0000
+    handle words: 0x019fc390 0 0 0
+    qw0  0x007d21f0 0x00000000 0x3f800000 0x00000000   back pointer to the handle
+    qw1  0x00000000 0x00000000 0x00000000 0x6d018011   UNPACK V4-16 NUM 1 ADDR 0x11
+    qw2  0x00050001 0x000d0009 0x00000000 0x00000000   strip indices 1 5 9 13
+    qw3  0x00000000 0x00000000 0x00000000 0x6c018000   UNPACK V4-32 NUM 1 ADDR 0
+    qw4  0x00000004 0x00000011 0x00000012 0x00000614   header: 4 verts, program 0x614
+    qw5  0x01000204 0x68088001 32.0       -16.0        STCYCL 4/2, UNPACK V3-32 NUM 8 ADDR 1
+    qw6  0          0          0          1.0          v0 pos (32,-16,0) n (0,0,1)
+    qw7  0          -16.0      0          0            v1 pos (0,-16,0)
+    qw8  0          1.0        32.0       16.0         v1 n, v2 pos (32,16,...)
+    qw9  0          0          0          1.0
+    qw10 0          16.0       0          0            v3 pos (0,16,0)
+    qw11 0          1.0        0x01000104 0x6c048003   STCYCL, UNPACK V4-32 NUM 4 ADDR 3 (UVs)
+
+A 32x32 quad: the icon. The layout matches vu1-tl-semantics.md section 2 (4
+quadwords per vertex: position, normal, colour, uv; indices stored as
+localIndex * 4 + 1 and negated at a strip boundary).

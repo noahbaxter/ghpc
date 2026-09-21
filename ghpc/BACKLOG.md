@@ -31,15 +31,36 @@ In order:
 
        native vs ref   main 0.887   setlist 0.973   difficulty 0.875
 
-   **The gap: the button icons** (green CONTINUE, red BACK, grey UP/DOWN) are
-   missing on every menu. They are meshes with no geometry in the engine's
-   vectors, ever: `[ghpc/scene/miss]` shows them non-mutable with `verts=0`
-   at draw time and never cached at Sync. Their triangles exist only in the
-   converted PS2 face packet (`mFacePacket` at +0x150, layout in
-   rnd-seam.md and vu1-tl-semantics.md, 4 qw per vertex). Serving them means
-   decoding that packet. The mutable quad beside each icon is served (live
-   vectors, strip order) but is not the icon; its texture is genuinely blank
-   in RAM and in VRAM.
+   **THE NEXT TASK: decode the face packet, for the button icons** (green
+   CONTINUE, red BACK, grey UP/DOWN), missing on every menu. Their meshes
+   have empty vectors at draw time and are never cached at Sync, so their
+   geometry exists only in the converted packet. That packet is dumped and
+   read in `notes/evidence/2026-09-21-icon-face-packet.txt`: PsMesh+0x150 is
+   a MemHandle whose first word is the buffer, +0x154 its quadword count,
+   and a 4-vertex icon comes out as one strip, indices 1 5 9 13, over
+   position/normal pairs (V3-32 under STCYCL 4/2) and UVs (V4-32 at qw3).
+
+   The plan:
+   1. A VIF walker over the buffer that tracks STCYCL and UNPACK and fills a
+      VU-memory image, the way VU1 would see it. ghpc/scripts/vifwalk.py
+      already walks VIF streams; start from its code list.
+   2. Read the header (qw0 of the unpacked block: vertex count, program),
+      vertices as 4 qw each (pos, normal, colour, uv), and the strip
+      indices, `localIndex * 4 + 1`, negated at a strip boundary
+      (vu1-tl-semantics.md section 2, which quotes the T&L loop's sign
+      branch). Unroll strips to a triangle list.
+   3. Serve it from DrawFaces for any `cacheMiss` mesh with a packet, as a
+      `submitDynamicMesh` draw first, caching by mesh once it is right.
+   4. Check on `menu_main_screen` with `vkscreens.sh`; the icons are the
+      measurable difference (main menu iou 0.887 now). Then check gameplay
+      is unchanged with `vkarms.sh`: gameplay's own cache misses are 1% of
+      draws and may be the same class.
+
+   Logging is in place: `GHPC_SCENE_DROP_LOG=N` prints `[ghpc/scene/miss]`
+   and `[ghpc/scene/packet]` (handle, qwc, first 12 qw) for the first 12
+   misses. The mutable quad beside each icon is already served (live
+   vectors, strip order) but is not the icon; its texture is blank in RAM
+   and VRAM.
 
    Not yet shot: career, multiplayer, training, options, results. Capture by
    hand with `GHPC_STATE_SAVE_SCREENS=1`, or give the driver a route.

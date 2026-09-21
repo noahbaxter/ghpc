@@ -338,6 +338,28 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
                 "v0col=(%g %g %g %g) v0uv=(%g %g)\n",
                 self, READ32(self + 0x138u), READ32(self + 0x140u), READ32(self + 0x104u),
                 vp, (fe >= fb) ? (fe - fb) / 6u : 0u, c[0], c[1], c[2], c[3], uv[0], uv[1]);
+            // The converted face packet, the only place a mesh with empty
+            // vectors keeps its geometry: +0x150 a MemHandle*, +0x154 its
+            // size in quadwords, +0x158/+0x15a two halfwords DrawFaces reads.
+            // The handle's first words and the words at its first pointer,
+            // so the next run can see which of them is the buffer.
+            const uint32_t handle = READ32(self + 0x150u);
+            std::fprintf(stderr,
+                "[ghpc/scene/packet] self=0x%08x handle=0x%08x qwc=%u h158=0x%04x h15a=0x%04x\n",
+                self, handle, READ32(self + 0x154u), READ16(self + 0x158u), READ16(self + 0x15au));
+            if (handle != 0u && !PS2Runtime::isSpecialAddress(handle)) {
+                std::fprintf(stderr, "[ghpc/scene/packet]   handle words:");
+                for (uint32_t k = 0; k < 4u; ++k) std::fprintf(stderr, " 0x%08x", READ32(handle + k * 4u));
+                std::fprintf(stderr, "\n");
+                const uint32_t buf = READ32(handle);
+                if (buf != 0u && !PS2Runtime::isSpecialAddress(buf)) {
+                    for (uint32_t q = 0; q < 12u; ++q) {
+                        std::fprintf(stderr, "[ghpc/scene/packet]   qw%-2u 0x%08x 0x%08x 0x%08x 0x%08x\n", q,
+                                     READ32(buf + q * 16u), READ32(buf + q * 16u + 4u),
+                                     READ32(buf + q * 16u + 8u), READ32(buf + q * 16u + 12u));
+                    }
+                }
+            }
         }
     } else if (!usable) {
         ++s_dropNoFaces;
