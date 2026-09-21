@@ -124,6 +124,31 @@ namespace ghpc_drive
         return guestString(rdram, guestWord(rdram, screen + kOffScreenName));
     }
 
+    // The focused component of the current screen, per gh2-decomp:
+    //   UIScreen+0x34 mFocusPanel, UIPanel+0x04 mDir (PanelDir),
+    //   PanelDir+0x210 the focused UIComponent.
+    // Its name is the Hmx::Object's mName (+0x14), and the object is found
+    // through the pointer every one of these classes keeps at +0x00.
+    inline uint32_t focusComponent(const uint8_t *rdram)
+    {
+        const uint32_t screen = guestWord(rdram, kTheUI + kOffCurrent);
+        if (screen == 0u) return 0u;
+        const uint32_t panel = guestWord(rdram, screen + 0x34u);
+        if (panel < 0x1000u || panel >= 0x02000000u) return 0u;
+        const uint32_t dir = guestWord(rdram, panel + 0x04u);
+        if (dir < 0x1000u || dir >= 0x02000000u) return 0u;
+        const uint32_t comp = guestWord(rdram, dir + 0x210u);
+        return (comp < 0x1000u || comp >= 0x02000000u) ? 0u : comp;
+    }
+
+    inline std::string focusName(const uint8_t *rdram, uint32_t comp)
+    {
+        if (comp == 0u) return std::string();
+        const uint32_t obj = guestWord(rdram, comp);
+        if (obj < 0x1000u || obj >= 0x02000000u) return std::string();
+        return guestString(rdram, guestWord(rdram, obj + 0x14u));
+    }
+
     // Where the speed reporters get the screen to tag their lines with.
     //
     // A frame rate is meaningless without the screen it was measured on, and
@@ -257,6 +282,22 @@ namespace ghpc_drive
             const std::string screen = currentScreen(rdram, &settled);
             if (screen.empty()) return 0u;
 
+            // GHPC_PAD_DRIVE_FOCUSLOG: the focused component and the words of
+            // a UIList's ListState (+0x150), whenever any of them change.
+            static const bool s_focusLog = std::getenv("GHPC_PAD_DRIVE_FOCUSLOG") != nullptr;
+            if (s_focusLog)
+            {
+                const uint32_t comp = focusComponent(rdram);
+                std::string line = screen + " focus=0x" + hex(comp) + " '" + focusName(rdram, comp) + "' state";
+                for (uint32_t k = 0; comp != 0u && k < 10u; ++k)
+                    line += " " + hex(guestWord(rdram, comp + 0x150u + k * 4u));
+                if (line != m_focusLine)
+                {
+                    m_focusLine = line;
+                    std::fprintf(stderr, "[drive/focus] %s (t=%.1f)\n", line.c_str(), now);
+                }
+            }
+
             if (screen != m_screen)
             {
                 if (!m_screen.empty())
@@ -268,6 +309,9 @@ namespace ghpc_drive
                     std::fprintf(stderr, "[drive] enter %s (t=%.1f)\n", screen.c_str(), now);
                 m_screen = screen;
                 m_presses = 0;
+                m_step = 0;
+                m_cycleButton = 0u;
+                m_lastCycle = -1;
                 m_enteredAt = now;
                 m_warned = false;
                 return 0u;
@@ -288,6 +332,7 @@ namespace ghpc_drive
             {
                 m_lastCycle = cycle;
                 ++m_presses;
+                m_cycleButton = nextButton(rdram);
             }
             // A load screen ignoring input is correct, not stuck, so do not cry
             // wolf on one. bootup_load and loading_screen both sit for tens of
@@ -298,7 +343,7 @@ namespace ghpc_drive
                 std::fprintf(stderr, "[drive] STUCK on %s, %d presses had no effect (t=%.1f)\n",
                              m_screen.c_str(), m_presses, now);
             }
-            return (phase < m_hold) ? ruleFor(m_screen) : 0u;
+            return (phase < m_hold) ? m_cycleButton : 0u;
         }
 
     private:
@@ -312,6 +357,12 @@ namespace ghpc_drive
             // Seconds to sit on each screen before the first press. Raise it
             // to let GHPC_STATE_SAVE_SCREENS catch every screen on the way.
             if (const char *s = std::getenv("GHPC_PAD_DRIVE_SETTLE")) m_settleDelay = std::atof(s);
+            // Seconds between presses. Lower it to mash, e.g. to fail a song.
+            if (const char *p = std::getenv("GHPC_PAD_DRIVE_PERIOD"))
+            {
+                m_period = std::max(0.1, std::atof(p));
+                m_hold = std::min(m_hold, m_period * 0.5);
+            }
             std::fprintf(stderr, "[drive] enabled, %zu rule(s), fallback=0x%04x\n",
                          m_rules.size(), m_fallback);
         }
@@ -327,21 +378,29 @@ namespace ghpc_drive
                 {
                     std::string key = trim(tok.substr(0, eq));
                     // "down+down+cross" is a sequence: one press each, then
-                    // the last repeats. It is how a menu item other than the
-                    // highlighted one gets picked.
-                    std::vector<uint16_t> seq;
+                    // the last repeats. "@main_career.btn+r2" presses down
+                    // until that component has focus, then goes on, so a
+                    // route picks a menu item by name wherever the cursor
+                    // starts. Names come from GHPC_PAD_DRIVE_FOCUSLOG.
+                    std::vector<Step> seq;
                     const std::string val = tok.substr(eq + 1);
                     for (size_t a = 0, b; a <= val.size(); a = b + 1)
                     {
                         b = val.find('+', a);
                         if (b == std::string::npos) b = val.size();
-                        const uint16_t btn = buttonByName(trim(val.substr(a, b - a)));
+                        const std::string word = trim(val.substr(a, b - a));
+                        if (!word.empty() && word[0] == '@')
+                        {
+                            seq.push_back(Step{0u, word.substr(1)});
+                            continue;
+                        }
+                        const uint16_t btn = buttonByName(word);
                         if (!btn) { seq.clear(); break; }
-                        seq.push_back(btn);
+                        seq.push_back(Step{btn, std::string()});
                     }
                     if (!seq.empty())
                     {
-                        if (key == "*") m_fallback = seq.back();
+                        if (key == "*") m_fallback = seq.back().btn ? seq.back().btn : kNoPress;
                         else m_rules[key] = seq;
                     }
                 }
@@ -352,6 +411,13 @@ namespace ghpc_drive
                 }
                 tok.clear();
             }
+        }
+
+        static std::string hex(uint32_t v)
+        {
+            char b[12];
+            std::snprintf(b, sizeof(b), "%x", v);
+            return b;
         }
 
         static std::string trim(std::string v)
@@ -366,16 +432,26 @@ namespace ghpc_drive
             return s.find("load") != std::string::npos;
         }
 
-        uint16_t ruleFor(const std::string &screen) const
+        // The button for this press cycle, advancing the screen's sequence.
+        uint16_t nextButton(const uint8_t *rdram)
         {
-            const auto it = m_rules.find(screen);
-            uint16_t btn = m_fallback;
-            if (it != m_rules.end())
+            const auto it = m_rules.find(m_screen);
+            if (it == m_rules.end()) return m_fallback == kNoPress ? 0u : m_fallback;
+            const std::vector<Step> &seq = it->second;
+            while (true)
             {
-                const size_t i = m_presses > 0 ? static_cast<size_t>(m_presses - 1) : 0u;
-                btn = it->second[std::min(i, it->second.size() - 1u)];
+                const size_t last = seq.size() - 1u;
+                const Step &s = seq[std::min(m_step, last)];
+                if (!s.focus.empty())
+                {
+                    if (focusName(rdram, focusComponent(rdram)) != s.focus) return kDown;
+                    if (m_step >= last) return 0u;
+                    ++m_step;
+                    continue;
+                }
+                if (m_step < last) ++m_step;
+                return s.btn == kNoPress ? 0u : s.btn;
             }
-            return btn == kNoPress ? 0u : btn;
         }
 
         static double seconds()
@@ -385,9 +461,18 @@ namespace ghpc_drive
         }
 
         bool m_enabled = false;
-        std::unordered_map<std::string, std::vector<uint16_t>> m_rules;
+        // One step of a rule: a button, or a component to put focus on.
+        struct Step
+        {
+            uint16_t btn;
+            std::string focus;
+        };
+        std::unordered_map<std::string, std::vector<Step>> m_rules;
+        size_t m_step = 0;
+        uint16_t m_cycleButton = 0u;
         uint16_t m_fallback = kCross;
         std::string m_screen;
+        std::string m_focusLine;
         double m_enteredAt = 0.0;
         double m_bootDelay = 6.0;   // let boot settle before touching anything
         double m_settleDelay = 0.6; // let a new screen finish appearing
@@ -395,6 +480,8 @@ namespace ghpc_drive
         double m_hold = 0.12;       // press edge, then release
         int m_lastCycle = -1;
         int m_presses = 0;
+        int m_visit = 0;
+        std::unordered_map<std::string, int> m_visits;
         int m_stuckAfter = 12;
         bool m_warned = false;
     };
