@@ -91,6 +91,23 @@ namespace ghpc
             bool blend;        // mBlend != 1
             float color[4];    // mColor
             uint32_t texKey;   // the PsTex this draw binds, 0 for none
+
+            // The alpha test, TEST_1 bits 0..13. Carried but not yet honoured
+            // by any backend, and measured for a reason: the native path
+            // covers about 45k pixels per frame that the software path leaves
+            // empty, and geometry the GS punches out arriving solid is the
+            // leading explanation. Implementing it needs the texture's alpha,
+            // so it cannot land before texture does.
+            //
+            //   ate   bit 0, enable
+            //   atst  bits 1..3: 0 never, 1 always, 2 less, 3 lequal,
+            //         4 equal, 5 gequal, 6 greater, 7 notequal
+            //   aref  bits 4..11, the reference value
+            //   afail bits 12..13: 0 keep, 1 fb only, 2 zb only, 3 rgb only
+            bool alphaTest;
+            uint32_t atst;
+            uint32_t aref;
+            uint32_t afail;
         };
 
         void setMaterial(const Material &material);

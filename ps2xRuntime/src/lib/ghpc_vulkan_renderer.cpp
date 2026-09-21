@@ -39,6 +39,7 @@ namespace ghpc
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <unordered_map>
@@ -270,6 +271,21 @@ namespace ghpc
             // swapchain, so it shows the letterbox itself.
             int m_shotEvery = 0;
             int m_shotLimit = 8;
+            // GHPC_VK_SHOT_BEAT=N captures once per N beats of the chart
+            // instead of every N present frames, and it is the only mode whose
+            // output two runs can be compared on.
+            //
+            // A present-frame interval cannot work: about 40 presents pass per
+            // guest frame on game_screen, so the interval steps the chart by a
+            // fraction of a frame and any phase difference between runs lands
+            // somewhere else. Beat buckets are the chart's own clock, so run A
+            // and run B both capture at beat 16 whatever the host was doing,
+            // and the files even come out with matching names.
+            double m_shotBeatEvery = 0.0;
+            long long m_shotBeatBucket = -1;
+            // What the last shot was taken at, for the log line and the name.
+            double m_shotBeat = 0.0;
+            double m_shotGame = 0.0;
             // GHPC_VK_SHOT_SCREEN=<name> holds the shots until the guest is on
             // that screen. Without it a run that takes 600 frames to reach
             // gameplay spends its whole shot budget on the loading screen,
@@ -304,6 +320,28 @@ namespace ghpc
             // mesh you can identify.
             uint32_t m_drawFirst = 0u;
             uint32_t m_drawLimit = 0u; // 0 means all
+
+            // GHPC_VK_MESH_SKIP_ATE=1 drops the alpha-tested draws.
+            //
+            // Not a rendering choice, a stand-in. 189 of 528 gameplay draws
+            // enable the alpha test, and every one of them is ATST GREATER
+            // with AREF 0, which is a punch-out: pass only where the texel has
+            // alpha. Without texture there is no alpha to test, so those draws
+            // render as their full solid quads and cover the frame. Skipping
+            // them shows what is behind, which is the only way to judge the
+            // rest of the geometry before texture lands. It is wrong on
+            // purpose and both arms are worth looking at.
+            bool m_skipAlphaTested = false;
+
+            // GHPC_VK_MESH_TINT=1 colours each draw from a hash of its mesh
+            // key instead of the material colour.
+            //
+            // Flat material colour plus a one-directional shade merges
+            // everything that faces the camera into one white mass, which
+            // reads as broken rendering whether or not it is. A per-mesh tint
+            // makes the structure legible: distinct objects get distinct
+            // colours, so what is actually on screen can be counted.
+            bool m_tint = false;
             bool m_meshReady = false;
             VkRenderPass m_meshPass = VK_NULL_HANDLE;
             VkPipelineLayout m_meshLayout = VK_NULL_HANDLE;
@@ -344,6 +382,7 @@ namespace ghpc
             uint64_t m_meshNoGeometry = 0ull;
             uint64_t m_meshNoCamera = 0ull;
             uint64_t m_pipelineBinds = 0ull;
+            uint64_t m_meshSkippedAte = 0ull;
 
             uint32_t m_frame = 0u;
             bool m_swapchainDirty = false;
@@ -1611,7 +1650,21 @@ namespace ghpc
                     std::memcpy(entry.m[m], d.matrices + (size_t)m * 16u, 16u * sizeof(float));
                 }
                 entry.matrixCount = count;
-                std::memcpy(entry.color, d.material.color, sizeof(entry.color));
+                if (m_tint)
+                {
+                    // A cheap integer hash spread over the three channels,
+                    // biased away from black so nothing tints to invisible.
+                    uint32_t h = d.meshKey * 2654435761u;
+                    h ^= h >> 15;
+                    entry.color[0] = 0.25f + 0.75f * (float)((h >> 0) & 0xFFu) / 255.0f;
+                    entry.color[1] = 0.25f + 0.75f * (float)((h >> 8) & 0xFFu) / 255.0f;
+                    entry.color[2] = 0.25f + 0.75f * (float)((h >> 16) & 0xFFu) / 255.0f;
+                    entry.color[3] = 1.0f;
+                }
+                else
+                {
+                    std::memcpy(entry.color, d.material.color, sizeof(entry.color));
+                }
                 m_drawStaging.push_back(entry);
             }
 
@@ -1693,6 +1746,11 @@ namespace ghpc
                 }
 
                 const scene::Material &mat = draws[i].material;
+                if (m_skipAlphaTested && mat.alphaTest)
+                {
+                    ++m_meshSkippedAte;
+                    continue;
+                }
                 PipelineKey key{};
                 key.ztst = mat.ztst & 3u;
                 key.depthTest = mat.depthTest ? 1u : 0u;
@@ -1756,7 +1814,8 @@ namespace ghpc
                       << " noGeometry=" << m_meshNoGeometry
                       << " noCamera=" << m_meshNoCamera
                       << " pipelines=" << m_pipelines.size()
-                      << " pipelineBinds=" << m_pipelineBinds << std::endl;
+                      << " pipelineBinds=" << m_pipelineBinds
+                      << " skippedAte=" << m_meshSkippedAte << std::endl;
             m_meshFrames = 0ull;
         }
 
@@ -1833,7 +1892,20 @@ namespace ghpc
 
             const std::string screen = ghpc_drive::taggedScreen();
             char path[256];
-            std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_%d_%s.ppm", m_shots, screen.c_str());
+            if (m_shotBeatEvery > 0.0)
+            {
+                // Named by the beat bucket, not by a counter, so run A and run
+                // B write the same filenames for the same chart positions and
+                // pairing two arms is matching names. A counter cannot do
+                // that: an arm that starts capturing one bucket earlier
+                // shifts every later index by one.
+                std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_b%06lld_%s.ppm",
+                              m_shotBeatBucket, screen.c_str());
+            }
+            else
+            {
+                std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_%d_%s.ppm", m_shots, screen.c_str());
+            }
             FILE *f = std::fopen(path, "wb");
             if (f == nullptr)
             {
@@ -1875,10 +1947,11 @@ namespace ghpc
             // chart, and coverage moves by 0.2 iou across 240 present frames,
             // so that difference swamps anything a render change does.
             std::fprintf(stderr,
-                         "[ghpc/vk/shot] wrote %s %ux%u lit=%llu of %llu frame=%u serial=%llu"
-                         " mesh=%d screen=%s\n",
+                         "[ghpc/vk/shot] wrote %s %ux%u lit=%llu of %llu beat=%.3f game=%.3f"
+                         " frame=%u serial=%llu mesh=%d screen=%s\n",
                          path, m_shotWidth, m_shotHeight, (unsigned long long)lit,
-                         (unsigned long long)m_shotWidth * m_shotHeight, m_frame,
+                         (unsigned long long)m_shotWidth * m_shotHeight,
+                         m_shotBeat, m_shotGame, m_frame,
                          (unsigned long long)m_meshSerial, m_meshMode, screen.c_str());
         }
 
@@ -1911,6 +1984,12 @@ namespace ghpc
             {
                 m_shotScreen = shotScreen;
             }
+            if (const char *shotBeat = std::getenv("GHPC_VK_SHOT_BEAT"); shotBeat != nullptr)
+            {
+                m_shotBeatEvery = std::atof(shotBeat);
+            }
+            m_skipAlphaTested = std::getenv("GHPC_VK_MESH_SKIP_ATE") != nullptr;
+            m_tint = std::getenv("GHPC_VK_MESH_TINT") != nullptr;
             if (const char *depth = std::getenv("GHPC_VK_MESH_DEPTH"); depth != nullptr)
             {
                 m_depthMode = std::atoi(depth);
@@ -2384,11 +2463,39 @@ namespace ghpc
             // The whole presented image, for evidence. Recorded after the mesh
             // pass on purpose: what a shot has to show is what went to the
             // screen, not an intermediate.
-            m_shotThisFrame = m_shotEvery > 0 && m_shots < m_shotLimit && m_hasFrame &&
+            // Beat mode wins when it is set, because a present-frame interval
+            // cannot produce comparable shots across runs.
+            bool shotDue = false;
+            long long candidateBucket = m_shotBeatBucket;
+            {
+                const ghpc_drive::GameClocks clocks = ghpc_drive::gameClocks();
+                m_shotBeat = (double)clocks.beat;
+                m_shotGame = (double)clocks.game;
+                if (m_shotBeatEvery > 0.0)
+                {
+                    if (clocks.valid && clocks.beat > 0.0f)
+                    {
+                        candidateBucket =
+                            (long long)std::floor((double)clocks.beat / m_shotBeatEvery);
+                        shotDue = candidateBucket != m_shotBeatBucket;
+                    }
+                }
+                else if (m_shotEvery > 0)
+                {
+                    shotDue = (m_frame % static_cast<uint32_t>(m_shotEvery)) == 0u;
+                }
+            }
+
+            m_shotThisFrame = shotDue && m_shots < m_shotLimit && m_hasFrame &&
                               m_swapchainReadable &&
-                              (m_frame % static_cast<uint32_t>(m_shotEvery)) == 0u &&
                               (m_shotScreen.empty() || ghpc_drive::taggedScreen() == m_shotScreen) &&
                               ensureShotBuffer();
+            // Only now, so a bucket rejected by the screen gate or the cap is
+            // still available when the run reaches the screen that wants it.
+            if (m_shotThisFrame)
+            {
+                m_shotBeatBucket = candidateBucket;
+            }
             if (m_shotThisFrame)
             {
                 VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};

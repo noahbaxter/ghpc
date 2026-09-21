@@ -133,17 +133,37 @@ already says hashes are not stable across runs. Neither form of that
 comparison can fail. The readback can, and it covers the swizzle, the filter
 and the rect, which a source-side hash never could.
 
-### R2: the Rnd seam, geometry on the GPU, exit not met
-**Steps 1 to 3 are in, and the depth half of step 4 with them.** Gameplay
-geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
-measured transform in a vertex shader, a depth buffer and a render pass.
-Every number below, and the knobs, are in
+### R2: the Rnd seam, geometry on the GPU, picture wrong, texture next
+**The pipeline works and the picture does not, for one measured reason.**
+Gameplay geometry goes through a real Vulkan pipeline: per-mesh GPU buffers,
+the measured transform in a vertex shader, a depth buffer, a render pass, and
+one pipeline per material depth and blend state. What it cannot do is texture,
+and 36% of gameplay draws are alpha-test punch-outs that need texel alpha to
+have a shape at all. Detail in
 `notes/evidence/2026-09-20-r2-vulkan-mesh-pipeline.txt`.
 
-    GHPC_VK_MESH=1   native geometry over the software blit
-    GHPC_VK_MESH=2   native only, no blit, clear to dark grey
-    GHPC_VK_SHOT=N   write the presented swapchain to a PPM every Nth frame
-    GHPC_VK_SHOT_SCREEN=game_screen   hold the shots until gameplay
+**Do this next: texture.** Not because the picture would be prettier, because
+189 of 528 draws are currently wrong in a way nothing else can fix. Sequenced
+in `BACKLOG.md`.
+
+    GHPC_VK_MESH=1            native geometry over the software blit
+    GHPC_VK_MESH=2            native only, no blit
+    GHPC_VK_MESH_DEPTH=N      0 none, 1 GREATER, 2 LESS, 3 material (default)
+    GHPC_VK_MESH_RANGE=f:c    draw only c draws starting at f
+    GHPC_VK_MESH_SKIP_ATE=1   drop the alpha-tested draws, to see behind them
+    GHPC_VK_MESH_TINT=1       colour each draw by a hash of its mesh key
+    GHPC_VK_MESH_LOG=N        the [ghpc/vk/mesh] line every Nth frame
+    GHPC_VK_SHOT_BEAT=N       capture a PPM every N beats. Use this one.
+    GHPC_VK_SHOT=N            capture every Nth present frame. Do not compare
+                              two runs with it; see below.
+    GHPC_VK_SHOT_SCREEN=s     hold the shots until the guest is on screen s
+    GHPC_TEX_CENSUS=1         PSM, CBP, CPSM, TFX census at the real read point
+    GHPC_SCENE_DROP_LOG=N     what the seam could not serve
+
+`[ghpc/vk/pipeline]` prints the resolved depth compare and write flag for
+every pipeline created. Reach for it before reasoning about depth state: it
+settled in one 60s run what coverage had "answered" twice in opposite
+directions.
 
 Release, 260s driven, on `game_screen`:
 
@@ -158,17 +178,42 @@ once it arrives.
 picture is the evidence and a log line cannot be one; before it existed,
 checking a render change meant watching the window.
 
-**The picture is not verified against the software path yet, and the attempt
-to do it produced two opposite wrong answers.** Read
-`notes/gotchas.md`, "Screenshots pair on serial", before running that
-comparison. In short: shots were paired by index and then by present frame,
-neither of which is a chart position, and coverage moves about 0.2 iou over
-240 present frames as the chart advances. Mispaired shots therefore gave a
-large, smooth, entirely convincing difference between two depth modes, held
-across seven pairings, and it was the pairing error. `[ghpc/vk/shot]` now
-carries `serial=`, the guest frame, which is the only field two runs pair on.
-Capturing on a serial interval rather than a present-frame interval is the
-piece still missing.
+**Why the picture is wrong, measured.** On `game_screen`:
+
+    draws=528  ate=189  atst=0/0/0/0/0/0/189/0  aref=0..0  afail=183
+
+189 draws enable the GS alpha test, all of them ATST GREATER with AREF 0,
+which is a pure punch-out: pass only where the texel has alpha. This pipeline
+ignores TEST_1 bits 0..13, so each of those renders as its full solid quad
+instead of a cut-out shape, and opaque rectangles cover the frame. Not a
+transform fault, not a depth fault, not a shading fault.
+
+`GHPC_VK_MESH_SKIP_ATE=1` drops them so the rest can be looked at, and
+`GHPC_VK_MESH_TINT=1` makes distinct meshes distinguishable. Both are
+deliberately wrong pictures, and they are the only way to judge the other 339
+draws before texture lands.
+
+**Comparing two runs' screenshots needs `GHPC_VK_SHOT_BEAT`, nothing else.**
+Read `notes/gotchas.md`, "Screenshots pair on serial", first: shots were once
+paired by index and by present frame, neither of which is a chart position,
+and that manufactured a large convincing difference between two depth modes
+out of nothing. Beat capture fires on the first present past a beat boundary,
+names the file after the bucket, and `ghpc/scripts/vkcompare.sh` joins two
+capture directories on that. Always include an arm identical to the one under
+test: the measured noise floor is 8 of 12 buckets pixel-identical and 0.05 iou
+otherwise, and a difference has to clear it.
+
+**Placement is confirmed, beat-paired, one binary.** With
+`GHPC_VK_MESH_DEPTH=1` the native path covers every pixel the software
+rasteriser covers, `swOnly` exactly 0 in all twelve buckets. That confirms the
+bone blend, the projection, the GS pixel mapping, the XYOFFSET subtraction and
+the viewport together, which the offline checker cannot reach.
+
+Per-material depth (the default, mode 3) loses about 4k pixels a frame against
+that. Real, since it clears the noise floor, and small. **Do not settle the
+default on it yet:** `nvOnly` is 44k to 90k in both arms, an order of
+magnitude bigger than the gap between them, and it is the punch-out draws
+rendering solid. Re-run after texture and let that decide.
 
 `nvOnly` was large in every arm, 45k of about 208k native pixels, so the
 native path covers ground the software path leaves empty. Most likely the
@@ -185,8 +230,10 @@ through and ZMSK turning the write off where it is set:
     ztst=3 zmsk=0 depthMode=3 compare=4 write=1     compare 4 is GREATER
 
 So `GHPC_VK_MESH_DEPTH` defaults to 3, the material's own state, because that
-is what the hardware does. Whether a forced state gives a better picture is
-**open**; no coverage number from this session bears on it.
+is what the hardware does. The coverage numbers above now say a forced GREATER
+covers the software path more completely, by about 4k pixels a frame, so the
+default is the open question and not the mapping. Settle it after texture,
+when `nvOnly` stops dominating.
 
 **The transform is proved, offline, in about a second.**
 `ghpc/tools/vkxform.cpp` reimplements the shader's arithmetic and compares it
@@ -225,9 +272,22 @@ Two settled sub-results, so they are not re-derived:
 
 **Exit, unchanged and not met:** venue and fretboard render through Vulkan
 above 30 fps with the gameplay chain alive (`BeatMatch::Poll` 0x1259c0,
-`PlayerMatcher::Poll` 0x117dd0) and `song_tick_advanced=yes`. No speed claim
-belongs to R2 yet: step 5 has not landed, so the software rasteriser still
-does all of the work. What is left is sequenced in `BACKLOG.md`.
+`PlayerMatcher::Poll` 0x117dd0) and `song_tick_advanced=yes`.
+
+Neither half holds. The picture cannot be right while 36% of draws are
+punch-outs with no alpha to test, and no speed claim belongs to R2 at all
+until step 5 lands, because the software rasteriser still does every bit of
+the work the native path duplicates. Two distinct pieces of work, and texture
+is the one that gates the picture.
+
+**What the phase order got wrong, worth saying once.** R2's sequence put
+material and texture at step 4, after geometry and depth, as though they were
+refinements. They are not: without texel alpha, a third of the frame has no
+correct silhouette, so every judgement about geometry, depth or placement is
+made through a screen of opaque rectangles. The geometry work was still right
+to do first, since it is what the transform and the cache were verified
+against, but the phase should have expected texture to be load-bearing rather
+than cosmetic.
 
 Two things that will cost a day each if taken on trust. `g_ghpcInstWorld` is
 a probe and not a seam input, by its own file's account: it names a different

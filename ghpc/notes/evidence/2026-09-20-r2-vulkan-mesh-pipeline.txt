@@ -113,11 +113,12 @@ mutable-geometry case rnd-seam.md already names.
 So the fretboard is not missing for that reason. It has not been identified in
 the frame either way, and the range probe below is why that is still open.
 
-The coverage comparison does not work yet, and it produced two opposite
-wrong answers before that was found
--------------------------------------------------------------------------
-Read this before quoting any iou number from this session. There are none in
-here worth quoting.
+The coverage comparison, wrong twice and then fixed
+--------------------------------------------------
+Fixed 2026-09-21 by GHPC_VK_SHOT_BEAT. The numbers at the end of this section
+are beat-paired on one binary with a measured noise floor and are the only
+coverage numbers in this file worth quoting. Everything before them is the
+account of how it went wrong, kept because the failure is instructive.
 
 The idea is sound. Colours are not comparable while the native path has no
 texture (194 distinct against the software rasteriser's 1071), and hashes are
@@ -148,11 +149,56 @@ regresses coverage, then that it was run noise, then that it regressed after
 all, then that the arm which was supposed to show it had the knob forced and
 measured the other band anyway. None of them was supported.
 
-**The fix, and it is in.** `[ghpc/vk/shot]` now carries `serial=`, the guest
-frame the scene came from. Pair on that. If the serials do not match, the
-comparison is not evidence, whatever it shows. To make the pairing land,
-capture on a serial interval rather than a present-frame interval, which
-GHPC_VK_SHOT does not do yet.
+**The fix.** GHPC_VK_SHOT_BEAT=N captures every N beats of the chart instead
+of every N present frames. It fires on the first present past a beat boundary,
+so the captured beat lands within a few hundredths of it (measured: 1.015,
+2.004, 3.019, 4.008), and it names the file after the bucket, so two runs
+write the same filenames for the same chart positions and pairing is a
+filename join. ghpc/scripts/vkcompare.sh does the join.
+
+N=1 is about right: roughly 1563 present frames pass per beat, so N=4 gave 2
+shots in a 300s arm and N=1 gives about 9. [ghpc/vk/shot] also carries
+serial=, the guest frame, for checking a pair by hand.
+
+**The noise floor, which is the thing the old comparison never had.** Two
+identical native arms, one binary, beat-paired, 12 buckets:
+
+    8 of 12 buckets   iou 1.0000, swOnly 0, nvOnly 0   pixel identical
+    bucket 1          iou 0.9936
+    buckets 5,9,10,11 iou 0.9463 to 0.9527, swOnly up to 6775
+
+So beat pairing reproduces frames exactly two thirds of the time and to
+within 0.05 iou otherwise. A difference has to clear that to mean anything.
+Always run the identical arm; it is what makes the rest interpretable.
+
+**The measurement, finally valid.** Native against the software rasteriser,
+one binary, beat-paired, 12 buckets. swOnly is pixels the software path
+covered and the native path did not:
+
+    arm                          iou          swOnly      nvOnly
+    forced GREATER (mode 1)      0.61 - 0.80  0 in all 12  45540 - 90079
+    per-material depth (mode 3)  0.59 - 0.79  107 - 4243   43963 - 88453
+
+Two things, and only two, follow.
+
+**Placement is confirmed.** With forced GREATER the native path covers every
+pixel the software path covers, in all twelve buckets, swOnly exactly zero.
+That confirms the bone blend, the projection, the GS pixel mapping, the
+XYOFFSET subtraction and the viewport together, which the offline checker
+cannot do because it stops at the arithmetic.
+
+**Per-material depth loses about 4k pixels a frame, and that is real but
+small.** It is nonzero in 11 of 12 buckets including buckets 2, 4, 6 and 7
+where the identical-arm control was exactly 0, so it clears the noise floor.
+It is also 4k and not the 19k the mispaired comparison claimed: the direction
+of that old conclusion survived and the magnitude was wrong by five times,
+which is about what a broken metric should be expected to do.
+
+**Do not settle the depth default on this yet.** nvOnly is 44k to 90k in both
+arms, an order of magnitude larger than the difference between them, and it is
+the punch-out draws rendering solid. Both arms are being judged through a
+screen of opaque rectangles. Re-run this after texture, when nvOnly should
+collapse, and let that decide.
 
 **What settled the depth question instead was a log, not a picture.**
 `[ghpc/vk/pipeline]` prints the resolved compare op and write flag for every
@@ -172,15 +218,69 @@ So the per-material depth path is the default, because it is what the hardware
 does. Whether a forced state produces a better picture is **open**, and no
 coverage number in this session bears on it.
 
-What the metric still cannot see, once pairing is fixed:
+What the metric still cannot see, once pairing is fixed: a wrong colour, a
+wrong texture, or a depth ordering error between two surfaces that both cover
+the same pixel.
 
-- **nvOnly is large**, 45k of about 208k native pixels, in every arm. The
-  native path covers ground the software path leaves empty. Named and not
-  tested: the alpha test. TEST_1 bits 0..3 are ATE and ATST, this pipeline
-  ignores them, so geometry the GS punches out arrives solid. Cheap to test,
-  the fields are already in the image being read.
-- A wrong colour, a wrong texture, or a depth ordering error between two
-  surfaces that both cover the same pixel.
+The alpha test is why the picture is wrong, and it was the nvOnly
+----------------------------------------------------------------
+Measured 2026-09-21, release, on game_screen, from `[ghpc/scene]`:
+
+    draws=528  ate=189  atst=0/0/0/0/0/0/189/0  aref=0..0  afail=183
+
+**189 of 528 draws enable the alpha test, and all 189 are ATST GREATER with
+AREF 0.** That is a pure punch-out: pass only where the texel has alpha. 183
+of them also carry a non-KEEP AFAIL, so on failure the GS updates only part of
+the target.
+
+This pipeline ignores TEST_1 bits 0..13 completely, so every one of those 189
+draws renders as its full solid quad instead of a cut-out shape. A banner, a
+logo, a lighting gel, anything whose silhouette lives in its texture alpha
+becomes an opaque rectangle over the frame. That is what the first
+screenshots of this path actually show, and it is not a transform fault, a
+depth fault or a shading fault.
+
+It is also the nvOnly that four arms reported and this file listed as a
+suspect: about 45k of 208k native pixels covered where the software path drew
+nothing, against 189 punch-out draws rendering solid. Suspect confirmed.
+
+**So texture is not step 4 polish, it is a precondition for a correct frame.**
+36% of gameplay draws cannot be drawn correctly without texel alpha. Nothing
+about the picture should be judged until it lands.
+
+Two stand-ins went in for looking at the rest, both wrong on purpose:
+
+    GHPC_VK_MESH_SKIP_ATE=1  drop the 189 alpha-tested draws, to see behind
+    GHPC_VK_MESH_TINT=1      colour each draw from a hash of its mesh key
+
+The tint exists because flat material colour plus a one-directional shade
+merges everything facing the camera into one white mass, which reads as broken
+rendering whether or not it is. Distinct colours per mesh make what is on
+screen countable.
+
+Both verified on one run: `submitted=527 drawn=339`, so 188 draws skipped
+against the 189 the histogram counts, and triangles fall from 41,689 to
+30,608. So the punch-outs are 36% of draws and 26% of the geometry.
+
+**And counting them found the next problem.** With the punch-outs skipped and
+every remaining mesh tinted its own colour, the distinct-colour count per
+frame is:
+
+    beat bucket 0    617 distinct
+    beat bucket 1      4 distinct
+    beat bucket 2     10 distinct
+
+339 meshes are being drawn and about three of them are visible once the chart
+is running. So a handful of large surfaces cover everything else, and that is
+a second fault independent of the alpha test: either most geometry lands
+behind them, or those surfaces should not be full-screen. Bucket 0 having 617
+says the geometry is there and becomes hidden rather than never arriving.
+
+Chase this with GHPC_VK_MESH_RANGE to find which draws own the big surfaces,
+and note from an earlier probe that range 0:64 covers nothing visible, so the
+low indices are the wrong place to start. It is also the most likely home of
+whatever is left of the depth question, since occlusion is exactly what depth
+state decides.
 - **swOnly is a lower bound even once pairing is fixed.** "Covered" is a
   brightness threshold, so dark geometry counts as background. The software
   reference reports 165,936 covered of the 229,376-pixel picture rect, and the

@@ -1,5 +1,6 @@
 #include "ghpc_scene.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -56,6 +57,12 @@ namespace ghpc
                 m.blend = false;
                 m.color[0] = m.color[1] = m.color[2] = m.color[3] = 1.0f;
                 m.texKey = 0u;
+                // No alpha test, and atst ALWAYS to match, so a zeroed atst
+                // cannot read as ATST never and silently mean "draw nothing".
+                m.alphaTest = false;
+                m.atst = 1u;
+                m.aref = 0u;
+                m.afail = 0u;
                 return m;
             }
 
@@ -336,8 +343,24 @@ namespace ghpc
             uint32_t noZTest = 0u;
             uint32_t blended = 0u;
             uint32_t textured = 0u;
+            // The alpha test, counted because it is the leading explanation
+            // for the native path covering pixels the software path leaves
+            // empty. atst[] is indexed by the GS field.
+            uint32_t alphaTested = 0u;
+            uint32_t atst[8] = {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u};
+            uint32_t afailNonKeep = 0u;
+            uint32_t arefMin = 0xFFFFFFFFu;
+            uint32_t arefMax = 0u;
             for (const PendingDraw &d : p.draws)
             {
+                if (d.material.alphaTest)
+                {
+                    ++alphaTested;
+                    atst[d.material.atst & 7u] += 1u;
+                    afailNonKeep += (d.material.afail != 0u) ? 1u : 0u;
+                    arefMin = std::min(arefMin, d.material.aref);
+                    arefMax = std::max(arefMax, d.material.aref);
+                }
                 verts += d.vertCount;
                 tris += d.indexCount / 3u;
                 skinned += (d.matrixCount > 1u) ? 1u : 0u;
@@ -354,13 +377,17 @@ namespace ghpc
             std::fprintf(stderr,
                          "[ghpc/scene] frame=%llu draws=%zu verts=%llu tris=%llu "
                          "skinned=%u noIndices=%u cam=%d bones=%u world=%u meshes=%zu "
-                         "mats=%u ztst=%u/%u/%u/%u noZWrite=%u noZTest=%u blend=%u tex=%u\n",
+                         "mats=%u ztst=%u/%u/%u/%u noZWrite=%u noZTest=%u blend=%u tex=%u "
+                         "ate=%u atst=%u/%u/%u/%u/%u/%u/%u/%u aref=%u..%u afail=%u\n",
                          (unsigned long long)frames, p.draws.size(),
                          (unsigned long long)verts, (unsigned long long)tris,
                          skinned, noIndices, p.cameraSeen ? 1 : 0,
                          p.boneUploads, p.worldUploads, s.geometry.size(),
                          p.materialBinds, ztst[0], ztst[1], ztst[2], ztst[3],
-                         noZWrite, noZTest, blended, textured);
+                         noZWrite, noZTest, blended, textured,
+                         alphaTested, atst[0], atst[1], atst[2], atst[3],
+                         atst[4], atst[5], atst[6], atst[7],
+                         (arefMin == 0xFFFFFFFFu) ? 0u : arefMin, arefMax, afailNonKeep);
         }
 
         bool acquireFrame(Camera &camera, bool &cameraValid,

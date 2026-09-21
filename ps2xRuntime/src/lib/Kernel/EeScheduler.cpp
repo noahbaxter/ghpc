@@ -2791,6 +2791,11 @@ void EeScheduler::processEvent(const EeEvent &event)
         // vblank is the one place already guaranteed to run once a frame with
         // rdram in hand; the cost is three guest loads and a string compare.
         ghpc_drive::setCurrentScreen(ghpc_drive::currentScreen(m_rdram, nullptr));
+        // TaskMgr's clocks, published every frame rather than on the reporter's
+        // interval, because anything that pairs two runs has to pair on the
+        // chart and not on a host counter. Four guest loads, alongside the
+        // three the screen read already costs here.
+        ghpc_drive::setGameClocks(ghpc_drive::readGameClocks(m_rdram));
 
         // Frame boundary for the Rnd seam. Driven from vblank because this
         // runs on the thread executing the guest, where the draws are
@@ -2838,27 +2843,24 @@ void EeScheduler::processEvent(const EeEvent &event)
                 if (++ticks >= (uint32_t)every)
                 {
                     ticks = 0;
-                    constexpr uint32_t kTheTaskMgr = 0x005A5870u;
-                    const uint32_t clocks = ghpc_drive::guestWord(m_rdram, kTheTaskMgr + 0x28u);
+                    // Read from the slot published at the top of this vblank
+                    // rather than decoded again here, so there is one reader
+                    // of TaskMgr's clock layout and this line cannot drift
+                    // from what the shots are stamped with.
+                    const ghpc_drive::GameClocks c = ghpc_drive::gameClocks();
+                    const uint32_t clocks = c.clocksPtr;
                     // Before the UI is up mClocks is null and the read would be
                     // a number rather than a time. Say nothing instead.
-                    if (clocks >= 0x00100000u && clocks < 0x02000000u)
+                    if (c.valid)
                     {
-                        // All four clocks, because which one carries the time
+                        // All the clocks, because which one carries the time
                         // depends on the screen: the menus run on UISeconds
                         // (UIList polls it), the chart on Seconds and Beat. A
                         // gate that watched only one would read a real zero on
                         // half the run and call it a stopped clock.
-                        auto clockAt = [&](uint32_t index) {
-                            const uint32_t raw =
-                                ghpc_drive::guestWord(m_rdram, clocks + index * 0x14u + 0x0Cu);
-                            float v = 0.0f;
-                            std::memcpy(&v, &raw, sizeof(v));
-                            return v;
-                        };
-                        const float game = clockAt(0u);
-                        const float ui = clockAt(2u);
-                        const float beat = clockAt(1u);
+                        const float game = c.game;
+                        const float ui = c.ui;
+                        const float beat = c.beat;
 
                         const auto nowAt = std::chrono::steady_clock::now();
                         if (!anchored)
