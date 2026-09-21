@@ -33,7 +33,9 @@ namespace ghpc
             // draw, so a draw stays small and a skinned palette does not cost
             // 256 bytes in every unskinned one. DrawView::matrices is patched
             // to point into the arena when the frame is published, since the
-            // arena reallocates while it fills.
+            // arena reallocates while it fills. Cameras the same way.
+            constexpr uint32_t kNoCamera = 0xFFFFFFFFu;
+
             struct PendingDraw
             {
                 uint32_t meshKey = 0u;
@@ -41,7 +43,10 @@ namespace ghpc
                 uint32_t matrixCount = 0u;
                 uint32_t vertCount = 0u;
                 uint32_t indexCount = 0u;
+                uint32_t cameraIndex = kNoCamera; // into Frame::cameras
+                uint32_t lightsIndex = kNoCamera; // into Frame::lights, same sentinel
                 Material material{};
+                Target target{};
             };
 
             // What a draw gets when no PsMat::Select has run yet. Depth test
@@ -66,6 +71,18 @@ namespace ghpc
                 m.tfx = 0u;
                 m.wrapS = 0u;
                 m.wrapT = 0u;
+                // (Cs - Cd) * As + Cd, the ordinary source-over.
+                m.alphaEq = 0x44u;
+                m.alphaFix = 0x80u;
+                // Unlit and white: the ambient program with no environment.
+                m.lightProgram = 0x7C5u;
+                m.prelit = false;
+                m.useEnviron = false;
+                for (uint32_t k = 0; k < 4u; ++k)
+                {
+                    m.rgbaScale[k] = 128.0f;
+                    m.vuColor[k] = 1.0f;
+                }
                 return m;
             }
 
@@ -74,7 +91,9 @@ namespace ghpc
                 std::vector<PendingDraw> draws;
                 std::vector<float> matrices;
                 std::vector<DrawView> views; // built at publish
-                Camera camera{};
+                std::vector<Camera> cameras; // one per change, in draw order
+                std::vector<Lights> lights;  // the same, for PsEnviron
+                Camera camera{};             // the last, for the frame-wide view
                 bool cameraSeen = false;
                 uint32_t boneUploads = 0u;
                 uint32_t worldUploads = 0u;
@@ -86,12 +105,33 @@ namespace ghpc
                     draws.clear();
                     matrices.clear();
                     views.clear();
+                    cameras.clear();
+                    lights.clear();
                     cameraSeen = false;
                     boneUploads = 0u;
                     worldUploads = 0u;
                     materialBinds = 0u;
                 }
             };
+
+            // A view's pointers into its frame's arenas, set from the offsets
+            // whenever the frame has changed hands.
+            void pointViews(Frame &f)
+            {
+                for (size_t i = 0; i < f.draws.size(); ++i)
+                {
+                    const PendingDraw &d = f.draws[i];
+                    f.views[i].matrices = f.matrices.data() + d.matrixOffset;
+                    f.views[i].camera = (d.cameraIndex < f.cameras.size())
+                                            ? &f.cameras[d.cameraIndex]
+                                            : nullptr;
+                    f.views[i].lights = (d.lightsIndex < f.lights.size())
+                                            ? &f.lights[d.lightsIndex]
+                                            : nullptr;
+                    // Stored straight after the draw's own matrices.
+                    f.views[i].lightMatrix = f.matrices.data() + d.matrixOffset + (size_t)d.matrixCount * 16u;
+                }
+            }
 
             struct MeshGeometry
             {
@@ -147,6 +187,12 @@ namespace ghpc
                 // the draws that follow inherit it until the next Select,
                 // which is how the PS2 path works too.
                 Material pendingMaterial = defaultMaterial();
+                Target pendingTarget{};
+                // Not reset per frame: an environment stays selected until
+                // the next PsEnviron::Select, whichever frame that is in.
+                Lights currentLights{};
+                bool hasLights = false;
+                float pendingLightMatrix[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
                 // Published, under `publishMutex`.
                 Frame published;
@@ -365,14 +411,49 @@ namespace ghpc
             ++state().building.materialBinds;
         }
 
+        void setLights(const Lights &lights)
+        {
+            if (!active())
+            {
+                return;
+            }
+            state().currentLights = lights;
+            state().hasLights = true;
+        }
+
+        void setLightMatrix(const float m[16])
+        {
+            if (!active() || m == nullptr)
+            {
+                return;
+            }
+            std::memcpy(state().pendingLightMatrix, m, 16u * sizeof(float));
+        }
+
+        void setTarget(const Target &target)
+        {
+            if (!active())
+            {
+                return;
+            }
+            state().pendingTarget = target;
+        }
+
         void setCamera(const Camera &camera)
         {
             if (!active())
             {
                 return;
             }
-            state().building.camera = camera;
-            state().building.cameraSeen = true;
+            // Appended only when it changes, since it is re-sent before every
+            // draw and changes a handful of times a frame.
+            Frame &f = state().building;
+            if (f.cameras.empty() || std::memcmp(&f.cameras.back(), &camera, sizeof(Camera)) != 0)
+            {
+                f.cameras.push_back(camera);
+            }
+            f.camera = camera;
+            f.cameraSeen = true;
         }
 
         void setBonePalette(const float *matrices, uint32_t matrixCount)
@@ -442,11 +523,25 @@ namespace ghpc
             d.matrixCount = s.pendingMatrixCount;
             d.matrixOffset = (uint32_t)s.building.matrices.size();
             d.material = s.pendingMaterial;
+            d.target = s.pendingTarget;
+            d.cameraIndex = s.building.cameras.empty() ? kNoCamera
+                                                        : (uint32_t)s.building.cameras.size() - 1u;
             d.vertCount = vertCount;
             d.indexCount = (indices != nullptr) ? indexCount : 0u;
             s.building.matrices.insert(s.building.matrices.end(),
                                        s.pendingMatrices,
                                        s.pendingMatrices + (size_t)d.matrixCount * 16u);
+            s.building.matrices.insert(s.building.matrices.end(),
+                                       s.pendingLightMatrix, s.pendingLightMatrix + 16);
+            if (s.hasLights)
+            {
+                std::vector<Lights> &arena = s.building.lights;
+                if (arena.empty() || std::memcmp(&arena.back(), &s.currentLights, sizeof(Lights)) != 0)
+                {
+                    arena.push_back(s.currentLights);
+                }
+                d.lightsIndex = (uint32_t)arena.size() - 1u;
+            }
             s.building.draws.push_back(d);
         }
 
@@ -472,11 +567,11 @@ namespace ghpc
                 const PendingDraw &d = f.draws[i];
                 DrawView &v = f.views[i];
                 v.meshKey = d.meshKey;
-                v.matrices = f.matrices.data() + d.matrixOffset;
                 v.matrixCount = d.matrixCount;
                 v.vertCount = d.vertCount;
                 v.indexCount = d.indexCount;
                 v.material = d.material;
+                v.target = d.target;
             }
             {
                 std::lock_guard<std::mutex> lock(s.publishMutex);
@@ -490,11 +585,7 @@ namespace ghpc
                 // arena reallocates under a live pointer. Repointing from the
                 // offsets costs one pass over a few hundred draws and holds
                 // either way.
-                for (size_t i = 0; i < s.published.draws.size(); ++i)
-                {
-                    s.published.views[i].matrices =
-                        s.published.matrices.data() + s.published.draws[i].matrixOffset;
-                }
+                pointViews(s.published);
             }
 
             const int every = logEvery();
@@ -574,18 +665,60 @@ namespace ghpc
             // so it is reported rather than averaged away.
             std::fprintf(stderr,
                          "[ghpc/scene] frame=%llu draws=%zu verts=%llu tris=%llu "
-                         "skinned=%u noIndices=%u cam=%d bones=%u world=%u meshes=%zu "
+                         "skinned=%u noIndices=%u cam=%d cams=%zu bones=%u world=%u meshes=%zu "
                          "mats=%u ztst=%u/%u/%u/%u noZWrite=%u noZTest=%u blend=%u tex=%u "
                          "ate=%u atst=%u/%u/%u/%u/%u/%u/%u/%u aref=%u..%u afail=%u\n",
                          (unsigned long long)frames, p.draws.size(),
                          (unsigned long long)verts, (unsigned long long)tris,
-                         skinned, noIndices, p.cameraSeen ? 1 : 0,
+                         skinned, noIndices, p.cameraSeen ? 1 : 0, p.cameras.size(),
                          p.boneUploads, p.worldUploads, s.geometry.size(),
                          p.materialBinds, ztst[0], ztst[1], ztst[2], ztst[3],
                          noZWrite, noZTest, blended, textured,
                          alphaTested, atst[0], atst[1], atst[2], atst[3],
                          atst[4], atst[5], atst[6], atst[7],
                          (arefMin == 0xFFFFFFFFu) ? 0u : arefMin, arefMax, afailNonKeep);
+
+            // Lighting: which VU1 program each draw's colour comes from, and
+            // one sample of the scale and the light block, since the formula
+            // is only as right as the values it is fed.
+            {
+                uint32_t passthrough = 0u, ambient = 0u, directional = 0u, point = 0u, other = 0u;
+                uint32_t prelitCount = 0u, noLights = 0u;
+                const PendingDraw *sample = nullptr;
+                for (const PendingDraw &d : p.draws)
+                {
+                    switch (d.material.lightProgram)
+                    {
+                    case 0x614u: ++passthrough; break;
+                    case 0x7C5u: ++ambient; break;
+                    case 0x6ECu: ++directional; sample = sample ? sample : &d; break;
+                    case 0x436u: ++point; break;
+                    default: ++other; break;
+                    }
+                    prelitCount += d.material.prelit ? 1u : 0u;
+                    noLights += (d.lightsIndex == kNoCamera) ? 1u : 0u;
+                }
+                if (sample == nullptr && !p.draws.empty())
+                {
+                    sample = &p.draws.front();
+                }
+                const float *scale = sample ? sample->material.rgbaScale : nullptr;
+                const Lights *l = (sample && sample->lightsIndex < p.lights.size())
+                                      ? &p.lights[sample->lightsIndex] : nullptr;
+                std::fprintf(stderr,
+                             "[ghpc/scene/light] frame=%llu passthrough=%u ambient=%u directional=%u "
+                             "point=%u other=%u prelit=%u noLights=%u environs=%zu "
+                             "qw695=(%.3f %.3f %.3f %.3f) ambientQw=(%.3f %.3f %.3f %.3f) "
+                             "col0=(%.3f %.3f %.3f) dirRow0=(%.3f %.3f %.3f)\n",
+                             (unsigned long long)frames, passthrough, ambient, directional, point, other,
+                             prelitCount, noLights, p.lights.size(),
+                             scale ? scale[0] : 0.0f, scale ? scale[1] : 0.0f,
+                             scale ? scale[2] : 0.0f, scale ? scale[3] : 0.0f,
+                             l ? l->qw[0][0] : 0.0f, l ? l->qw[0][1] : 0.0f,
+                             l ? l->qw[0][2] : 0.0f, l ? l->qw[0][3] : 0.0f,
+                             l ? l->qw[1][0] : 0.0f, l ? l->qw[1][1] : 0.0f, l ? l->qw[1][2] : 0.0f,
+                             l ? l->qw[4][0] : 0.0f, l ? l->qw[4][1] : 0.0f, l ? l->qw[4][2] : 0.0f);
+            }
 
             // The texture side of the same frame. texMissing is draws naming
             // a PsTex with no decoded image, which a backend draws untextured.
@@ -614,11 +747,7 @@ namespace ghpc
                     s.hasPublished = false;
                     s.hasConsuming = true;
                     // Same reason as the repoint in endFrame.
-                    for (size_t i = 0; i < s.consuming.draws.size(); ++i)
-                    {
-                        s.consuming.views[i].matrices =
-                            s.consuming.matrices.data() + s.consuming.draws[i].matrixOffset;
-                    }
+                    pointViews(s.consuming);
                 }
             }
 

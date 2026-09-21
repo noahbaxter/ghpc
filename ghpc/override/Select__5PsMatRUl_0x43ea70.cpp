@@ -21,7 +21,7 @@
 //             qw688 = +0x124 ? (+0x40 ? 0x7C5 : *0x4404e24, +0x9c, 0, +0x40)
 //                            : (0x614, 1, 1, 0)
 //             qw689 = (+0x12c, 0, 0, 0)
-//             qw690 = lq +0x30 (mColor); w <- 0.035f when +0x130 != 2
+//             qw690 = lq +0x30 (mColor); w <- 0.035f when +0x130 == 2
 //             qw691..694 = +0x12c == 0x347 ? 4 qw from 0x4f3210 (after
 //                          UpdateSphereXfm 0x1c1f40) : 4 qw from +0x170
 //             qw695 = lq +0x160
@@ -176,6 +176,33 @@ static void ghpcSceneMaterial(uint8_t* rdram, R5900Context* ctx, PS2Runtime* run
     const uint64_t clamp = READ64(self + 0x150u);
     m.wrapS = (uint32_t)(clamp & 3ull);
     m.wrapT = (uint32_t)((clamp >> 2) & 3ull);
+    // SetRegister's mask for ALPHA_1 is 0xFF000000FF, so the material owns
+    // exactly A, B, C, D and FIX.
+    const uint64_t alpha = READ64(self + 0x138u);
+    m.alphaEq = (uint32_t)(alpha & 0xFFull);
+    m.alphaFix = (uint32_t)((alpha >> 32) & 0xFFull);
+
+    // qw688 exactly as 0x43ec78..0x43ecf4 builds it.
+    if (READ32(self + 0x124u) != 0u) {
+        m.useEnviron = READ32(self + 0x40u) != 0u;
+        m.lightProgram = m.useEnviron ? READ32(0x440E24u) : 0x7C5u;
+        m.prelit = READ32(self + 0x9cu) != 0u;
+    } else {
+        m.useEnviron = false;
+        m.lightProgram = 0x614u;
+        m.prelit = true;
+    }
+    for (uint32_t k = 0; k < 4u; ++k) {
+        const uint32_t bits = READ32(self + 0x160u + k * 4u);
+        std::memcpy(&m.rgbaScale[k], &bits, sizeof(float));
+        m.vuColor[k] = m.color[k];
+    }
+    // 0x43ed30 loads mColor into qw690, and 0x43ed48 `bnel $v0, $a1` with
+    // $a1 = 2 skips the w store unless +0x130 is 2: so w becomes 0.035f only
+    // for TFX highlight, where the GS adds Av to the colour.
+    if (READ32(self + 0x130u) == 2u) {
+        m.vuColor[3] = 0.035f;
+    }
 
     // The bound PsTex's RndBitmap, read here because this is the one place
     // that knows which texture a draw gets. Offsets are the ones

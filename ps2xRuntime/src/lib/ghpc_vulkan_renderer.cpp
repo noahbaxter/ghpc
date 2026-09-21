@@ -127,8 +127,8 @@ namespace ghpc
 
         // One entry per draw in the storage buffer the vertex shader indexes.
         // Matches DrawData in ghpc_mesh.vert: std430 puts the four mat4s at 0,
-        // the colour at 256, the count at 272, the mode at 276 and the UV
-        // scale at 280, for a stride of 288.
+        // the colour at 256, the count at 272, the mode at 276, the UV scale
+        // at 280, then VU1's lighting inputs, for a stride of 512.
         struct GpuDrawData
         {
             float m[4][16];
@@ -136,9 +136,18 @@ namespace ghpc
             uint32_t matrixCount;
             uint32_t mode; // bit layout in ghpc_mesh.frag
             float uvScale[2];
+            float lightMat[16]; // qw676..679
+            float lights[7][4]; // qw681..687
+            float rgbaScale[4]; // qw695
+            float vuColor[4];   // qw690
+            uint32_t lightMode; // see ghpc_mesh.vert
+            uint32_t lightFlags;
+            uint32_t pad[2];
         };
-        static_assert(sizeof(GpuDrawData) == 288u, "DrawData stride must match the shader's std430 layout");
+        static_assert(sizeof(GpuDrawData) == 512u, "DrawData stride must match the shader's std430 layout");
         static_assert(offsetof(GpuDrawData, uvScale) == 280u, "a vec2 in std430 aligns to 8");
+        static_assert(offsetof(GpuDrawData, lightMat) == 288u, "a mat4 in std430 aligns to 16");
+        static_assert(offsetof(GpuDrawData, lightMode) == 496u, "lighting tail offset");
 
         // A decoded PsTex on the GPU, keyed by the same texKey the seam
         // carries, and uploaded again only when the collector's version for
@@ -176,10 +185,11 @@ namespace ghpc
             uint32_t depthTest : 1; // GS TEST_1 ZTE
             uint32_t depthWrite : 1;// GS ZBUF_1 ZMSK, inverted
             uint32_t blend : 1;
+            uint32_t alphaEq : 8; // ALPHA_1 A, B, C, D; zero when not blended
 
             uint32_t word() const
             {
-                return ztst | (depthTest << 2) | (depthWrite << 3) | (blend << 4);
+                return ztst | (depthTest << 2) | (depthWrite << 3) | (blend << 4) | (alphaEq << 5);
             }
         };
 
@@ -374,6 +384,25 @@ namespace ghpc
             // makes the structure legible: distinct objects get distinct
             // colours, so what is actually on screen can be counted.
             bool m_tint = false;
+            // GHPC_VK_MESH_ID=1 paints each draw its own index as a flat
+            // colour, R low byte and G high byte of index + 1, B 0x40, and
+            // writes the frame's draw table next to every shot. Counting a
+            // shot's pixels by colour then names the draws that own the
+            // picture, which a hashed tint can only suggest.
+            bool m_idMode = false;
+            // GHPC_VK_MESH_HIDE=0xKEY+0xKEY skips those meshes, to see what
+            // they cover. Keys come from a GHPC_VK_MESH_ID draw table; a draw
+            // index moves between frames and a mesh key does not.
+            std::vector<uint32_t> m_hiddenMeshes;
+            struct DrawRecord
+            {
+                uint32_t index, meshKey, matrixCount, vertCount, indexCount;
+                scene::Material material;
+                float translation[3];
+                scene::Camera camera;
+                scene::Target target;
+            };
+            std::vector<DrawRecord> m_drawRecords;
             bool m_meshReady = false;
             VkRenderPass m_meshPass = VK_NULL_HANDLE;
             VkPipelineLayout m_meshLayout = VK_NULL_HANDLE;
@@ -413,6 +442,9 @@ namespace ghpc
             // GHPC_VK_TEX=0 draws untextured with no alpha test, which is the
             // picture before texture landed and the control arm for it.
             bool m_textures = true;
+            // GHPC_VK_LIGHT=0 skips VU1's lighting and colours by mColor, the
+            // picture before lighting landed and its control arm.
+            bool m_lighting = true;
             VkDescriptorSetLayout m_texSetLayout = VK_NULL_HANDLE;
             VkDescriptorPool m_texPool = VK_NULL_HANDLE;
             VkSampler m_sampler = VK_NULL_HANDLE;
@@ -439,6 +471,11 @@ namespace ghpc
             uint64_t m_meshNoCamera = 0ull;
             uint64_t m_pipelineBinds = 0ull;
             uint64_t m_meshSkippedAte = 0ull;
+            // Draws whose render target is not the displayed frame. They go
+            // to an offscreen GS buffer (the venue's second camera renders
+            // 87 draws into a 128x256 one), and drawing them onto the screen
+            // put them 192 by 96 pixels out, over the real picture.
+            uint64_t m_meshOffscreen = 0ull;
 
             uint32_t m_frame = 0u;
             bool m_swapchainDirty = false;
@@ -1284,16 +1321,67 @@ namespace ghpc
                          (unsigned)(key.depthWrite ? 0u : 1u), (unsigned)key.blend,
                          m_depthMode, (int)compare, depthWrite ? 1 : 0);
 
-            // Source alpha over destination, which is what mBlend's non-opaque
-            // modes amount to. The exact equation is in ALPHA_1 at
-            // PsMat+0x138 and honouring all of it is still ahead; what matters
-            // here is that a blended draw stops writing an opaque rectangle
-            // over the frame.
+            // The GS blend, ((A - B) * C >> 7) + D, as source and destination
+            // coefficients. Each of A, B and D names Cs, Cd or zero, and C is
+            // As, Ad or FIX, so the result is ks * Cs + kd * Cd where each k
+            // is a sum of +C, -C and 1 terms. Those map onto Vulkan factors
+            // for every combination but 1 + C, which GH2 does not use and
+            // which is counted as ONE. A negative coefficient becomes the op:
+            // REVERSE_SUBTRACT for a negative source, SUBTRACT for a negative
+            // destination. The shader's alpha is As / 128 clamped to 1, and
+            // FIX / 128 arrives as the blend constant.
             VkPipelineColorBlendAttachmentState blendAttachment{};
             blendAttachment.blendEnable = key.blend ? VK_TRUE : VK_FALSE;
-            blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            blendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+            {
+                const uint32_t a = key.alphaEq & 3u;
+                const uint32_t b = (key.alphaEq >> 2) & 3u;
+                const uint32_t c = (key.alphaEq >> 4) & 3u;
+                const uint32_t d = (key.alphaEq >> 6) & 3u;
+                // Coefficient of Cs (who = 0) or Cd (who = 1), as a count of
+                // C terms and of 1 terms.
+                auto coeff = [&](uint32_t who, int &cTerms, int &ones) {
+                    cTerms = (a == who ? 1 : 0) - (b == who ? 1 : 0);
+                    ones = (d == who) ? 1 : 0;
+                };
+                const VkBlendFactor cFactor = (c == 0u) ? VK_BLEND_FACTOR_SRC_ALPHA
+                                            : (c == 1u) ? VK_BLEND_FACTOR_DST_ALPHA
+                                                        : VK_BLEND_FACTOR_CONSTANT_ALPHA;
+                const VkBlendFactor cInverse = (c == 0u) ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+                                             : (c == 1u) ? VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA
+                                                         : VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+                // Magnitude as a factor, and whether it is negative.
+                auto factor = [&](int cTerms, int ones, bool &negative) -> VkBlendFactor {
+                    negative = false;
+                    if (ones == 0)
+                    {
+                        if (cTerms == 0) return VK_BLEND_FACTOR_ZERO;
+                        negative = cTerms < 0;
+                        return cFactor;
+                    }
+                    if (cTerms == 0) return VK_BLEND_FACTOR_ONE;
+                    if (cTerms < 0) return cInverse;
+                    return VK_BLEND_FACTOR_ONE; // 1 + C, unused by GH2
+                };
+                int sc = 0, so = 0, dc = 0, dO = 0;
+                coeff(0u, sc, so);
+                coeff(1u, dc, dO);
+                bool srcNeg = false;
+                bool dstNeg = false;
+                blendAttachment.srcColorBlendFactor = factor(sc, so, srcNeg);
+                blendAttachment.dstColorBlendFactor = factor(dc, dO, dstNeg);
+                blendAttachment.colorBlendOp = srcNeg ? VK_BLEND_OP_REVERSE_SUBTRACT
+                                             : dstNeg ? VK_BLEND_OP_SUBTRACT
+                                                      : VK_BLEND_OP_ADD;
+                if (key.blend)
+                {
+                    std::fprintf(stderr,
+                                 "[ghpc/vk/blend] eq=0x%02x a=%u b=%u c=%u d=%u src=%d dst=%d op=%d\n",
+                                 (unsigned)key.alphaEq, a, b, c, d,
+                                 (int)blendAttachment.srcColorBlendFactor,
+                                 (int)blendAttachment.dstColorBlendFactor,
+                                 (int)blendAttachment.colorBlendOp);
+                }
+            }
             blendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             blendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
             blendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
@@ -1304,7 +1392,10 @@ namespace ghpc
             blend.attachmentCount = 1u;
             blend.pAttachments = &blendAttachment;
 
-            const std::array<VkDynamicState, 2> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+            // Blend constants carry ALPHA_1's FIX, which varies per material
+            // and would otherwise multiply the pipeline count by 256.
+            const std::array<VkDynamicState, 3> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
+                                                              VK_DYNAMIC_STATE_BLEND_CONSTANTS};
             VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
             dynamic.dynamicStateCount = (uint32_t)dynamicStates.size();
             dynamic.pDynamicStates = dynamicStates.data();
@@ -2097,6 +2188,55 @@ namespace ghpc
                 {
                     std::memcpy(entry.color, d.material.color, sizeof(entry.color));
                 }
+                // VU1's lighting inputs. Off under tint and ID, which need
+                // flat colours to mean anything.
+                if (m_lighting && !m_tint && !m_idMode)
+                {
+                    const scene::Material &lm = d.material;
+                    uint32_t lightMode = 2u; // ambient
+                    switch (lm.lightProgram)
+                    {
+                    case 0x614u: lightMode = 1u; break;
+                    case 0x6ECu: lightMode = d.lights ? 3u : 2u; break;
+                    case 0x436u: lightMode = d.lights ? 4u : 2u; break;
+                    default: break;
+                    }
+                    entry.lightMode = lightMode;
+                    entry.lightFlags = (lm.prelit ? 1u : 0u) | ((lm.useEnviron && d.lights) ? 2u : 0u);
+                    std::memcpy(entry.lightMat, d.lightMatrix, sizeof(entry.lightMat));
+                    if (d.lights)
+                    {
+                        std::memcpy(entry.lights, d.lights->qw, sizeof(entry.lights));
+                    }
+                    std::memcpy(entry.rgbaScale, lm.rgbaScale, sizeof(entry.rgbaScale));
+                    std::memcpy(entry.vuColor, lm.vuColor, sizeof(entry.vuColor));
+                    entry.mode |= 1u << 21;
+                }
+                if (m_idMode)
+                {
+                    const uint32_t id = i + 1u;
+                    entry.color[0] = (float)(id & 0xFFu) / 255.0f;
+                    entry.color[1] = (float)((id >> 8) & 0xFFu) / 255.0f;
+                    entry.color[2] = (float)0x40u / 255.0f;
+                    entry.color[3] = 1.0f;
+                    entry.mode |= 1u << 20;
+                    DrawRecord r{};
+                    r.index = i;
+                    r.meshKey = d.meshKey;
+                    r.matrixCount = d.matrixCount;
+                    r.vertCount = d.vertCount;
+                    r.indexCount = d.indexCount;
+                    r.material = d.material;
+                    // Row vectors, so the translation is the fourth row.
+                    std::memcpy(r.translation, d.matrices + 12, 3u * sizeof(float));
+                    r.camera = d.camera ? *d.camera : camera;
+                    r.target = d.target;
+                    if (i == 0u)
+                    {
+                        m_drawRecords.clear();
+                    }
+                    m_drawRecords.push_back(r);
+                }
                 m_drawStaging.push_back(entry);
             }
 
@@ -2169,6 +2309,7 @@ namespace ghpc
             // a frame with 534 draws rebinds a handful of times.
             VkPipeline bound = VK_NULL_HANDLE;
             VkDescriptorSet boundSet = VK_NULL_HANDLE;
+            float boundFix = -1.0f;
             for (uint32_t i = firstDraw; i < lastDraw; ++i)
             {
                 const MeshBuffers *buffers = meshBuffers(draws[i].meshKey);
@@ -2177,6 +2318,21 @@ namespace ghpc
                     continue;
                 }
 
+                // On screen means the draw's scissor is the displayed frame.
+                // The FRAME base pointer is not the test, since a double
+                // buffered frame alternates it; the extent does not move.
+                const scene::Target &target = draws[i].target;
+                if (target.scissor[1] + 1u != m_sourceWidth || target.scissor[3] + 1u != m_sourceHeight)
+                {
+                    ++m_meshOffscreen;
+                    continue;
+                }
+                if (!m_hiddenMeshes.empty() &&
+                    std::find(m_hiddenMeshes.begin(), m_hiddenMeshes.end(), draws[i].meshKey) !=
+                        m_hiddenMeshes.end())
+                {
+                    continue;
+                }
                 const scene::Material &mat = draws[i].material;
                 if (m_skipAlphaTested && mat.alphaTest)
                 {
@@ -2188,6 +2344,16 @@ namespace ghpc
                 key.depthTest = mat.depthTest ? 1u : 0u;
                 key.depthWrite = mat.depthWrite ? 1u : 0u;
                 key.blend = mat.blend ? 1u : 0u;
+                key.alphaEq = mat.blend ? (mat.alphaEq & 0xFFu) : 0u;
+                // FIX / 128 is the GS's 1.0 at 0x80. Set whenever it moves;
+                // every pipeline declares the constant dynamic.
+                const float fix = std::min(1.0f, (float)mat.alphaFix / 128.0f);
+                if (fix != boundFix)
+                {
+                    const float constants[4] = {fix, fix, fix, fix};
+                    vkCmdSetBlendConstants(cmd, constants);
+                    boundFix = fix;
+                }
                 VkPipeline pipeline = pipelineFor(key);
                 if (pipeline == VK_NULL_HANDLE)
                 {
@@ -2206,6 +2372,16 @@ namespace ghpc
                                             &boundSet, 0u, nullptr);
                 }
 
+                // The draw's own camera. Falling back to the frame's last one
+                // only covers a draw submitted before any camera, which the
+                // collector does not produce once a frame has one.
+                const scene::Camera &drawCam = draws[i].camera ? *draws[i].camera : camera;
+                std::memcpy(push.cam, drawCam.m, sizeof(push.cam));
+                std::memcpy(push.scale, drawCam.scale, 3u * sizeof(float));
+                std::memcpy(push.offset, drawCam.offset, 3u * sizeof(float));
+                // The draw's own XYOFFSET, from the register shadow at submit.
+                push.viewport[2] = target.ofx;
+                push.viewport[3] = target.ofy;
                 push.drawIndex = i;
                 vkCmdPushConstants(cmd, m_meshLayout, VK_SHADER_STAGE_VERTEX_BIT, 0u, sizeof(push), &push);
                 const VkDeviceSize offset = 0u;
@@ -2228,7 +2404,7 @@ namespace ghpc
                              "cached=%zu hits=%llu misses=%llu noGeom=%llu noCam=%llu "
                              "pipelines=%zu binds=%llu ofx=%.1f ofy=%.1f src=%ux%u "
                              "tex=%d texDraws=%llu texMissing=%llu textures=%zu uploads=%llu "
-                             "reuploads=%llu texFailed=%llu\n",
+                             "reuploads=%llu texFailed=%llu offscreen=%llu\n",
                              (unsigned long long)m_meshFrames, (unsigned long long)serial,
                              drawCount, (unsigned long long)drawn, (unsigned long long)tris,
                              m_meshCache.size(), (unsigned long long)m_meshCacheHits,
@@ -2239,7 +2415,7 @@ namespace ghpc
                              m_textures ? 1 : 0, (unsigned long long)m_texDraws,
                              (unsigned long long)m_texMissingDraws, m_texCache.size(),
                              (unsigned long long)m_texUploads, (unsigned long long)m_texReuploads,
-                             (unsigned long long)m_texFailed);
+                             (unsigned long long)m_texFailed, (unsigned long long)m_meshOffscreen);
             }
         }
 
@@ -2383,6 +2559,56 @@ namespace ghpc
             }
             std::fclose(f);
             ++m_shots;
+
+            if (m_idMode)
+            {
+                std::string tablePath(path);
+                tablePath.replace(tablePath.size() - 4u, 4u, ".txt");
+                if (FILE *t = std::fopen(tablePath.c_str(), "w"))
+                {
+                    std::fprintf(t, "# id index meshKey matrices verts indices ztst zwrite blend "
+                                    "texKey tfx ate atst afail tx ty tz cam fbp fbw ofx ofy scissor\n");
+                    // Cameras numbered by first appearance, and listed after
+                    // the draws, so a draw's camera is one lookup.
+                    std::vector<scene::Camera> cams;
+                    for (const DrawRecord &r : m_drawRecords)
+                    {
+                        const scene::Material &m = r.material;
+                        size_t cam = 0u;
+                        while (cam < cams.size() &&
+                               std::memcmp(&cams[cam], &r.camera, sizeof(scene::Camera)) != 0)
+                        {
+                            ++cam;
+                        }
+                        if (cam == cams.size())
+                        {
+                            cams.push_back(r.camera);
+                        }
+                        const scene::Target &g = r.target;
+                        std::fprintf(t, "%u %u 0x%08x %u %u %u %u %d %d 0x%08x %u %d %u %u %.2f %.2f %.2f %zu "
+                                        "%u %u %.0f %.0f %u..%u,%u..%u\n",
+                                     r.index + 1u, r.index, r.meshKey, r.matrixCount, r.vertCount,
+                                     r.indexCount, m.ztst, m.depthWrite ? 1 : 0, m.blend ? 1 : 0,
+                                     m.texKey, m.tfx, m.alphaTest ? 1 : 0, m.atst, m.afail,
+                                     r.translation[0], r.translation[1], r.translation[2], cam,
+                                     g.fbp, g.fbw, g.ofx, g.ofy,
+                                     g.scissor[0], g.scissor[1], g.scissor[2], g.scissor[3]);
+                    }
+                    for (size_t c = 0u; c < cams.size(); ++c)
+                    {
+                        const scene::Camera &k = cams[c];
+                        std::fprintf(t, "# cam %zu scale %.3f %.3f %.3f offset %.3f %.3f %.3f m",
+                                     c, k.scale[0], k.scale[1], k.scale[2],
+                                     k.offset[0], k.offset[1], k.offset[2]);
+                        for (float v : k.m)
+                        {
+                            std::fprintf(t, " %.4f", v);
+                        }
+                        std::fprintf(t, "\n");
+                    }
+                    std::fclose(t);
+                }
+            }
             // serial is the guest frame, and it is the only field here that
             // two runs can be paired on. `frame` is the host present counter
             // and does not track it: at the same present frame, two arms of
@@ -2434,9 +2660,30 @@ namespace ghpc
             }
             m_skipAlphaTested = std::getenv("GHPC_VK_MESH_SKIP_ATE") != nullptr;
             m_tint = std::getenv("GHPC_VK_MESH_TINT") != nullptr;
+            m_idMode = std::getenv("GHPC_VK_MESH_ID") != nullptr;
+            if (const char *hide = std::getenv("GHPC_VK_MESH_HIDE"); hide != nullptr)
+            {
+                for (const char *p = hide; *p != '\0';)
+                {
+                    char *end = nullptr;
+                    const unsigned long key = std::strtoul(p, &end, 0);
+                    if (end == p)
+                    {
+                        break;
+                    }
+                    m_hiddenMeshes.push_back((uint32_t)key);
+                    // '+' as well as ',', since vkarms.sh splits env pairs
+                    // on commas.
+                    p = (*end == ',' || *end == '+') ? end + 1 : end;
+                }
+            }
             if (const char *tex = std::getenv("GHPC_VK_TEX"); tex != nullptr)
             {
                 m_textures = std::atoi(tex) != 0;
+            }
+            if (const char *light = std::getenv("GHPC_VK_LIGHT"); light != nullptr)
+            {
+                m_lighting = std::atoi(light) != 0;
             }
             if (const char *depth = std::getenv("GHPC_VK_MESH_DEPTH"); depth != nullptr)
             {

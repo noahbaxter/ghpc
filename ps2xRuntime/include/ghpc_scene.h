@@ -119,9 +119,68 @@ namespace ghpc
             // are not the material's and the region modes cannot arise.
             uint32_t wrapS;
             uint32_t wrapT;
+
+            // +0x138 ALPHA_1, the blend equation ((A - B) * C >> 7) + D:
+            // A, B, D at bits 0..1, 2..3, 6..7 (0 Cs, 1 Cd, 2 zero), C at
+            // bits 4..5 (0 As, 1 Ad, 2 FIX), FIX at bits 32..39. Only in
+            // effect when `blend`: VU1 sets ABE for every mBlend but 1.
+            uint32_t alphaEq; // bits 0..7
+            uint32_t alphaFix;
+
+            // The vertex colour, as qw688 hands it to VU1 (PsMat::Select
+            // 0x43ec78..0x43ecf4):
+            //   +0x124 == 0          program 0x614, a bare return: the
+            //                        vertex keeps Vert+0x20 as its colour
+            //   else !mUseEnviron    0x7C5: mColor, or Vert+0x20 if prelit
+            //   else                 the environ's program, 0x440E24
+            // then the T&L loop multiplies by qw695 (+0x160) for GS units.
+            uint32_t lightProgram;  // 0x614, 0x7C5, 0x6EC or 0x436
+            bool prelit;            // qw688.y, +0x9c
+            bool useEnviron;        // qw688.w, +0x40
+            float rgbaScale[4];     // qw695, +0x160
+            // qw690 as VU1 gets it: mColor, with w replaced by 0.035 when
+            // TFX is highlight. `color` above stays the raw mColor.
+            float vuColor[4];
         };
 
+        // PsEnviron::Select's light block, qw681..687, and the lighting
+        // program it chose. Latched per draw like the camera.
+        //   qw[0]     ambient
+        //   qw[1..3]  light colours
+        //   qw[4..6]  rows of a 3x3 whose columns are the light directions
+        //             (normalised, negated), or positions for program 0x436
+        struct Lights
+        {
+            float qw[7][4];
+            uint32_t program;
+        };
+        void setLights(const Lights &lights);
+
+        // qw676..678, the 3x3 VU1's lighting programs take the object normal
+        // through. The unskinned world matrix, and on a skinned draw the
+        // four quadwords after the bone palette in the same 20-qw upload.
+        void setLightMatrix(const float m[16]);
+
         void setMaterial(const Material &material);
+
+        // Where a draw lands on the GS: the render target and its offset, as
+        // they stand in PsRnd's register shadow when the draw is submitted.
+        // SetRegister keeps every GS register it sends at ThePsRnd (0x4f2780)
+        // + 0xF0 + reg * 8, and FRAME_1 and XYOFFSET_1 change per render
+        // target (PsRnd::MakeDrawTarget, PsTex::MakeDrawTarget), not per
+        // frame. A 128-wide offscreen target runs at XYOFFSET 1984/1920 while
+        // the main frame runs at 1792/1824, so one offset for the frame puts
+        // offscreen draws on screen 192 by 96 pixels out.
+        struct Target
+        {
+            uint32_t fbp;       // FRAME_1 bits 0..8, in 2048-word pages
+            uint32_t fbw;       // bits 16..21, in 64-pixel units
+            uint32_t psm;       // bits 24..29
+            float ofx;          // XYOFFSET_1, pixels
+            float ofy;
+            uint32_t scissor[4]; // SCISSOR_1 x0, x1, y0, y1
+        };
+        void setTarget(const Target &target);
 
         // The texture a material binds, as the engine holds it: PsTex's
         // RndBitmap at +0x28, which stays in guest RAM for the life of the
@@ -213,6 +272,15 @@ namespace ghpc
             uint32_t meshKey;
             const float *matrices; // matrixCount * 16 floats, row major
             uint32_t matrixCount;  // 4 skinned (the bone palette), 1 not
+            // The camera this draw was submitted under. Per draw, not per
+            // frame: GH2 draws the venue and the track through different
+            // cameras in one frame, and one frame-wide camera put the whole
+            // venue through the track's, into a strip at the top of the
+            // screen behind two surfaces that covered 70% of it.
+            const Camera *camera;
+            Target target;
+            const Lights *lights;     // null before any PsEnviron::Select
+            const float *lightMatrix; // 16 floats, row major, never null
             uint32_t vertCount;
             uint32_t indexCount;
             Material material;

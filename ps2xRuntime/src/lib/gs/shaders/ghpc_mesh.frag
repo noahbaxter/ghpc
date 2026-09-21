@@ -7,11 +7,10 @@
 // the TFX equations and the alpha test read exactly as the GS manual writes
 // them. The texture carries raw GS alpha for the same reason.
 //
-// Untextured draws keep the legibility shade step 3 had: without it a stack
-// of overlapping untextured meshes is one silhouette. Textured draws do not
-// get it, because the texture already makes a surface legible and the shade
-// is not lighting. Real lighting is VU1's per-vertex colour, which is still
-// ahead; mColor stands in for it.
+// The vertex colour is VU1's lit colour, reproduced in ghpc_mesh.vert. Only
+// the unlit control arm (GHPC_VK_LIGHT=0) falls back to mColor, and there an
+// untextured draw keeps the legibility shade step 3 had, since without it a
+// stack of overlapping untextured meshes is one silhouette.
 
 layout(location = 0) in vec3 vNorm;
 layout(location = 1) in vec2 vUv;
@@ -33,6 +32,8 @@ layout(location = 0) out vec4 outColor;
 //   bit  17     CLAMP_1 WMS clamp
 //   bit  18     CLAMP_1 WMT clamp
 //   bit  19     blended
+//   bit  20     draw-ID output, GHPC_VK_MESH_ID
+//   bit  21     vertex colour is VU1's lit colour, not mColor
 bool alphaPasses(uint atst, float a, float aref)
 {
     switch (atst)
@@ -96,6 +97,13 @@ void main()
         c = min(c, vec3(255.0));
         a = min(floor(a + 0.5), 255.0);
     }
+    else if ((vMode & (1u << 21)) != 0u)
+    {
+        // Lit and untextured: the GS writes the vertex colour as it is, so
+        // 0x80 is half intensity here, not 1.0.
+        c = min(cv, vec3(255.0));
+        a = av;
+    }
     else
     {
         vec3 n = normalize(vNorm);
@@ -127,6 +135,14 @@ void main()
                 discard;
             }
         }
+    }
+
+    // GHPC_VK_MESH_ID: the draw's index, exactly, after the alpha test so a
+    // punched-out texel does not claim a pixel it would not have drawn.
+    if ((vMode & (1u << 20)) != 0u)
+    {
+        outColor = vec4(vColor.rgb, 1.0);
+        return;
     }
 
     outColor = vec4(c / 255.0, min(a / 128.0, 1.0));

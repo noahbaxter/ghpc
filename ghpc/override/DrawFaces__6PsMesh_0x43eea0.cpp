@@ -246,22 +246,49 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
         ghpc::scene::setCamera(cam);
     }
 
+    // The render target this draw lands in, from PsRnd's register shadow:
+    // SetRegister (0x43e320) stores each register at ThePsRnd + 0xF0 +
+    // reg * 8 before it sends it, so the shadow is what the GS will hold when
+    // this draw's packet runs. FRAME_1 0x4c, XYOFFSET_1 0x18, SCISSOR_1 0x40.
+    {
+        const uint32_t shadow = 0x4f2780u + 0xF0u;
+        const uint64_t frame = READ64(shadow + 0x4cu * 8u);
+        const uint64_t xyoffset = READ64(shadow + 0x18u * 8u);
+        const uint64_t scissor = READ64(shadow + 0x40u * 8u);
+        ghpc::scene::Target t{};
+        t.fbp = (uint32_t)(frame & 0x1FFull);
+        t.fbw = (uint32_t)((frame >> 16) & 0x3Full);
+        t.psm = (uint32_t)((frame >> 24) & 0x3Full);
+        t.ofx = (float)(xyoffset & 0xFFFFull) / 16.0f;
+        t.ofy = (float)((xyoffset >> 32) & 0xFFFFull) / 16.0f;
+        t.scissor[0] = (uint32_t)(scissor & 0x7FFull);
+        t.scissor[1] = (uint32_t)((scissor >> 16) & 0x7FFull);
+        t.scissor[2] = (uint32_t)((scissor >> 32) & 0x7FFull);
+        t.scissor[3] = (uint32_t)((scissor >> 48) & 0x7FFull);
+        ghpc::scene::setTarget(t);
+    }
+
     // Skinned uploads a 20-quadword palette at VU1 660 behind 0x6C140294, of
     // which qw660..675 are the four bone matrices. Unskinned writes one matrix
     // at qw676..679 behind 0x6C0402A4. Both paths write qw676, so the palette
     // header is what distinguishes them.
     const uint32_t cursor = runtime->Load32(rdram, ctx, 0x70000008u);
     const uint32_t palette = ghpcFindVifHeader(rdram, ctx, runtime, cursor, 0x6C140294u);
+    // Either way qw676..679 is the matrix the lighting programs take the
+    // normal through: the last four quadwords of the 20-qw skinned upload, or
+    // the unskinned world matrix itself.
     if (palette != 0u) {
-        float bones[16 * 4];
-        ghpcReadQuads(rdram, ctx, runtime, palette + 0x10u, 16u, bones);
+        float bones[20 * 4];
+        ghpcReadQuads(rdram, ctx, runtime, palette + 0x10u, 20u, bones);
         ghpc::scene::setBonePalette(bones, 4u);
+        ghpc::scene::setLightMatrix(bones + 64);
     } else {
         const uint32_t world = ghpcFindVifHeader(rdram, ctx, runtime, cursor, 0x6C0402A4u);
         if (world != 0u) {
             float m[16];
             ghpcReadQuads(rdram, ctx, runtime, world + 0x10u, 4u, m);
             ghpc::scene::setWorldMatrix(m);
+            ghpc::scene::setLightMatrix(m);
         }
     }
 

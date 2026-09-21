@@ -41,7 +41,7 @@ for spec in "$@"; do
   envs="${spec#*:}"
   dir="$out/$name"
   mkdir -p "$dir"
-  rm -f /tmp/ghpc_vk_b*.ppm "$dir"/ghpc_vk_b*.ppm
+  rm -f /tmp/ghpc_vk_b*.ppm /tmp/ghpc_vk_b*.txt "$dir"/ghpc_vk_b*
   t0=$(date +%s)
   # shellcheck disable=SC2086
   ( env GHPC_STATE_LOAD="$slot" GHPC_RENDERER=vulkan GHPC_VK_SHOT_BEAT=1 \
@@ -57,10 +57,13 @@ for spec in "$@"; do
   pkill -x ps2EntryRunner
   sleep 2
   first="$(ls /tmp/ghpc_vk_b*.ppm 2>/dev/null | head -1)"
-  [ -n "$first" ] && rm -f "$first"
-  mv /tmp/ghpc_vk_b*.ppm "$dir"/ 2>/dev/null
-  echo "$name: $(ls "$dir" | wc -l | tr -d ' ') shots in $(( $(date +%s) - t0 ))s"
+  [ -n "$first" ] && rm -f "$first" "${first%.ppm}.txt"
+  # The .txt beside a shot is its draw table, written under GHPC_VK_MESH_ID.
+  mv /tmp/ghpc_vk_b*.ppm /tmp/ghpc_vk_b*.txt "$dir"/ 2>/dev/null
+  echo "$name: $(ls "$dir"/*.ppm | wc -l | tr -d ' ') shots in $(( $(date +%s) - t0 ))s"
   dirs+=("$dir")
 done
 
-[ "${#dirs[@]}" -ge 2 ] && "$here/vkcompare.sh" "${dirs[@]}"
+if [ "${#dirs[@]}" -ge 2 ]; then
+  "$here/vkcompare.sh" "${dirs[@]}"
+fi

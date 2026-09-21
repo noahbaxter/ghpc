@@ -29,7 +29,8 @@ layout(location = 3) in vec2 aUv;
 // One entry per draw. Four matrices always: a skinned draw uses all of them,
 // an unskinned draw uses matrix 0 and reports matrixCount 1.
 // std430: the four mat4s at 0, the colour at 256, the count at 272, the mode
-// at 276 and the UV scale at 280, for a stride of 288. The colour lives here rather than in the push
+// at 276, the UV scale at 280, then the lighting inputs from 288, for a
+// stride of 512. The colour lives here rather than in the push
 // constants because those are already at 116 of the 128 bytes every
 // implementation guarantees, and the camera has the better claim on them.
 struct DrawData
@@ -39,6 +40,14 @@ struct DrawData
     uint matrixCount;
     uint mode;      // texture and alpha-test state, packed; see ghpc_mesh.frag
     vec2 uvScale;   // the GS's 2^TW x 2^TH texture space into the image's
+    mat4 lightMat;  // qw676..679
+    vec4 lights[7]; // qw681..687, PsEnviron::Select's block
+    vec4 rgbaScale; // qw695
+    vec4 vuColor;   // qw690
+    uint lightMode; // 0 unlit (mColor), 1 passthrough, 2 ambient, 3 directional, 4 point
+    uint lightFlags;// bit 0 prelit, bit 1 mUseEnviron
+    uint pad0;
+    uint pad1;
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Draws
@@ -54,6 +63,77 @@ layout(push_constant) uniform Push
     vec4 viewport; // xy = half the framebuffer in pixels, zw = GS XYOFFSET
     uint drawIndex;
 } push;
+
+// VU1's vertex colour, in its units (1.0 = the GS's 0x80 after qw695),
+// reproducing the three lighting overlays qw688.x selects:
+//
+//   0x7C5 (overlay 0x3e28) ambient: base only
+//   0x6EC (overlay 0x3760) three directional lights
+//   0x436 (overlay 0x21b0) one point light with a range
+//
+// where base is mColor (qw690), times ambient (qw681) under mUseEnviron, or
+// for a prelit material the vertex's own colour times ambient (or 1). Every
+// program clamps to 1 with MINIw before the T&L loop multiplies by qw695.
+// Row-major matrices read as GLSL mat4 come out as their rows, so lm[i] is
+// row i: the object normal goes to world as n.x*lm[0] + n.y*lm[1] + n.z*lm[2].
+vec4 vuLitColour(DrawData d)
+{
+    bool prelit = (d.lightFlags & 1u) != 0u;
+    bool env = (d.lightFlags & 2u) != 0u;
+    vec4 ambient = d.lights[0];
+
+    if (d.lightMode == 1u)
+    {
+        return aWeights;
+    }
+
+    vec4 base;
+    if (prelit)
+    {
+        // 0x3760's prelit path: ambient, or (1, 1, 1, ambient.w) without the
+        // environment, times the vertex colour.
+        vec4 scale = env ? ambient : vec4(1.0, 1.0, 1.0, ambient.w);
+        base = scale * aWeights;
+    }
+    else
+    {
+        base = env ? d.vuColor * ambient : d.vuColor;
+    }
+
+    if (d.lightMode == 2u)
+    {
+        return min(base, vec4(1.0));
+    }
+
+    mat4 lm = d.lightMat;
+    if (d.lightMode == 3u)
+    {
+        vec3 worldN = aNorm.x * lm[0].xyz + aNorm.y * lm[1].xyz + aNorm.z * lm[2].xyz;
+        // qw685..687 hold the three directions as columns.
+        vec3 dots = worldN.x * d.lights[4].xyz + worldN.y * d.lights[5].xyz + worldN.z * d.lights[6].xyz;
+        dots = max(dots, vec3(0.0));
+        vec4 c = base;
+        c += d.lights[1] * d.vuColor * dots.x;
+        c += d.lights[2] * d.vuColor * dots.y;
+        c += d.lights[3] * d.vuColor * dots.z;
+        return min(c, vec4(1.0));
+    }
+
+    // Point: the light position is column 0 of qw685..687, taken relative to
+    // the object origin qw679 and into object space through the rows. No
+    // clamp at zero on the dot in the overlay; the final clamp is here.
+    vec3 rel = vec3(d.lights[4].x, d.lights[5].x, d.lights[6].x) - lm[3].xyz;
+    vec3 p = vec3(dot(lm[0].xyz, rel), dot(lm[1].xyz, rel), dot(lm[2].xyz, rel));
+    vec3 toLight = p - aPos;
+    float d2 = dot(toLight, toLight);
+    vec4 c = base;
+    if (d2 <= d.lights[5].w && d2 > 0.0)
+    {
+        float nd = dot(toLight, aNorm);
+        c += d.lights[1] * d.vuColor * nd * (d.lights[4].w + inversesqrt(d2));
+    }
+    return clamp(c, vec4(0.0), vec4(1.0));
+}
 
 layout(location = 0) out vec3 vNorm;
 layout(location = 1) out vec2 vUv;
@@ -118,6 +198,16 @@ void main()
     // Scaled here rather than per fragment because it is linear, so it
     // interpolates the same either way.
     vUv = aUv * d.uvScale;
-    vColor = d.color;
+    if (d.lightMode != 0u)
+    {
+        // FTOI0(qw695 * colour), which the GS then takes as 8 bits, and the
+        // fragment shader wants it back with 0x80 as 1.0.
+        vec4 gs = min(vuLitColour(d) * d.rgbaScale, vec4(255.0));
+        vColor = gs / 128.0;
+    }
+    else
+    {
+        vColor = d.color;
+    }
     vMode = d.mode;
 }
