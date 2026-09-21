@@ -2945,6 +2945,18 @@ namespace ghpc
                 }
             }
 
+            // Name the path in the title bar, from the mode that actually came
+            // up rather than the one asked for, so a fallback shows.
+            {
+                const char *vu1 = std::getenv("GHPC_VU1_OFF");
+                const bool vu1Off = vu1 != nullptr && vu1[0] != '0';
+                const char *path = m_meshMode >= 2 ? "native" : m_meshMode == 1 ? "native over software GS" : "software GS";
+                const std::string title = std::string(config.title ? config.title : "") + "  [Vulkan: " + path +
+                                          (vu1Off ? ", VU1 off" : "") + "]";
+                SDL_SetWindowTitle(m_window, title.c_str());
+                std::cout << "[ghpc/vk] title: " << SDL_GetWindowTitle(m_window) << std::endl;
+            }
+
             return true;
         }
 

@@ -974,7 +974,8 @@ bool PS2Runtime::initialize(const char *title)
         if (std::getenv("GHPC_HIDE_WINDOW") != nullptr)
             windowFlags |= FLAG_WINDOW_HIDDEN;
         SetConfigFlags(windowFlags);
-        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+        const std::string labelled = std::string(title ? title : "") + "  [raylib: software GS]";
+        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, labelled.c_str());
         InitAudioDevice();
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
 #endif
