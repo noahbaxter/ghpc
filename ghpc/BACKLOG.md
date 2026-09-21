@@ -20,56 +20,78 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**`--native` plays gameplay at realtime. Make it the whole game.** State in
-`NEXT.md`, numbers in `notes/evidence/2026-09-21-r2-cameras-targets-lighting.txt`.
-In order:
+**`--native` runs the whole career loop at stable speed. Make what it draws
+right.** As of 2026-09-21 the loop main → career → expert → song → fail →
+quit → main → song runs unattended, holds game rate 0.98-1.00 under host
+load, and shows 99-100% of guest frames in order. What is still wrong is
+all on screen, reported by hand play: flashing, missing chart geometry, a
+cyan wedge. In order, each with the number that says it moved:
 
-1. **Menus under `--native`: compared one to one, the icons are in.** Each
-   menu is a save state (`menu_<screen>`, `GHPC_STATE_SAVE_SCREENS=1`) and
-   `ghpc/scripts/vkscreens.sh` shoots every arm on it at the same ui-clock
-   moments. The emulated reference repeats at iou 1.0000.
+1. **A route harness, first, because every item below is judged on it.**
+   Wrap the working driver line in `ghpc/scripts/route.sh`: career, expert,
+   mash strum, fail, quit, second song, with shots every 2s, the clock and
+   present traces, and one summary line (screens reached, `stale=`,
+   `noCamera=`, repeat/skip %, game rate min/max). Clean shots through
+   `/tmp/` (with the slash: `/tmp` is a symlink and `find /tmp` never
+   descends, which mixed old runs into two contact sheets). About 85s a
+   run. Take an arm list like `vkarms.sh` so A/B is one command.
 
-       native vs ref   main 0.890   setlist 0.974   difficulty 0.878
-       swOnly          main ~53     setlist 1       difficulty 13
+       GHPC_PAD_DRIVE="main_screen=@main_career.btn+r2,nameprof_screen=r2+start,
+         sel_difficulty_screen=@sd_diff4.btn+r2,game_screen=down,
+         lose_screen=@lose_quit_career.btn+r2,*=r2"
+       GHPC_PAD_DRIVE_SETTLE=1.5 GHPC_PAD_DRIVE_PERIOD=0.2  play.sh --native --guitar
 
-   The button icons draw from PsMesh's converted face packet
-   (`ghpcDecodeFacePacket`, DrawFaces override), served per frame as
-   `submitDynamicMesh`. `GHPC_SCENE_PACKET=0` turns it off for a control
-   arm. Numbers in `notes/evidence/2026-09-21-icon-face-packet.txt`.
-   Left here: cache the decode by mesh instead of walking it every frame.
-   Gameplay decodes two small quads the same way and its picture is
-   unchanged.
+2. **Flashing.** Two candidates, and the present trace (`GHPC_PRESENTTRACE`,
+   now with `draws` and `camera` columns, uncommitted) tells them apart:
+   - frames with no camera are skipped and present blank: the last run
+     logged `noCamera=329`;
+   - scene frames are cut at vblank, not at the guest's own boundary
+     (`PsRnd::EndDrawing` 0x1c0070), so a vblank mid-frame splits one guest
+     frame in two. Latest-only used to hide many halves; the ordered queue
+     now shows every one.
+   Metric: share of presents under 80% of the median draw count, and
+   noCamera presents, both to 0. Likely fix: close the scene frame in an
+   EndDrawing override, and re-present the last complete frame rather than
+   a blank one.
 
-   **All 26 menu states compared (2026-09-21), none broken.** Captured by
-   hand with F5 (`play.sh --guitar`, not `--native`). iou 0.87-0.998,
-   swOnly under 100 on every menu but sel_character (500), multi (250) and
-   loading (2900). What is left is two faults, both seen in the shots:
-   - **Native is brighter**, by a curve rather than an offset: +6 to +7 in
-     the darks, +3 in the mids, -1 near white, on every menu. Mean error
-     3-6 per channel. This, not missing geometry, is most of `nvOnly`,
-     since the masks are a brightness threshold.
-   - **The loading screen's glow** behind the cassette logo is bigger and
-     whiter natively (ratio 0.889, error 10.7, the worst screen).
+3. **Missing chart geometry**: the white tops of notes and sustains, and the
+   kick drum, which animates. Census first: `GHPC_SCENE_DROP_LOG` on
+   game_screen for cacheMiss and noFaces, then `GHPC_VK_MESH_ID` and
+   `vkdrawid.py` against a reference shot to name the missing draws.
+   Suspects: mutable meshes served in strip order when they are not strips,
+   meshes that never pass through DrawFaces (particles, RndMultiMesh), and
+   skinned meshes with more than four bones. Metric: `swOnly` on the
+   gameplay buckets, 3700-4600 now.
 
-   Not yet shot: results, win and lose screens. `lose_screen` drew a solid
-   black panel behind its text in an earlier run.
+4. **The cyan wedge**, a venue light cone gone solid as the song starts
+   failing. Not the packet decoder (it persists with GHPC_SCENE_PACKET=0).
+   Name the draw with `GHPC_VK_MESH_ID` on the route's fail frames, then
+   check its blend and vertex alpha: the cones are additive (ALPHA_1), and
+   the fail lighting animates their colour. Two shots of that run also
+   squashed to half height; check whether that is the same draw or the
+   128x256 offscreen target (Later).
 
-   Material programs still unreproduced, from `[ghpc/scene/light]` on
-   gameplay: 8 draws sphere map (0x347), 9 others. The texture transform
-   (0x17c) is in and took gameplay from iou 0.82-0.87 to 0.89-0.93.
-2. **What the 128x256 offscreen target is for.** 87 draws render into it
-   through the venue's second camera and are skipped. If a screen draw samples
-   it (a render-target PsTex, `renderTarget=` in `[ghpc/scene/tex]`, is 0 on
-   game_screen) it needs an offscreen Vulkan target; if nothing does, it is
-   something the GS path composites outside the seam.
-3. **The remaining picture error**, 13-15 per channel. Fog (XYZF2, never
-   implemented), the point light's unclamped dot, ZB_ONLY depth writes, the
-   depth default. Shoot with `vkarms.sh`, read with `vkdrawid.py`.
-4. **Audio (A1).** With gameplay at realtime it is now the thing between the
-   port and playable.
+5. **Audio (A1).** With speed and pacing stable, the next thing between the
+   port and playable. Two candidates in `notes/audio-path.md`, neither
+   concluded.
+
+Deferred from this round, each with its number: the brightness curve (+6
+darks, +3 mids, -1 whites, every menu), the loading glow (error 10.7),
+caching the face packet decode by mesh, per-visit driver rules
+(`screen#2=`), a speed-up knob (needs spare speed measured first).
 
 Everything below this line in `Now` is the history of getting here, kept
 for its measurements.
+
+**2026-09-21, the round that made the loop stable.** Button icons decoded
+from PsMesh's face packet (`ghpcDecodeFacePacket`, `GHPC_SCENE_PACKET=0` for
+a control arm, `notes/evidence/2026-09-21-icon-face-packet.txt`). All 26
+menu states compared against the emulated path: iou 0.87-0.998, swOnly under
+100 on all but sel_character (500), multi (250), loading (2900). Mesh caches
+keyed on the guest address served old meshes once a menu unloaded and the
+address was reused (black menus, giant triangles, `stale=760` on the fix).
+Game time put on the wall clock under host load (`GHPC_WALL_PACE`), and
+scene frames queued in order (`GHPC_SCENE_QUEUE`, 1 is the old handoff).
 
 **R2: the Rnd seam.** Exit criteria in `NEXT.md`. Steps 1 to 4 are in; step
 5 (stub the packet path) turned out to be `GHPC_VU1_OFF` once the seam drew
@@ -331,6 +353,15 @@ Never load a state that has not passed item 6.
 
 ## Later
 
+- **What the 128x256 offscreen target is for.** 87 draws render into it
+  through the venue's second camera and are skipped. If a screen draw samples
+  it (`renderTarget=` in `[ghpc/scene/tex]`, 0 on game_screen) it needs an
+  offscreen Vulkan target; if nothing does, the GS path composites it outside
+  the seam.
+- **The remaining gameplay picture error**, 13-15 per channel: fog (XYZF2,
+  never implemented), the point light's unclamped dot, ZB_ONLY depth writes,
+  the depth default, and the unreproduced material programs (8 sphere-map
+  draws, 0x347, and 9 others). Shoot with `vkarms.sh`, read with `vkdrawid.py`.
 - **VU1 static recompilation.** Contingency, not the plan. Only if programs
   survive the Rnd seam and still cost. `.vutext` at vaddr 0x00437100 is a VIF
   stream; `scripts/mpgwalk.py` walks it for VIFcode 0x4A and all 18 overlays

@@ -14,6 +14,30 @@ the rules below.
 not identical to it (R2 below). The emulated path is still far too slow, and
 there is still no audio.
 
+**As of 2026-09-21 the whole career loop runs under `--native`**, menus,
+song, fail, quit and back, and holds game rate 0.98-1.00 under host load.
+What is wrong now is what it draws: flashing, missing chart geometry, a cyan
+wedge in the venue. `BACKLOG.md` `Now` has the plan, in order, starting with
+a route harness that every later item is judged on.
+
+Hand play: `play.sh --native --guitar`. Keys 1-5 frets, arrows D-pad (up/down
+strum), X/C/Z/V face buttons, Enter start. F5 saves the screen on show as
+`menu_<screen>` (emulated path only; the title bar confirms). The pad driver
+picks menu items by name: `@main_career.btn` presses down until that
+component has focus, and `GHPC_PAD_DRIVE_FOCUSLOG=1` prints the names.
+
+Three things that bit this round and will bite again:
+- **Host caches keyed on a guest address go stale.** The game reuses the
+  address once a menu unloads. Mesh caches now carry a generation
+  (`meshcache::generation`); the texture cache still keys on pointers and
+  dims, so suspect it first for a wrong texture after a menu change.
+- **Game time is cycles.** A vblank waited on both cycles and wall time, so
+  a loaded host played in slow motion and then fast-forwarded.
+  `GHPC_WALL_PACE` (on under `--native`) hands a late vblank its cycles.
+  `GHPC_CLOCKTRACE` and `GHPC_PRESENTTRACE` log per vblank and per present.
+- **`PSPadBackend::readState` always succeeds**, which silently shadowed
+  the pad stub's own mapping. The stub no longer consults it.
+
 **`eerate` is not game speed, and the difference is not small.** It measures how
 fast emulated cycles retire. What a player feels is the rate TaskMgr's own
 clocks advance, which `[ghpc/clock]` reads straight out of guest RAM and
@@ -184,7 +208,7 @@ button icons) are decoded from it and draw natively since 2026-09-21. The
 window title names the renderer path that came up, e.g.
 `[Vulkan: native, VU1 off]` or `[raylib: software GS]`.
 
-**Do this next:** `BACKLOG.md` `Now`, the menus not yet shot, then item 2.
+**Do this next:** `BACKLOG.md` `Now`, item 1 (the route harness).
 
 Geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
 measured transform in a vertex shader, a depth buffer, a render pass, one
