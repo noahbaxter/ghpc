@@ -204,6 +204,14 @@ static void ghpcSceneMaterial(uint8_t* rdram, R5900Context* ctx, PS2Runtime* run
         m.vuColor[3] = 0.035f;
     }
 
+    // qw689.x and qw691..694: the material program and its texture
+    // transform, as 0x43ecf8 and the +0x170 copy send them.
+    m.uvProgram = READ32(self + 0x12cu);
+    for (uint32_t k = 0; k < 16u; ++k) {
+        const uint32_t bits = READ32(self + 0x170u + k * 4u);
+        std::memcpy(&m.texXfm[k], &bits, sizeof(float));
+    }
+
     // The bound PsTex's RndBitmap, read here because this is the one place
     // that knows which texture a draw gets. Offsets are the ones
     // Select__5PsTexQ25PsTex5Blend_0x43f490.cpp pins: bitmap at +0x28, the

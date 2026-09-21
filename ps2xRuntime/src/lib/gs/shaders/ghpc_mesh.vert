@@ -29,8 +29,8 @@ layout(location = 3) in vec2 aUv;
 // One entry per draw. Four matrices always: a skinned draw uses all of them,
 // an unskinned draw uses matrix 0 and reports matrixCount 1.
 // std430: the four mat4s at 0, the colour at 256, the count at 272, the mode
-// at 276, the UV scale at 280, then the lighting inputs from 288, for a
-// stride of 512. The colour lives here rather than in the push
+// at 276, the UV scale at 280, then the lighting inputs from 288 and the
+// texture transform, for a stride of 544. The colour lives here rather than in the push
 // constants because those are already at 116 of the 128 bytes every
 // implementation guarantees, and the camera has the better claim on them.
 struct DrawData
@@ -46,8 +46,10 @@ struct DrawData
     vec4 vuColor;   // qw690
     uint lightMode; // 0 unlit (mColor), 1 passthrough, 2 ambient, 3 directional, 4 point
     uint lightFlags;// bit 0 prelit, bit 1 mUseEnviron
+    uint uvMode;    // 1: material program 0x17c's texture transform
     uint pad0;
-    uint pad1;
+    vec4 uvRows;    // xy row 0, zw row 1 of the transform at PsMat+0x170
+    vec4 uvOffset;  // xy row 3
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Draws
@@ -197,7 +199,14 @@ void main()
     vNorm = worldNorm;
     // Scaled here rather than per fragment because it is linear, so it
     // interpolates the same either way.
-    vUv = aUv * d.uvScale;
+    // Overlay 0x0be0: uv' = qw694.xy + qw691.xy * u + qw692.xy * v, before
+    // the GS's own scaling to the texture.
+    vec2 uv = aUv;
+    if (d.uvMode == 1u)
+    {
+        uv = d.uvOffset.xy + d.uvRows.xy * aUv.x + d.uvRows.zw * aUv.y;
+    }
+    vUv = uv * d.uvScale;
     if (d.lightMode != 0u)
     {
         // FTOI0(qw695 * colour), which the GS then takes as 8 bits, and the

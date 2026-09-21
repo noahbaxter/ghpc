@@ -141,6 +141,14 @@ namespace ghpc
             // qw690 as VU1 gets it: mColor, with w replaced by 0.035 when
             // TFX is highlight. `color` above stays the raw mColor.
             float vuColor[4];
+
+            // The material program, qw689.x, from +0x12c: what VU1 does to
+            // the UVs before T&L. 0x614 leaves them; 0x17c (overlay 0x0be0)
+            // is the texture transform, uv' = r3.xy + r0.xy * u + r1.xy * v
+            // with the rows of `texXfm`, +0x170 (qw691..694); 0x347 is the
+            // sphere map, which generates them and is not reproduced.
+            uint32_t uvProgram;
+            float texXfm[16];
         };
 
         // PsEnviron::Select's light block, qw681..687, and the lighting
@@ -246,6 +254,14 @@ namespace ghpc
                         const Vertex *verts, uint32_t vertCount,
                         const uint16_t *indices, uint32_t indexCount);
 
+        // Geometry that changes every frame: a mutable mesh (+0x140 & 0x1f),
+        // whose vectors Sync leaves live instead of freeing, so it is never
+        // in the host mesh cache. Copied into the frame rather than cached,
+        // and handed to the backend as DrawView::dynamicVerts.
+        void submitDynamicMesh(uint32_t meshKey,
+                               const Vertex *verts, uint32_t vertCount,
+                               const uint16_t *indices, uint32_t indexCount);
+
         void endFrame();
 
         // ------------------------------------------------------------------
@@ -281,6 +297,10 @@ namespace ghpc
             Target target;
             const Lights *lights;     // null before any PsEnviron::Select
             const float *lightMatrix; // 16 floats, row major, never null
+            // Set for a submitDynamicMesh draw, null for a cached one; then
+            // vertCount and indexCount describe these arrays.
+            const Vertex *dynamicVerts;
+            const uint16_t *dynamicIndices;
             uint32_t vertCount;
             uint32_t indexCount;
             Material material;

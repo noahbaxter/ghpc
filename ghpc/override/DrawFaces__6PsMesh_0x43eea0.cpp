@@ -320,6 +320,25 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
                         verts != nullptr && faces != nullptr;
     if (!cached) {
         ++s_dropCacheMiss;
+        // What a miss is: the first few, with the mutable flag and the live
+        // vector sizes, since Sync leaves mutable meshes' vectors alone.
+        static int s_missLogged = 0;
+        if (s_dropEvery > 0 && s_missLogged < 12) {
+            ++s_missLogged;
+            const uint32_t fb = READ32(self + 0x108u), fe = READ32(self + 0x10cu);
+            const uint32_t vp = READ32(self + 0x100u);
+            float c[4] = {0, 0, 0, 0};
+            float uv[2] = {0, 0};
+            if (vp != 0u) {
+                for (uint32_t k = 0; k < 4u; ++k) { const uint32_t b = READ32(vp + 0x20u + k * 4u); std::memcpy(&c[k], &b, 4); }
+                for (uint32_t k = 0; k < 2u; ++k) { const uint32_t b = READ32(vp + 0x30u + k * 4u); std::memcpy(&uv[k], &b, 4); }
+            }
+            std::fprintf(stderr,
+                "[ghpc/scene/miss] self=0x%08x owner=0x%08x flags140=0x%x verts=%u vertPtr=0x%08x faces=%u "
+                "v0col=(%g %g %g %g) v0uv=(%g %g)\n",
+                self, READ32(self + 0x138u), READ32(self + 0x140u), READ32(self + 0x104u),
+                vp, (fe >= fb) ? (fe - fb) / 6u : 0u, c[0], c[1], c[2], c[3], uv[0], uv[1]);
+        }
     } else if (!usable) {
         ++s_dropNoFaces;
     } else {
@@ -331,22 +350,56 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
             (unsigned long long)s_served, (unsigned long long)s_dropCacheMiss,
             (unsigned long long)s_dropNoFaces);
     }
-    if (!usable) return;
-
     // Reused across draws; a frame submits hundreds and these would otherwise
     // be hundreds of allocations per frame.
     static std::vector<ghpc::scene::Vertex> s_verts;
     static std::vector<uint16_t> s_indices;
 
-    s_verts.resize(vertCnt);
-    for (uint32_t i = 0; i < vertCnt; ++i) {
-        const uint8_t* v = verts + (size_t)i * 64u;
-        ghpc::scene::Vertex& o = s_verts[i];
-        std::memcpy(o.pos,     v + 0x00u, sizeof(o.pos));
-        std::memcpy(o.norm,    v + 0x10u, sizeof(o.norm));
-        std::memcpy(o.weights, v + 0x20u, sizeof(o.weights));
-        std::memcpy(o.uv,      v + 0x30u, sizeof(o.uv));
+    auto convert = [&](const uint8_t* src, uint32_t count) {
+        s_verts.resize(count);
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint8_t* v = src + (size_t)i * 64u;
+            ghpc::scene::Vertex& o = s_verts[i];
+            std::memcpy(o.pos,     v + 0x00u, sizeof(o.pos));
+            std::memcpy(o.norm,    v + 0x10u, sizeof(o.norm));
+            std::memcpy(o.weights, v + 0x20u, sizeof(o.weights));
+            std::memcpy(o.uv,      v + 0x30u, sizeof(o.uv));
+        }
+    };
+
+    // A mutable mesh (+0x140 & 0x1f) is one Sync leaves alone: its vectors
+    // stay live and change, which is why it is not cached. Serve it from the
+    // live vectors, as per-frame geometry. With no Face[] its triangles are
+    // the strip VU1 draws over the verts in order, 0-1-2, 1-2-3, and so on.
+    if (!cached && (READ32(self + 0x140u) & 0x1fu) != 0u) {
+        const uint32_t liveCnt = READ32(self + 0x104u);
+        const uint32_t livePtr = READ32(self + 0x100u);
+        const uint32_t fb = READ32(self + 0x108u), fe = READ32(self + 0x10cu);
+        const uint32_t liveFaces = (fe >= fb) ? (fe - fb) / 6u : 0u;
+        if (liveCnt >= 3u && liveCnt <= 4096u && livePtr != 0u &&
+            !PS2Runtime::isSpecialAddress(livePtr) &&
+            (livePtr & PS2_RAM_MASK) + liveCnt * 64u <= PS2_RAM_SIZE) {
+            convert(rdram + (livePtr & PS2_RAM_MASK), liveCnt);
+            s_indices.clear();
+            if (liveFaces != 0u && liveFaces <= 8192u &&
+                (fb & PS2_RAM_MASK) + liveFaces * 6u <= PS2_RAM_SIZE) {
+                s_indices.resize((size_t)liveFaces * 3u);
+                std::memcpy(s_indices.data(), rdram + (fb & PS2_RAM_MASK), (size_t)liveFaces * 6u);
+            } else {
+                for (uint32_t i = 0; i + 2u < liveCnt; ++i) {
+                    s_indices.push_back((uint16_t)i);
+                    s_indices.push_back((uint16_t)(i + 1u));
+                    s_indices.push_back((uint16_t)(i + 2u));
+                }
+            }
+            ghpc::scene::submitDynamicMesh(self, s_verts.data(), liveCnt,
+                                           s_indices.data(), (uint32_t)s_indices.size());
+        }
+        return;
     }
+    if (!usable) return;
+
+    convert(verts, vertCnt);
 
     s_indices.resize((size_t)faceCnt * 3u);
     std::memcpy(s_indices.data(), faces, (size_t)faceCnt * 6u);

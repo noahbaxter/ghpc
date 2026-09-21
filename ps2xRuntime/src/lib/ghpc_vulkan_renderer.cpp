@@ -128,7 +128,8 @@ namespace ghpc
         // One entry per draw in the storage buffer the vertex shader indexes.
         // Matches DrawData in ghpc_mesh.vert: std430 puts the four mat4s at 0,
         // the colour at 256, the count at 272, the mode at 276, the UV scale
-        // at 280, then VU1's lighting inputs, for a stride of 512.
+        // at 280, then VU1's lighting inputs and the texture transform, for a
+        // stride of 544.
         struct GpuDrawData
         {
             float m[4][16];
@@ -142,9 +143,12 @@ namespace ghpc
             float vuColor[4];   // qw690
             uint32_t lightMode; // see ghpc_mesh.vert
             uint32_t lightFlags;
-            uint32_t pad[2];
+            uint32_t uvMode;    // 1: material program 0x17c's texture transform
+            uint32_t pad;
+            float uvRows[4];    // xy row 0, zw row 1 of +0x170
+            float uvOffset[4];  // xy row 3
         };
-        static_assert(sizeof(GpuDrawData) == 512u, "DrawData stride must match the shader's std430 layout");
+        static_assert(sizeof(GpuDrawData) == 544u, "DrawData stride must match the shader's std430 layout");
         static_assert(offsetof(GpuDrawData, uvScale) == 280u, "a vec2 in std430 aligns to 8");
         static_assert(offsetof(GpuDrawData, lightMat) == 288u, "a mat4 in std430 aligns to 16");
         static_assert(offsetof(GpuDrawData, lightMode) == 496u, "lighting tail offset");
@@ -325,6 +329,12 @@ namespace ghpc
             // and the files even come out with matching names.
             double m_shotBeatEvery = 0.0;
             long long m_shotBeatBucket = -1;
+            // GHPC_VK_SHOT_UI=N, the same on TaskMgr's ui clock, every N
+            // seconds, for menus: they have no chart, and the emulated arm runs
+            // at 0.43 of realtime against the native arm's 1.0, so a present
+            // frame is a different moment of every menu animation in each.
+            // The bucket shares m_shotBeatBucket, since only one mode runs.
+            double m_shotUiEvery = 0.0;
             // What the last shot was taken at, for the log line and the name.
             double m_shotBeat = 0.0;
             double m_shotGame = 0.0;
@@ -433,6 +443,24 @@ namespace ghpc
             std::unordered_map<uint32_t, MeshBuffers> m_meshCache;
             std::vector<GpuDrawData> m_drawStaging;
             std::vector<VkDescriptorSet> m_drawSets;
+
+            // Per-frame geometry (scene::submitDynamicMesh), written each
+            // frame into buffers owned by the frame in flight, so a frame
+            // being recorded never overwrites one the GPU still reads.
+            struct DynamicBuffer
+            {
+                VkBuffer buffer = VK_NULL_HANDLE;
+                VkDeviceMemory memory = VK_NULL_HANDLE;
+                void *mapped = nullptr;
+                VkDeviceSize capacity = 0u;
+            };
+            std::array<DynamicBuffer, kFramesInFlight> m_dynVertex{};
+            std::array<DynamicBuffer, kFramesInFlight> m_dynIndex{};
+            std::vector<VkDeviceSize> m_dynVertexOffsets; // per draw, bytes
+            std::vector<VkDeviceSize> m_dynIndexOffsets;
+            uint64_t m_dynDraws = 0ull;
+            bool ensureDynamicBuffer(DynamicBuffer &b, VkDeviceSize size, VkBufferUsageFlags usage);
+            void destroyDynamicBuffer(DynamicBuffer &b);
 
             // Textures, set 1 of the mesh layout. One combined image sampler
             // per texture, all through one repeat sampler: clamp is done in
@@ -979,6 +1007,8 @@ namespace ghpc
                                            const uint8_t *, uint32_t, uint64_t, GpuTexture &) { return false; }
         const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer, uint32_t, uint32_t) { return nullptr; }
         void VulkanRenderer::releaseTexture(uint32_t, GpuTexture &) {}
+        bool VulkanRenderer::ensureDynamicBuffer(DynamicBuffer &, VkDeviceSize, VkBufferUsageFlags) { return false; }
+        void VulkanRenderer::destroyDynamicBuffer(DynamicBuffer &) {}
         void VulkanRenderer::collectGarbage(uint32_t) {}
         void VulkanRenderer::drawScene(VkCommandBuffer, uint32_t, VkRect2D) {}
         void VulkanRenderer::reportMesh() {}
@@ -1476,6 +1506,12 @@ namespace ghpc
             }
             m_meshCache.clear();
 
+            for (uint32_t i = 0u; i < kFramesInFlight; ++i)
+            {
+                destroyDynamicBuffer(m_dynVertex[i]);
+                destroyDynamicBuffer(m_dynIndex[i]);
+            }
+
             // Released through the garbage lists and then collected at once,
             // since nothing is in flight by the time this runs.
             for (auto &entry : m_texCache)
@@ -1840,6 +1876,70 @@ namespace ghpc
             return &inserted.first->second;
         }
 
+        void VulkanRenderer::destroyDynamicBuffer(DynamicBuffer &b)
+        {
+            if (b.mapped != nullptr)
+            {
+                vkUnmapMemory(m_device, b.memory);
+            }
+            if (b.buffer != VK_NULL_HANDLE)
+            {
+                vkDestroyBuffer(m_device, b.buffer, nullptr);
+            }
+            if (b.memory != VK_NULL_HANDLE)
+            {
+                vkFreeMemory(m_device, b.memory, nullptr);
+            }
+            b = DynamicBuffer{};
+        }
+
+        // Grown, never shrunk, with headroom, like the draw buffer. Only
+        // called for the frame index whose fence was just waited, so the old
+        // buffer is not in flight when it is replaced.
+        bool VulkanRenderer::ensureDynamicBuffer(DynamicBuffer &b, VkDeviceSize size, VkBufferUsageFlags usage)
+        {
+            if (b.capacity >= size)
+            {
+                return true;
+            }
+            destroyDynamicBuffer(b);
+            const VkDeviceSize capacity = std::max<VkDeviceSize>(size + size / 2u, 64u * 1024u);
+
+            VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            info.size = capacity;
+            info.usage = usage;
+            info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (!check(vkCreateBuffer(m_device, &info, nullptr, &b.buffer), "vkCreateBuffer(dynamic)"))
+            {
+                return false;
+            }
+            VkMemoryRequirements req{};
+            vkGetBufferMemoryRequirements(m_device, b.buffer, &req);
+            uint32_t type = 0u;
+            if (!findMemoryType(req.memoryTypeBits,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, type))
+            {
+                destroyDynamicBuffer(b);
+                return false;
+            }
+            VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            alloc.allocationSize = req.size;
+            alloc.memoryTypeIndex = type;
+            if (!check(vkAllocateMemory(m_device, &alloc, nullptr, &b.memory), "vkAllocateMemory(dynamic)"))
+            {
+                destroyDynamicBuffer(b);
+                return false;
+            }
+            vkBindBufferMemory(m_device, b.buffer, b.memory, 0u);
+            if (!check(vkMapMemory(m_device, b.memory, 0u, capacity, 0u, &b.mapped), "vkMapMemory(dynamic)"))
+            {
+                destroyDynamicBuffer(b);
+                return false;
+            }
+            b.capacity = capacity;
+            return true;
+        }
+
         void VulkanRenderer::releaseTexture(uint32_t frameIndex, GpuTexture &t)
         {
             Garbage &g = m_garbage[frameIndex % kFramesInFlight];
@@ -2151,6 +2251,18 @@ namespace ghpc
                 }
                 entry.uvScale[0] = tex ? tex->uvScale[0] : 1.0f;
                 entry.uvScale[1] = tex ? tex->uvScale[1] : 1.0f;
+                // Material program 0x17c transforms the UVs before T&L.
+                if (mat.uvProgram == 0x17Cu)
+                {
+                    const float *x = mat.texXfm;
+                    entry.uvMode = 1u;
+                    entry.uvRows[0] = x[0];
+                    entry.uvRows[1] = x[1];
+                    entry.uvRows[2] = x[4];
+                    entry.uvRows[3] = x[5];
+                    entry.uvOffset[0] = x[12];
+                    entry.uvOffset[1] = x[13];
+                }
                 m_drawSets.push_back(tex ? tex->set : m_whiteTexture.set);
                 if (m_textures)
                 {
@@ -2240,6 +2352,47 @@ namespace ghpc
                 m_drawStaging.push_back(entry);
             }
 
+            // Dynamic geometry, packed into this frame's buffers in draw order.
+            {
+                VkDeviceSize vertexBytes = 0u;
+                VkDeviceSize indexBytes = 0u;
+                for (uint32_t i = 0u; i < drawCount; ++i)
+                {
+                    if (draws[i].dynamicVerts != nullptr)
+                    {
+                        vertexBytes += (VkDeviceSize)draws[i].vertCount * sizeof(scene::Vertex);
+                        indexBytes += (VkDeviceSize)draws[i].indexCount * sizeof(uint16_t);
+                    }
+                }
+                m_dynVertexOffsets.assign(drawCount, 0u);
+                m_dynIndexOffsets.assign(drawCount, 0u);
+                if (vertexBytes != 0u &&
+                    ensureDynamicBuffer(m_dynVertex[frameIndex], vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) &&
+                    ensureDynamicBuffer(m_dynIndex[frameIndex], indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT))
+                {
+                    VkDeviceSize vo = 0u;
+                    VkDeviceSize io = 0u;
+                    uint8_t *vdst = static_cast<uint8_t *>(m_dynVertex[frameIndex].mapped);
+                    uint8_t *idst = static_cast<uint8_t *>(m_dynIndex[frameIndex].mapped);
+                    for (uint32_t i = 0u; i < drawCount; ++i)
+                    {
+                        const scene::DrawView &d = draws[i];
+                        if (d.dynamicVerts == nullptr)
+                        {
+                            continue;
+                        }
+                        const size_t vb = (size_t)d.vertCount * sizeof(scene::Vertex);
+                        const size_t ib = (size_t)d.indexCount * sizeof(uint16_t);
+                        std::memcpy(vdst + vo, d.dynamicVerts, vb);
+                        std::memcpy(idst + io, d.dynamicIndices, ib);
+                        m_dynVertexOffsets[i] = vo;
+                        m_dynIndexOffsets[i] = io;
+                        vo += vb;
+                        io += ib;
+                    }
+                }
+            }
+
             if (m_drawStaging.empty() ||
                 !ensureDrawBuffer(frameIndex, m_drawStaging.size() * sizeof(GpuDrawData)))
             {
@@ -2312,8 +2465,12 @@ namespace ghpc
             float boundFix = -1.0f;
             for (uint32_t i = firstDraw; i < lastDraw; ++i)
             {
-                const MeshBuffers *buffers = meshBuffers(draws[i].meshKey);
-                if (buffers == nullptr)
+                // A dynamic draw's geometry is in this frame's buffers, and
+                // looking its key up in the mesh cache would cache it forever.
+                const bool dynamic = draws[i].dynamicVerts != nullptr &&
+                                     m_dynVertex[frameIndex].buffer != VK_NULL_HANDLE;
+                const MeshBuffers *buffers = dynamic ? nullptr : meshBuffers(draws[i].meshKey);
+                if (!dynamic && buffers == nullptr)
                 {
                     continue;
                 }
@@ -2384,11 +2541,24 @@ namespace ghpc
                 push.viewport[3] = target.ofy;
                 push.drawIndex = i;
                 vkCmdPushConstants(cmd, m_meshLayout, VK_SHADER_STAGE_VERTEX_BIT, 0u, sizeof(push), &push);
-                const VkDeviceSize offset = 0u;
-                vkCmdBindVertexBuffers(cmd, 0u, 1u, &buffers->vertexBuffer, &offset);
-                vkCmdBindIndexBuffer(cmd, buffers->indexBuffer, 0u, VK_INDEX_TYPE_UINT16);
-                vkCmdDrawIndexed(cmd, buffers->indexCount, 1u, 0u, 0, 0u);
-                tris += buffers->indexCount / 3u;
+                if (dynamic)
+                {
+                    const VkDeviceSize offset = m_dynVertexOffsets[i];
+                    vkCmdBindVertexBuffers(cmd, 0u, 1u, &m_dynVertex[frameIndex].buffer, &offset);
+                    vkCmdBindIndexBuffer(cmd, m_dynIndex[frameIndex].buffer, m_dynIndexOffsets[i],
+                                         VK_INDEX_TYPE_UINT16);
+                    vkCmdDrawIndexed(cmd, draws[i].indexCount, 1u, 0u, 0, 0u);
+                    tris += draws[i].indexCount / 3u;
+                    ++m_dynDraws;
+                }
+                else
+                {
+                    const VkDeviceSize offset = 0u;
+                    vkCmdBindVertexBuffers(cmd, 0u, 1u, &buffers->vertexBuffer, &offset);
+                    vkCmdBindIndexBuffer(cmd, buffers->indexBuffer, 0u, VK_INDEX_TYPE_UINT16);
+                    vkCmdDrawIndexed(cmd, buffers->indexCount, 1u, 0u, 0, 0u);
+                    tris += buffers->indexCount / 3u;
+                }
                 ++drawn;
             }
 
@@ -2404,7 +2574,7 @@ namespace ghpc
                              "cached=%zu hits=%llu misses=%llu noGeom=%llu noCam=%llu "
                              "pipelines=%zu binds=%llu ofx=%.1f ofy=%.1f src=%ux%u "
                              "tex=%d texDraws=%llu texMissing=%llu textures=%zu uploads=%llu "
-                             "reuploads=%llu texFailed=%llu offscreen=%llu\n",
+                             "reuploads=%llu texFailed=%llu offscreen=%llu dynamic=%llu\n",
                              (unsigned long long)m_meshFrames, (unsigned long long)serial,
                              drawCount, (unsigned long long)drawn, (unsigned long long)tris,
                              m_meshCache.size(), (unsigned long long)m_meshCacheHits,
@@ -2415,7 +2585,8 @@ namespace ghpc
                              m_textures ? 1 : 0, (unsigned long long)m_texDraws,
                              (unsigned long long)m_texMissingDraws, m_texCache.size(),
                              (unsigned long long)m_texUploads, (unsigned long long)m_texReuploads,
-                             (unsigned long long)m_texFailed, (unsigned long long)m_meshOffscreen);
+                             (unsigned long long)m_texFailed, (unsigned long long)m_meshOffscreen,
+                             (unsigned long long)m_dynDraws);
             }
         }
 
@@ -2522,6 +2693,11 @@ namespace ghpc
                 std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_b%06lld_%s.ppm",
                               m_shotBeatBucket, screen.c_str());
             }
+            else if (m_shotUiEvery > 0.0)
+            {
+                std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_u%06lld_%s.ppm",
+                              m_shotBeatBucket, screen.c_str());
+            }
             else
             {
                 std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_%d_%s.ppm", m_shots, screen.c_str());
@@ -2549,7 +2725,7 @@ namespace ghpc
                     rgb[0] = bgr ? src[i + 2] : src[i + 0];
                     rgb[1] = src[i + 1];
                     rgb[2] = bgr ? src[i + 0] : src[i + 2];
-                    // Anything above the mode-2 clear, which is (15, 15, 25).
+                    // Anything above near-black, the clear on every mode.
                     if (rgb[0] > 20u || rgb[1] > 20u || rgb[2] > 32u)
                     {
                         ++lit;
@@ -2657,6 +2833,10 @@ namespace ghpc
             if (const char *shotBeat = std::getenv("GHPC_VK_SHOT_BEAT"); shotBeat != nullptr)
             {
                 m_shotBeatEvery = std::atof(shotBeat);
+            }
+            if (const char *shotUi = std::getenv("GHPC_VK_SHOT_UI"); shotUi != nullptr)
+            {
+                m_shotUiEvery = std::atof(shotUi);
             }
             m_skipAlphaTested = std::getenv("GHPC_VK_MESH_SKIP_ATE") != nullptr;
             m_tint = std::getenv("GHPC_VK_MESH_TINT") != nullptr;
@@ -3018,13 +3198,11 @@ namespace ghpc
             // software GS sentinel for "nothing was drawn here": black would be
             // indistinguishable from a window that never presented at all.
             //
-            // Mode 2 clears to a dark grey instead, because there is no
-            // software picture behind the geometry there and black would make
-            // "the pipeline drew nothing" look exactly like "the geometry is
-            // black".
-            const VkClearColorValue clearColor = (m_meshMode >= 2 && m_hasFrame)
-                                                     ? VkClearColorValue{{0.06f, 0.06f, 0.10f, 1.0f}}
-                                                 : m_hasFrame
+            // Mode 2 used to clear to dark grey, so "drew nothing" differed
+            // from "drew black". It is the --native picture now, whose
+            // letterbox the PS2 path shows black, and GHPC_VK_MESH_ID and
+            // GHPC_VK_MESH_TINT answer that question better.
+            const VkClearColorValue clearColor = m_hasFrame
                                                      ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}}
                                                      : VkClearColorValue{{1.0f, 0.0f, 1.0f, 1.0f}};
             vkCmdClearColorImage(cmd, m_swapchainImages[imageIndex],
@@ -3172,6 +3350,14 @@ namespace ghpc
                     {
                         candidateBucket =
                             (long long)std::floor((double)clocks.beat / m_shotBeatEvery);
+                        shotDue = candidateBucket != m_shotBeatBucket;
+                    }
+                }
+                else if (m_shotUiEvery > 0.0)
+                {
+                    if (clocks.valid && clocks.ui > 0.0f)
+                    {
+                        candidateBucket = (long long)std::floor((double)clocks.ui / m_shotUiEvery);
                         shotDue = candidateBucket != m_shotBeatBucket;
                     }
                 }

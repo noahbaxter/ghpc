@@ -45,6 +45,9 @@ namespace ghpc
                 uint32_t indexCount = 0u;
                 uint32_t cameraIndex = kNoCamera; // into Frame::cameras
                 uint32_t lightsIndex = kNoCamera; // into Frame::lights, same sentinel
+                bool dynamic = false;             // geometry in Frame::dynVerts
+                uint32_t dynVertOffset = 0u;
+                uint32_t dynIndexOffset = 0u;
                 Material material{};
                 Target target{};
             };
@@ -83,6 +86,11 @@ namespace ghpc
                     m.rgbaScale[k] = 128.0f;
                     m.vuColor[k] = 1.0f;
                 }
+                m.uvProgram = 0x614u;
+                for (uint32_t k = 0; k < 16u; ++k)
+                {
+                    m.texXfm[k] = (k % 5u == 0u) ? 1.0f : 0.0f;
+                }
                 return m;
             }
 
@@ -93,6 +101,8 @@ namespace ghpc
                 std::vector<DrawView> views; // built at publish
                 std::vector<Camera> cameras; // one per change, in draw order
                 std::vector<Lights> lights;  // the same, for PsEnviron
+                std::vector<Vertex> dynVerts;     // submitDynamicMesh geometry
+                std::vector<uint16_t> dynIndices;
                 Camera camera{};             // the last, for the frame-wide view
                 bool cameraSeen = false;
                 uint32_t boneUploads = 0u;
@@ -107,6 +117,8 @@ namespace ghpc
                     views.clear();
                     cameras.clear();
                     lights.clear();
+                    dynVerts.clear();
+                    dynIndices.clear();
                     cameraSeen = false;
                     boneUploads = 0u;
                     worldUploads = 0u;
@@ -130,6 +142,8 @@ namespace ghpc
                                             : nullptr;
                     // Stored straight after the draw's own matrices.
                     f.views[i].lightMatrix = f.matrices.data() + d.matrixOffset + (size_t)d.matrixCount * 16u;
+                    f.views[i].dynamicVerts = d.dynamic ? f.dynVerts.data() + d.dynVertOffset : nullptr;
+                    f.views[i].dynamicIndices = d.dynamic ? f.dynIndices.data() + d.dynIndexOffset : nullptr;
                 }
             }
 
@@ -484,6 +498,8 @@ namespace ghpc
             ++s.building.worldUploads;
         }
 
+        PendingDraw &pushDraw(uint32_t meshKey, uint32_t vertCount, uint32_t indexCount, bool dynamic);
+
         void submitMesh(uint32_t meshKey,
                         const Vertex *verts, uint32_t vertCount,
                         const uint16_t *indices, uint32_t indexCount)
@@ -518,7 +534,35 @@ namespace ghpc
                 }
             }
 
+            pushDraw(meshKey, vertCount, (indices != nullptr) ? indexCount : 0u, false);
+        }
+
+        void submitDynamicMesh(uint32_t meshKey,
+                               const Vertex *verts, uint32_t vertCount,
+                               const uint16_t *indices, uint32_t indexCount)
+        {
+            if (!active() || verts == nullptr || vertCount == 0u || indices == nullptr || indexCount == 0u)
+            {
+                return;
+            }
+            State &s = state();
+            if (s.pendingMatrixCount == 0u)
+            {
+                return;
+            }
+            PendingDraw &d = pushDraw(meshKey, vertCount, indexCount, true);
+            d.dynVertOffset = (uint32_t)s.building.dynVerts.size();
+            d.dynIndexOffset = (uint32_t)s.building.dynIndices.size();
+            s.building.dynVerts.insert(s.building.dynVerts.end(), verts, verts + vertCount);
+            s.building.dynIndices.insert(s.building.dynIndices.end(), indices, indices + indexCount);
+        }
+
+        // The latched state a draw takes at submit, shared by both kinds.
+        PendingDraw &pushDraw(uint32_t meshKey, uint32_t vertCount, uint32_t indexCount, bool dynamic)
+        {
+            State &s = state();
             PendingDraw d;
+            d.dynamic = dynamic;
             d.meshKey = meshKey;
             d.matrixCount = s.pendingMatrixCount;
             d.matrixOffset = (uint32_t)s.building.matrices.size();
@@ -527,7 +571,7 @@ namespace ghpc
             d.cameraIndex = s.building.cameras.empty() ? kNoCamera
                                                         : (uint32_t)s.building.cameras.size() - 1u;
             d.vertCount = vertCount;
-            d.indexCount = (indices != nullptr) ? indexCount : 0u;
+            d.indexCount = indexCount;
             s.building.matrices.insert(s.building.matrices.end(),
                                        s.pendingMatrices,
                                        s.pendingMatrices + (size_t)d.matrixCount * 16u);
@@ -543,6 +587,7 @@ namespace ghpc
                 d.lightsIndex = (uint32_t)arena.size() - 1u;
             }
             s.building.draws.push_back(d);
+            return s.building.draws.back();
         }
 
         void endFrame()
@@ -684,6 +729,9 @@ namespace ghpc
             {
                 uint32_t passthrough = 0u, ambient = 0u, directional = 0u, point = 0u, other = 0u;
                 uint32_t prelitCount = 0u, noLights = 0u;
+                // Material programs: the texture transform is reproduced, the
+                // sphere map and anything else are not, so they are counted.
+                uint32_t uvXfm = 0u, uvSphere = 0u, uvOther = 0u;
                 const PendingDraw *sample = nullptr;
                 for (const PendingDraw &d : p.draws)
                 {
@@ -696,6 +744,13 @@ namespace ghpc
                     default: ++other; break;
                     }
                     prelitCount += d.material.prelit ? 1u : 0u;
+                    switch (d.material.uvProgram)
+                    {
+                    case 0x614u: break;
+                    case 0x17Cu: ++uvXfm; break;
+                    case 0x347u: ++uvSphere; break;
+                    default: ++uvOther; break;
+                    }
                     noLights += (d.lightsIndex == kNoCamera) ? 1u : 0u;
                 }
                 if (sample == nullptr && !p.draws.empty())
@@ -708,10 +763,11 @@ namespace ghpc
                 std::fprintf(stderr,
                              "[ghpc/scene/light] frame=%llu passthrough=%u ambient=%u directional=%u "
                              "point=%u other=%u prelit=%u noLights=%u environs=%zu "
+                             "uvXfm=%u uvSphere=%u uvOther=%u "
                              "qw695=(%.3f %.3f %.3f %.3f) ambientQw=(%.3f %.3f %.3f %.3f) "
                              "col0=(%.3f %.3f %.3f) dirRow0=(%.3f %.3f %.3f)\n",
                              (unsigned long long)frames, passthrough, ambient, directional, point, other,
-                             prelitCount, noLights, p.lights.size(),
+                             prelitCount, noLights, p.lights.size(), uvXfm, uvSphere, uvOther,
                              scale ? scale[0] : 0.0f, scale ? scale[1] : 0.0f,
                              scale ? scale[2] : 0.0f, scale ? scale[3] : 0.0f,
                              l ? l->qw[0][0] : 0.0f, l ? l->qw[0][1] : 0.0f,
