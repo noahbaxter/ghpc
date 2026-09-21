@@ -1,0 +1,86 @@
+R2 step 4: texture on the Vulkan mesh path, and save states that can iterate it
+2026-09-21, release, M4 Pro, MoltenVK
+
+Where the texels come from
+--------------------------
+Not GS VRAM. PsTex keeps its RndBitmap (+0x28) resident in guest RAM for the
+life of the texture, because PsTex::LoadVram re-uploads from it whenever the
+VRAM allocator evicts. So PsMat::Select reads the bound PsTex's bitmap and
+hands it to the scene collector, which decodes it to RGBA8 once per distinct
+bitmap. That needs no GS state, cannot race the packet path, and survives
+step 5 stubbing the packet path, none of which a VRAM read can say.
+
+Sampled at 90k selects into a driven run: pixels and palette pointers live,
+rows linear (rowBytes = w * bpp / 8), palette 0x400 bytes before the pixels at
+8bpp and 0x40 at 4bpp, mOrder 3 on every bitmap.
+
+The census, GHPC_TEX_CENSUS=1, read at 0x43f520 (post-patch):
+
+  selects=90000 psm{ 2=6028 19=52444 20=31528 } cpsm{ 0=90000 }
+  tfx=84388/2680/2932/0 tcc=90000 csm=0 maxTW=9 maxTH=9
+
+PSMT8 58%, PSMT4 35%, PSMCT16 6%, no CT32. Every palette is CT32, every CSM 0,
+every TCC 1.
+
+The decode is proved by looking, GHPC_TEX_DUMP=<dir>: the 8bpp and 4bpp font
+atlases come out as crisp glyphs in character order, which a wrong CSM1 index
+swizzle or nibble order would scramble. 4bpp is low nibble first.
+
+What arrives, on game_screen (resumed from songmesh):
+
+  [ghpc/scene/tex] afail=6/0/183/0 ateOpaque=0 tfx=487/0/11/0 clamp=42
+                   texMissing=0 decoded=182 redecoded=15 renderTarget=0
+                   noPixels=3 unsupported=0 oddOrder=0 scaled=0 texa=0/128/0
+  [ghpc/vk/mesh]   texMissing=0 textures=167 uploads=182 reuploads=15 texFailed=0
+
+Every textured draw gets its texture. No render-target textures on this
+screen, no non-power-of-two bitmaps.
+
+The alpha test
+--------------
+AFAIL is 183 ZB_ONLY of 189 alpha-tested draws, and every alpha-tested draw
+blends. ZB_ONLY means a failed texel writes depth and no colour, so a discard
+is exact for colour and loses a depth write the GS would have made. The shader
+records which AFAIL cases a discard is exact for.
+
+The punch-out hypothesis was wrong
+----------------------------------
+The handoff predicted that texture would collapse nvOnly, on the theory that
+the alpha-tested draws rendering solid were the native coverage the software
+path lacks. Beat-paired, one binary, software reference:
+
+                 bucket 1   bucket 2   bucket 4   bucket 5
+  untextured     56424      48680      86156      86412      nvOnly
+  textured       56073      46433      84918      85070      nvOnly
+  textured again 56073      46433      84918      85070      nvOnly
+
+Texture moved nvOnly by 1-5%. The excess is not the punch-outs. The native
+frame shows a floor and a wall covering the view where the software path has
+the scoreboard, lamps and fretboard: the large-surface fault the backlog
+already names, which texture does not touch.
+
+swOnly rose by 1-2k per bucket with texture. The masks are a brightness
+threshold and dark texels now fall under it, so the metric weakens as the
+native picture becomes real. Treat swOnly as approximate from here.
+
+Save states carry the mesh cache
+--------------------------------
+The host mesh cache moved from the PsMesh::Sync override into the runtime
+(ghpc_mesh_cache.h) and is written as a MESH chunk. A state without the chunk
+still loads and says it will serve no draws.
+
+  capture   GHPC_STATE_SAVE=songmesh GHPC_STATE_SAVE_AT=2.0, fired at
+            song=2.016, 135.9 MB (was about 132)
+  resume    mesh cache restored, 888 meshes; [ghpc/scene] draws=541,
+            against draws=0 before
+
+Resumed against driven, textured, same beat: iou 0.9919 at bucket 4 and 0.9205
+at bucket 5. Close, not identical, which is what having no determinism gate
+predicts. Fine for A/B as long as every arm loads the same state and one arm
+repeats another.
+
+ghpc/scripts/vkarms.sh does that: three arms from one state, four buckets
+each, in 2:52 against about 20 minutes for driven arms on a flat timer.
+
+  tex vs ref   iou 0.5975 0.6096 0.5934 0.6032  (buckets 4-7)
+  tex2 vs ref  iou 0.5975 0.5983 0.5934 0.6032

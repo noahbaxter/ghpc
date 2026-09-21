@@ -64,10 +64,16 @@ still cost. `.vutext` is already extracted and disassembled if it comes to that.
 
 One exit criterion each. Do not start the next before it holds.
 
-**Save states work, with one gap that matters.** Capture and resume both run:
+**Save states work, and they are how R2 is iterated.** Capture and resume
+both run:
 
-    GHPC_STATE_SAVE=song GHPC_STATE_SAVE_AT=2.0   capture once, unattended
-    GHPC_STATE_LOAD=song                          resume straight into the song
+    GHPC_STATE_SAVE=songmesh GHPC_STATE_SAVE_AT=2.0   capture once, unattended
+    GHPC_STATE_LOAD=songmesh                          resume straight into the song
+    ghpc/scripts/vkarms.sh <out> ref:GHPC_VK_MESH=0 a:... a2:...
+                                                      beat-paired arms from the state
+
+`vkarms.sh` runs three arms of four beat buckets in under three minutes,
+against about twenty for driven arms. Use it for every render comparison.
 
 A resume restores the chart exactly. `game`, `ui` and `beat` come back at the
 capture point and advance at the same rate as a driven run, +0.781 beat per
@@ -78,23 +84,25 @@ fired at `song=2.016`.
 
 Chunks: RDRM, SPAD, VRAM, VUMM, EECX, SCHD (kernel tables), MEMS (IO
 registers, TLB, EE timers, GS registers, VIF1 residual), VUST (VU register
-files), PADS (pad ports).
+files), PADS (pad ports), MESH (the host mesh cache).
 
-**The gap: the host mesh cache is not carried, so a resumed run has no
-geometry.** `GHPC_RND_SCENE=1` reports `draws=0` resumed against 504 driven.
-The cache fills at `PsMesh::Sync`, which ran before the save. Until it is
-serialised, a save state cannot be used to iterate on R2, which is the work it
-was built for.
+**The mesh cache is carried since 2026-09-21.** Without it a resumed run
+served no draws (`draws=0` against 504 driven), because the cache fills at
+`PsMesh::Sync`, which ran before the save. It now lives in the runtime
+(`ghpc_mesh_cache.h`) and a resume reports `mesh cache restored, 888 meshes`
+and `draws=541`. A state written before the chunk existed (the old `song`
+slot) still loads and says it will serve no draws. The texture cache needs no
+chunk: it rebuilds from guest RAM on the next material bind.
 
-That is the same class as the pad bug this found: host state the guest's RDRAM
-implies but which lives in C++ and was never written. The pad announced itself
-by pausing the game. A cache does not announce anything, it just goes quiet.
-Ask it of every host-side cache before trusting a state.
+That was the same class as the pad bug: host state the guest's RDRAM implies
+but which lives in C++ and was never written. The pad announced itself by
+pausing the game. A cache does not announce anything, it just goes quiet. Ask
+it of every host-side cache before trusting a state.
 
-**There is still no determinism gate.** Matching clocks and a matching beat
-rate are encouraging, not proof. Treat a loaded state as a fast way back to
-roughly where you were, not as ground truth for a measurement, and do not
-judge R2's rendering output from one.
+**There is still no determinism gate.** A resumed shot against a driven one
+at the same beat is iou 0.99 and 0.92, close and not identical. So a state is
+fine for A/B, where every arm loads the same state and one arm repeats
+another, and is not ground truth for a single absolute measurement.
 
 ### R0: Vulkan bring-up, done 2026-09-20
 SDL3 window, Vulkan instance, device, swapchain, cleared frame, selected by
@@ -133,18 +141,29 @@ already says hashes are not stable across runs. Neither form of that
 comparison can fail. The readback can, and it covers the swizzle, the filter
 and the rect, which a source-side hash never could.
 
-### R2: the Rnd seam, geometry on the GPU, picture wrong, texture next
-**The pipeline works and the picture does not, for one measured reason.**
-Gameplay geometry goes through a real Vulkan pipeline: per-mesh GPU buffers,
-the measured transform in a vertex shader, a depth buffer, a render pass, and
-one pipeline per material depth and blend state. What it cannot do is texture,
-and 36% of gameplay draws are alpha-test punch-outs that need texel alpha to
-have a shape at all. Detail in
+### R2: the Rnd seam, textured on the GPU, a few surfaces cover the frame
+**Texture and the alpha test are in, 2026-09-21, and they were not what was
+wrong with the picture.** Every textured draw gets its texture (`texMissing=0`),
+decoded from PsTex's `RndBitmap` in guest RAM rather than from GS VRAM, and
+the fragment shader runs the GS's TFX equations and alpha test in GS units.
+The handoff predicted this would collapse `nvOnly`. It moved it 1-5%:
+56073 against 56424 at one bucket, 84918 against 86156 at another. Detail in
+`notes/evidence/2026-09-21-r2-texture.txt`.
+
+**Do this next: the surfaces that cover the frame.** The native frame shows a
+floor and a wall where the software path shows the scoreboard, lamps and
+fretboard. The tinted count already said so: about three meshes visible of
+339 drawn. Chase it with `GHPC_VK_MESH_RANGE` from the `songmesh` state.
+Sequenced in `BACKLOG.md`.
+
+Geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
+measured transform in a vertex shader, a depth buffer, a render pass, one
+pipeline per material depth and blend state, and one descriptor set per
+texture. Pipeline detail in
 `notes/evidence/2026-09-20-r2-vulkan-mesh-pipeline.txt`.
 
-**Do this next: texture.** Not because the picture would be prettier, because
-189 of 528 draws are currently wrong in a way nothing else can fix. Sequenced
-in `BACKLOG.md`.
+    GHPC_VK_TEX=0             untextured, no alpha test: the control arm
+    GHPC_TEX_DUMP=dir         decoded textures as PPM, over a checker by alpha
 
     GHPC_VK_MESH=1            native geometry over the software blit
     GHPC_VK_MESH=2            native only, no blit
@@ -178,20 +197,14 @@ once it arrives.
 picture is the evidence and a log line cannot be one; before it existed,
 checking a render change meant watching the window.
 
-**Why the picture is wrong, measured.** On `game_screen`:
+**The alpha test is honoured and it was not the fault.** On `game_screen`,
+189 of 528 draws enable it, all ATST GREATER against AREF 0, a punch-out. AFAIL
+is 183 ZB_ONLY and every one of them blends, so a discard gets the colour
+exact and loses only a depth write. This was the leading explanation for the
+wrong picture and texture measured it out: see the R2 headline above.
 
-    draws=528  ate=189  atst=0/0/0/0/0/0/189/0  aref=0..0  afail=183
-
-189 draws enable the GS alpha test, all of them ATST GREATER with AREF 0,
-which is a pure punch-out: pass only where the texel has alpha. This pipeline
-ignores TEST_1 bits 0..13, so each of those renders as its full solid quad
-instead of a cut-out shape, and opaque rectangles cover the frame. Not a
-transform fault, not a depth fault, not a shading fault.
-
-`GHPC_VK_MESH_SKIP_ATE=1` drops them so the rest can be looked at, and
-`GHPC_VK_MESH_TINT=1` makes distinct meshes distinguishable. Both are
-deliberately wrong pictures, and they are the only way to judge the other 339
-draws before texture lands.
+`GHPC_VK_MESH_TINT=1` makes distinct meshes distinguishable and is the right
+tool for the surface fault. `GHPC_VK_MESH_SKIP_ATE=1` is no longer needed.
 
 **Comparing two runs' screenshots needs `GHPC_VK_SHOT_BEAT`, nothing else.**
 Read `notes/gotchas.md`, "Screenshots pair on serial", first: shots were once
@@ -212,14 +225,12 @@ the viewport together, which the offline checker cannot reach.
 Per-material depth (the default, mode 3) loses about 4k pixels a frame against
 that. Real, since it clears the noise floor, and small. **Do not settle the
 default on it yet:** `nvOnly` is 44k to 90k in both arms, an order of
-magnitude bigger than the gap between them, and it is the punch-out draws
-rendering solid. Re-run after texture and let that decide.
+magnitude bigger than the gap between them. It is not the punch-outs, which
+texture measured out; it is the surfaces covering the frame. Settle depth
+after that fault is found, since occlusion is what depth decides.
 
-`nvOnly` was large in every arm, 45k of about 208k native pixels, so the
-native path covers ground the software path leaves empty. Most likely the
-alpha test, which this pipeline ignores completely (TEST_1 bits 0..3, ATE and
-ATST), so geometry the GS punches out arrives solid. Cheap to test, and the
-fields are already in the image being read.
+`swOnly` is approximate once texture is on: the masks are a brightness
+threshold, and dark texels fall under it.
 
 **What settled the depth question was a log, not a picture.**
 `[ghpc/vk/pipeline]` prints the resolved compare op and write flag for every
@@ -274,20 +285,16 @@ Two settled sub-results, so they are not re-derived:
 above 30 fps with the gameplay chain alive (`BeatMatch::Poll` 0x1259c0,
 `PlayerMatcher::Poll` 0x117dd0) and `song_tick_advanced=yes`.
 
-Neither half holds. The picture cannot be right while 36% of draws are
-punch-outs with no alpha to test, and no speed claim belongs to R2 at all
-until step 5 lands, because the software rasteriser still does every bit of
-the work the native path duplicates. Two distinct pieces of work, and texture
-is the one that gates the picture.
+Neither half holds. The picture is wrong because a few surfaces cover the
+frame, and no speed claim belongs to R2 at all until step 5 lands, because
+the software rasteriser still does every bit of the work the native path
+duplicates.
 
-**What the phase order got wrong, worth saying once.** R2's sequence put
-material and texture at step 4, after geometry and depth, as though they were
-refinements. They are not: without texel alpha, a third of the frame has no
-correct silhouette, so every judgement about geometry, depth or placement is
-made through a screen of opaque rectangles. The geometry work was still right
-to do first, since it is what the transform and the cache were verified
-against, but the phase should have expected texture to be load-bearing rather
-than cosmetic.
+**Worth saying once:** the last handoff argued texture was load-bearing for
+the picture, on the punch-out theory, and moved it ahead of everything. The
+measurement says otherwise. Texture was still needed, but a theory that
+explains a metric is not the metric moving; pre-declare what the change
+should do to the number and check it.
 
 Two things that will cost a day each if taken on trust. `g_ghpcInstWorld` is
 a probe and not a seam input, by its own file's account: it names a different
@@ -355,9 +362,8 @@ Capture a fixture once, then iterate on it:
     GHPC_NATIVE_DRAW=2 GHPC_FIXTURE=/tmp/gh2.fix GHPC_COUNTIN=0.5 \
       python3 ghpc/scripts/progress.py --build build
 
-There is no runtime state snapshot. Boot skip plus the pad driver is the fast
-path and it is good enough; building a real one is days of work for something
-the 25s loop already covers.
+For anything in the song, resume a save state instead (see the phases,
+above); `vkarms.sh` is built on that.
 
 ## Rules that hold every session
 

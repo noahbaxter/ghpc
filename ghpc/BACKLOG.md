@@ -47,37 +47,22 @@ The sequence, with what is left:
    check. Run it before suspecting the transform of anything.
 3. ~~A depth buffer and a render pass.~~ Done. D32_SFLOAT, compare GREATER,
    clear zero, because GS z counts up towards the viewer.
-4. **Material and texture. Depth and blend are in. TEXTURE IS THE NEXT TASK
-   AND IT GATES THE PICTURE.**
+4. **Material and texture.** Depth, blend, texture and the alpha test are in.
+   `notes/evidence/2026-09-21-r2-texture.txt` has the numbers. Texels come
+   from PsTex's `RndBitmap` in guest RAM, not GS VRAM, so `SampleTexture` was
+   not reused: that bitmap is linear and needs no swizzle.
 
-   189 of 528 gameplay draws enable the GS alpha test, all of them ATST
-   GREATER with AREF 0, which is a punch-out: pass only where the texel has
-   alpha. This pipeline ignores TEST_1 bits 0..13, so those 189 render as
-   full solid quads and cover the frame with opaque rectangles. 36% of draws
-   have no correct silhouette without texel alpha, so nothing about the
-   picture can be judged until this lands, and the alpha test cannot be
-   implemented before it either.
-
-   `GHPC_VK_MESH_SKIP_ATE=1` drops those draws and `GHPC_VK_MESH_TINT=1`
-   tints per mesh, which is how to look at the other 339 meanwhile. Both are
-   deliberately wrong pictures.
-
-   Three things already known about texture:
-   - The format census is in: `GHPC_TEX_CENSUS=1` reads TEX0 at 0x43f520,
-     the instruction that sends it, so it is past the TFX and TBP0 patches
-     that an entry hook misses. It reports PSM, CBP, CPSM, CSM, TFX, TCC and
-     the largest TW/TH. rnd-seam.md's histogram was read at entry and is not
-     a census. Run this before writing a decoder.
-   - `GSCpuBackend::SampleTexture` (`gs_cpu_backend.cpp:2059`) already does
-     the PS2 swizzle and the CLUT for the formats this game uses, and
-     `g_samplesByPsm` (:550) counts them. Reuse it; do not rewrite it from
-     the GS manual.
-   - `Material::texKey` already carries the PsTex per draw, so a GPU texture
-     cache keys off it the way the geometry cache keys off `meshKey`.
-
-   Also left here: the real blend equation. `ALPHA_1` at PsMat+0x138 carries
-   it; what went in is source-alpha-over for any `mBlend` but 1, which only
-   stops a blended draw writing an opaque rectangle over the frame.
+   Left here, none of them the reason the picture is wrong:
+   - The blend equation. `ALPHA_1` at PsMat+0x138 carries it; what went in is
+     source-alpha-over for any `mBlend` but 1.
+   - Lighting. VU1 lights per vertex (qw695 times the vertex colour); mColor
+     stands in, so textured surfaces are flat lit.
+   - ZB_ONLY alpha-test failures are discarded, losing a depth write the GS
+     makes. 183 of 189 alpha-tested draws are ZB_ONLY.
+   - Render-target textures (PsTex +0x48 & 8) have no bitmap and draw
+     untextured. None on game_screen; counted as `renderTarget=`.
+   - A bitmap rewritten in place keeps its pointers and is not re-decoded.
+     Nothing on game_screen shows it; the signature is pointers and dims.
 5. Only then stub the packet path, so the rasteriser stops doing the work
    twice. Note that a blunt `FlushPacket` stub wedges the guest (see Parked).
    **No speed claim belongs to R2 until this lands**, because until it does
@@ -131,10 +116,11 @@ which clears the noise floor and is therefore real, and is also five times
 smaller than the mispaired comparison claimed.
 
 `nvOnly` is 44k to 90k in both arms, an order of magnitude larger than the gap
-between them, and it is the punch-out draws rendering solid. **The depth
-default is not settled on this**; re-run after texture when nvOnly collapses.
+between them. It is not the punch-outs: texture and the alpha test moved it
+1-5%. **The depth default is not settled on this**; settle it once the
+surfaces below are found.
 
-**A second fault, found by counting the tinted meshes.** With the punch-outs
+**THE NEXT TASK: a few surfaces cover the frame.** With the punch-outs
 skipped and each remaining mesh tinted its own colour, one frame holds about
 three distinct colours once the chart is running (617 distinct at beat bucket
 0, then 4 and 10 at buckets 1 and 2). 339 meshes are drawn and roughly three
@@ -147,19 +133,12 @@ Note that `0:64` covers nothing visible, so the low indices are the wrong
 place to start. This is also the likeliest home of whatever is left of the
 depth question, since occlusion is what depth state decides.
 
-**Next on rendering correctness, in order:**
-
-1. **Texture.** It gates everything else, for the punch-out reason under step
-   4. Start with `GHPC_TEX_CENSUS=1` and reuse
-   `GSCpuBackend::SampleTexture`.
-2. **The alpha test**, which texture unblocks rather than precedes: 189 draws
-   test ATST GREATER against AREF 0, and there is nothing to test until texel
-   alpha exists. It was also the `nvOnly` those coverage arms kept reporting,
-   45k of about 208k native pixels covered where the software path drew
-   nothing.
-3. **Then re-run the coverage comparison** with `GHPC_VK_SHOT_BEAT`, which is
-   now the only valid way to pair two runs. Judging placement before texture
-   means judging it through opaque rectangles.
+**Next on rendering correctness: the surfaces above.** Texture and the alpha
+test are in and moved `nvOnly` 1-5%, so the punch-outs were never the excess
+coverage; these surfaces are. Iterate from the `songmesh` state with
+`ghpc/scripts/vkarms.sh`, three arms in under three minutes, and
+`GHPC_VK_MESH_RANGE`/`GHPC_VK_MESH_TINT` in the arm envs. Then settle the
+depth default, then the blend equation.
 
 **Per-material depth is the default and its mapping is verified by log, not by
 picture.** `[ghpc/vk/pipeline]` prints the resolved compare op and write flag
@@ -204,11 +183,9 @@ calls it a probe and not a seam input, because it names a different mesh chain
 than the DrawFaces it precedes. The matrices come from the packet scan in
 `ghpcSceneSubmit`, which names the right draw by construction.
 
-**Save states cannot iterate R2 yet.** A resumed run reports `draws=0` while
-a driven run on the same build reports 504: the host mesh cache is filled at
-`PsMesh::Sync`, which ran before the save, and the state does not carry it.
-Serialising it is an unordered_map of byte vectors keyed by a guest address.
-Until that lands, a render change has to be tested on a driven run.
+**Save states iterate R2.** The host mesh cache is a MESH chunk now, and a
+resume reports `draws=541` against 0 before. Capture `songmesh` once, then
+`ghpc/scripts/vkarms.sh` for every render comparison.
 
 R1 landed with a different gate than the one written here, deliberately. The
 planned check was the same frame on both renderers by frame signature, and that
