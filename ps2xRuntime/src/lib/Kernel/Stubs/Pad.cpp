@@ -374,8 +374,11 @@ namespace
                     state.ly = backendData[7];
                     usedBackend = true;
                 }
-                else
+                else if (port == 0)
                 {
+                    // One host controller is one guest controller. Applied to
+                    // every open port, a keypress reached both, and a menu
+                    // that takes input from either moved twice per press.
                     applyGamepadState(state);
                     applyKeyboardState(state, portState.analogMode);
                 }
