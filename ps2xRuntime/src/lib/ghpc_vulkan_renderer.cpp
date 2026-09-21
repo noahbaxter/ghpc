@@ -320,6 +320,28 @@ namespace ghpc
             // mesh you can identify.
             uint32_t m_drawFirst = 0u;
             uint32_t m_drawLimit = 0u; // 0 means all
+
+            // GHPC_VK_MESH_SKIP_ATE=1 drops the alpha-tested draws.
+            //
+            // Not a rendering choice, a stand-in. 189 of 528 gameplay draws
+            // enable the alpha test, and every one of them is ATST GREATER
+            // with AREF 0, which is a punch-out: pass only where the texel has
+            // alpha. Without texture there is no alpha to test, so those draws
+            // render as their full solid quads and cover the frame. Skipping
+            // them shows what is behind, which is the only way to judge the
+            // rest of the geometry before texture lands. It is wrong on
+            // purpose and both arms are worth looking at.
+            bool m_skipAlphaTested = false;
+
+            // GHPC_VK_MESH_TINT=1 colours each draw from a hash of its mesh
+            // key instead of the material colour.
+            //
+            // Flat material colour plus a one-directional shade merges
+            // everything that faces the camera into one white mass, which
+            // reads as broken rendering whether or not it is. A per-mesh tint
+            // makes the structure legible: distinct objects get distinct
+            // colours, so what is actually on screen can be counted.
+            bool m_tint = false;
             bool m_meshReady = false;
             VkRenderPass m_meshPass = VK_NULL_HANDLE;
             VkPipelineLayout m_meshLayout = VK_NULL_HANDLE;
@@ -360,6 +382,7 @@ namespace ghpc
             uint64_t m_meshNoGeometry = 0ull;
             uint64_t m_meshNoCamera = 0ull;
             uint64_t m_pipelineBinds = 0ull;
+            uint64_t m_meshSkippedAte = 0ull;
 
             uint32_t m_frame = 0u;
             bool m_swapchainDirty = false;
@@ -1627,7 +1650,21 @@ namespace ghpc
                     std::memcpy(entry.m[m], d.matrices + (size_t)m * 16u, 16u * sizeof(float));
                 }
                 entry.matrixCount = count;
-                std::memcpy(entry.color, d.material.color, sizeof(entry.color));
+                if (m_tint)
+                {
+                    // A cheap integer hash spread over the three channels,
+                    // biased away from black so nothing tints to invisible.
+                    uint32_t h = d.meshKey * 2654435761u;
+                    h ^= h >> 15;
+                    entry.color[0] = 0.25f + 0.75f * (float)((h >> 0) & 0xFFu) / 255.0f;
+                    entry.color[1] = 0.25f + 0.75f * (float)((h >> 8) & 0xFFu) / 255.0f;
+                    entry.color[2] = 0.25f + 0.75f * (float)((h >> 16) & 0xFFu) / 255.0f;
+                    entry.color[3] = 1.0f;
+                }
+                else
+                {
+                    std::memcpy(entry.color, d.material.color, sizeof(entry.color));
+                }
                 m_drawStaging.push_back(entry);
             }
 
@@ -1709,6 +1746,11 @@ namespace ghpc
                 }
 
                 const scene::Material &mat = draws[i].material;
+                if (m_skipAlphaTested && mat.alphaTest)
+                {
+                    ++m_meshSkippedAte;
+                    continue;
+                }
                 PipelineKey key{};
                 key.ztst = mat.ztst & 3u;
                 key.depthTest = mat.depthTest ? 1u : 0u;
@@ -1772,7 +1814,8 @@ namespace ghpc
                       << " noGeometry=" << m_meshNoGeometry
                       << " noCamera=" << m_meshNoCamera
                       << " pipelines=" << m_pipelines.size()
-                      << " pipelineBinds=" << m_pipelineBinds << std::endl;
+                      << " pipelineBinds=" << m_pipelineBinds
+                      << " skippedAte=" << m_meshSkippedAte << std::endl;
             m_meshFrames = 0ull;
         }
 
@@ -1945,6 +1988,8 @@ namespace ghpc
             {
                 m_shotBeatEvery = std::atof(shotBeat);
             }
+            m_skipAlphaTested = std::getenv("GHPC_VK_MESH_SKIP_ATE") != nullptr;
+            m_tint = std::getenv("GHPC_VK_MESH_TINT") != nullptr;
             if (const char *depth = std::getenv("GHPC_VK_MESH_DEPTH"); depth != nullptr)
             {
                 m_depthMode = std::atoi(depth);
