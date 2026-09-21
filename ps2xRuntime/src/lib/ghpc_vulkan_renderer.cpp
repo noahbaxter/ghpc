@@ -159,6 +159,7 @@ namespace ghpc
             VkBuffer indexBuffer = VK_NULL_HANDLE;
             VkDeviceMemory indexMemory = VK_NULL_HANDLE;
             uint32_t indexCount = 0u;
+            uint32_t generation = 0u; // the scene geometry these were built from
         };
 
         // One entry per draw in the storage buffer the vertex shader indexes.
@@ -279,7 +280,7 @@ namespace ghpc
             void destroyMeshTargets();
             bool ensureDrawBuffer(uint32_t frameIndex, VkDeviceSize size);
             VkPipeline pipelineFor(PipelineKey key);
-            const MeshBuffers *meshBuffers(uint32_t meshKey);
+            const MeshBuffers *meshBuffers(uint32_t meshKey, uint32_t generation, uint32_t frameIndex);
             bool uploadTexture(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t width, uint32_t height,
                                const uint8_t *rgba, uint32_t texKey, uint64_t version, GpuTexture &out);
             const GpuTexture *textureFor(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t texKey);
@@ -533,6 +534,7 @@ namespace ghpc
             uint64_t m_meshTris = 0ull;
             uint64_t m_meshCacheHits = 0ull;
             uint64_t m_meshCacheMisses = 0ull;
+            uint64_t m_meshCacheStale = 0ull; // rebuilt because the key's generation moved
             uint64_t m_meshNoGeometry = 0ull;
             uint64_t m_meshNoCamera = 0ull;
             uint64_t m_pipelineBinds = 0ull;
@@ -1040,7 +1042,7 @@ namespace ghpc
         bool VulkanRenderer::createMeshTargets() { return false; }
         void VulkanRenderer::destroyMeshTargets() {}
         bool VulkanRenderer::ensureDrawBuffer(uint32_t, VkDeviceSize) { return false; }
-        const MeshBuffers *VulkanRenderer::meshBuffers(uint32_t) { return nullptr; }
+        const MeshBuffers *VulkanRenderer::meshBuffers(uint32_t, uint32_t, uint32_t) { return nullptr; }
         bool VulkanRenderer::uploadTexture(VkCommandBuffer, uint32_t, uint32_t, uint32_t,
                                            const uint8_t *, uint32_t, uint64_t, GpuTexture &) { return false; }
         const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer, uint32_t, uint32_t) { return nullptr; }
@@ -1831,28 +1833,47 @@ namespace ghpc
             return true;
         }
 
-        const MeshBuffers *VulkanRenderer::meshBuffers(uint32_t meshKey)
+        const MeshBuffers *VulkanRenderer::meshBuffers(uint32_t meshKey, uint32_t generation, uint32_t frameIndex)
         {
             auto it = m_meshCache.find(meshKey);
             if (it != m_meshCache.end())
             {
-                ++m_meshCacheHits;
-                return it->second.indexCount != 0u ? &it->second : nullptr;
+                if (it->second.generation == generation)
+                {
+                    ++m_meshCacheHits;
+                    return it->second.indexCount != 0u ? &it->second : nullptr;
+                }
+                // The key is a guest address and the game has put another mesh
+                // there. Retire the old buffers behind this frame's fence
+                // rather than destroying them under a frame still in flight.
+                ++m_meshCacheStale;
+                Garbage &g = m_garbage[frameIndex % kFramesInFlight];
+                const MeshBuffers &old = it->second;
+                if (old.vertexBuffer != VK_NULL_HANDLE) g.buffers.push_back(old.vertexBuffer);
+                if (old.vertexMemory != VK_NULL_HANDLE) g.memories.push_back(old.vertexMemory);
+                if (old.indexBuffer != VK_NULL_HANDLE) g.buffers.push_back(old.indexBuffer);
+                if (old.indexMemory != VK_NULL_HANDLE) g.memories.push_back(old.indexMemory);
+                m_meshCache.erase(it);
             }
 
             ++m_meshCacheMisses;
 
-            const scene::Vertex *verts = nullptr;
-            const uint16_t *indices = nullptr;
-            uint32_t vertCount = 0u;
-            uint32_t indexCount = 0u;
-            if (!scene::geometry(meshKey, &verts, vertCount, &indices, indexCount) ||
-                vertCount == 0u || indexCount == 0u)
+            std::vector<scene::Vertex> geomVerts;
+            std::vector<uint16_t> geomIndices;
+            uint32_t geomGeneration = 0u;
+            const bool found = scene::geometry(meshKey, geomVerts, geomIndices, geomGeneration);
+            const scene::Vertex *verts = geomVerts.data();
+            const uint16_t *indices = geomIndices.data();
+            const uint32_t vertCount = (uint32_t)geomVerts.size();
+            const uint32_t indexCount = (uint32_t)geomIndices.size();
+            if (!found || vertCount == 0u || indexCount == 0u)
             {
                 // Cached as empty so a mesh with no usable geometry is looked
-                // up once rather than every frame for the rest of the run.
+                // up once per generation rather than every frame.
                 ++m_meshNoGeometry;
-                m_meshCache.emplace(meshKey, MeshBuffers{});
+                MeshBuffers empty;
+                empty.generation = generation;
+                m_meshCache.emplace(meshKey, empty);
                 return nullptr;
             }
 
@@ -1898,6 +1919,7 @@ namespace ghpc
             };
 
             MeshBuffers buffers;
+            buffers.generation = generation;
             const VkDeviceSize vertexBytes = (VkDeviceSize)vertCount * sizeof(scene::Vertex);
             const VkDeviceSize indexBytes = (VkDeviceSize)indexCount * sizeof(uint16_t);
             if (!makeBuffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, verts, vertexBytes,
@@ -2507,7 +2529,8 @@ namespace ghpc
                 // looking its key up in the mesh cache would cache it forever.
                 const bool dynamic = draws[i].dynamicVerts != nullptr &&
                                      m_dynVertex[frameIndex].buffer != VK_NULL_HANDLE;
-                const MeshBuffers *buffers = dynamic ? nullptr : meshBuffers(draws[i].meshKey);
+                const MeshBuffers *buffers =
+                    dynamic ? nullptr : meshBuffers(draws[i].meshKey, draws[i].generation, frameIndex);
                 if (!dynamic && buffers == nullptr)
                 {
                     continue;
@@ -2640,6 +2663,7 @@ namespace ghpc
                       << " meshes=" << m_meshCache.size()
                       << " hits=" << m_meshCacheHits
                       << " misses=" << m_meshCacheMisses
+                      << " stale=" << m_meshCacheStale
                       << " noGeometry=" << m_meshNoGeometry
                       << " noCamera=" << m_meshNoCamera
                       << " pipelines=" << m_pipelines.size()

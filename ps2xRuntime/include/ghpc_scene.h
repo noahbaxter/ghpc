@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 // The Rnd seam's submission contract.
 //
@@ -250,7 +251,11 @@ namespace ghpc
         // a triangle list: RndMesh::Face is three unsigned shorts, stride 6.
         // A triangle list is a correct substitute for the PS2 strips because
         // there is no backface culling anywhere in VU1's 13,872 bytes.
-        void submitMesh(uint32_t meshKey,
+        //
+        // `generation` is meshcache::generation(meshKey). The key is a guest
+        // address the game reuses once a menu unloads, so geometry and GPU
+        // buffers are replaced whenever the generation moves.
+        void submitMesh(uint32_t meshKey, uint32_t generation,
                         const Vertex *verts, uint32_t vertCount,
                         const uint16_t *indices, uint32_t indexCount);
 
@@ -286,6 +291,7 @@ namespace ghpc
         struct DrawView
         {
             uint32_t meshKey;
+            uint32_t generation; // GPU buffers for another generation are stale
             const float *matrices; // matrixCount * 16 floats, row major
             uint32_t matrixCount;  // 4 skinned (the bone palette), 1 not
             // The camera this draw was submitted under. Per draw, not per
@@ -320,12 +326,12 @@ namespace ghpc
                           const DrawView **draws, uint32_t &drawCount,
                           uint64_t &serial);
 
-        // Geometry for a meshKey, kept for the life of the process because
-        // the guest frees its own copy at PsMesh::Sync and there is nowhere
-        // else to get it. Safe to call from the consumer thread.
-        bool geometry(uint32_t meshKey,
-                      const Vertex **verts, uint32_t &vertCount,
-                      const uint16_t **indices, uint32_t &indexCount);
+        // Geometry for a meshKey, kept because the guest frees its own copy
+        // at PsMesh::Sync and there is nowhere else to get it. Copied out
+        // under the lock, since submitMesh replaces it when the key's
+        // generation moves. Safe to call from the consumer thread.
+        bool geometry(uint32_t meshKey, std::vector<Vertex> &verts,
+                      std::vector<uint16_t> &indices, uint32_t &generation);
 
         // GS XYOFFSET for context 0, in pixels. The transform lands in the
         // GS's 2048-centred space and the rasteriser subtracts this before it

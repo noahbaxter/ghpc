@@ -39,6 +39,7 @@ namespace ghpc
             struct PendingDraw
             {
                 uint32_t meshKey = 0u;
+                uint32_t generation = 0u;
                 uint32_t matrixOffset = 0u; // floats into Frame::matrices
                 uint32_t matrixCount = 0u;
                 uint32_t vertCount = 0u;
@@ -151,6 +152,7 @@ namespace ghpc
             {
                 std::vector<Vertex> verts;
                 std::vector<uint16_t> indices;
+                uint32_t generation = 0u;
             };
 
             // What makes two binds of one PsTex the same image. The guest
@@ -500,7 +502,7 @@ namespace ghpc
 
         PendingDraw &pushDraw(uint32_t meshKey, uint32_t vertCount, uint32_t indexCount, bool dynamic);
 
-        void submitMesh(uint32_t meshKey,
+        void submitMesh(uint32_t meshKey, uint32_t generation,
                         const Vertex *verts, uint32_t vertCount,
                         const uint16_t *indices, uint32_t indexCount)
         {
@@ -522,7 +524,7 @@ namespace ghpc
             {
                 std::lock_guard<std::mutex> lock(s.geometryMutex);
                 auto it = s.geometry.find(meshKey);
-                if (it == s.geometry.end())
+                if (it == s.geometry.end() || it->second.generation != generation)
                 {
                     MeshGeometry g;
                     g.verts.assign(verts, verts + vertCount);
@@ -530,11 +532,12 @@ namespace ghpc
                     {
                         g.indices.assign(indices, indices + indexCount);
                     }
-                    s.geometry.emplace(meshKey, std::move(g));
+                    g.generation = generation;
+                    s.geometry[meshKey] = std::move(g);
                 }
             }
 
-            pushDraw(meshKey, vertCount, (indices != nullptr) ? indexCount : 0u, false);
+            pushDraw(meshKey, vertCount, (indices != nullptr) ? indexCount : 0u, false).generation = generation;
         }
 
         void submitDynamicMesh(uint32_t meshKey,
@@ -612,6 +615,7 @@ namespace ghpc
                 const PendingDraw &d = f.draws[i];
                 DrawView &v = f.views[i];
                 v.meshKey = d.meshKey;
+                v.generation = d.generation;
                 v.matrixCount = d.matrixCount;
                 v.vertCount = d.vertCount;
                 v.indexCount = d.indexCount;
@@ -820,9 +824,8 @@ namespace ghpc
             return true;
         }
 
-        bool geometry(uint32_t meshKey,
-                      const Vertex **verts, uint32_t &vertCount,
-                      const uint16_t **indices, uint32_t &indexCount)
+        bool geometry(uint32_t meshKey, std::vector<Vertex> &verts,
+                      std::vector<uint16_t> &indices, uint32_t &generation)
         {
             State &s = state();
             std::lock_guard<std::mutex> lock(s.geometryMutex);
@@ -831,10 +834,9 @@ namespace ghpc
             {
                 return false;
             }
-            *verts = it->second.verts.data();
-            vertCount = (uint32_t)it->second.verts.size();
-            *indices = it->second.indices.data();
-            indexCount = (uint32_t)it->second.indices.size();
+            verts = it->second.verts;
+            indices = it->second.indices;
+            generation = it->second.generation;
             return true;
         }
 

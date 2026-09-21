@@ -46,6 +46,7 @@
 #include "ps2_stubs.h"
 #include "runtime/gs/ghpc_native_draw.h"
 #include "ghpc_scene.h"
+#include "ghpc_mesh_cache.h"
 
 #include <cstring>
 #include <vector>
@@ -582,7 +583,7 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
     s_indices.resize((size_t)faceCnt * 3u);
     std::memcpy(s_indices.data(), faces, (size_t)faceCnt * 6u);
 
-    ghpc::scene::submitMesh(self, s_verts.data(), vertCnt,
+    ghpc::scene::submitMesh(self, ghpc::meshcache::generation(self), s_verts.data(), vertCnt,
                             s_indices.data(), (uint32_t)s_indices.size());
 }
 

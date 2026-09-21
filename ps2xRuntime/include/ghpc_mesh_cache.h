@@ -27,5 +27,12 @@ namespace ghpc
         // next store for the same `self`.
         bool lookup(uint32_t self, uint32_t *vertCnt, uint32_t *faceCnt,
                     const uint8_t **verts, const uint8_t **faces);
+
+        // Changes on every store, for any key. `self` is a guest address, and
+        // a menu that unloads frees it for the next asset: anything cached
+        // downstream by `self` alone serves the old mesh under the new one's
+        // transform. Downstream caches key on (self, generation) instead.
+        // 0 when there is no entry.
+        uint32_t generation(uint32_t self);
     }
 }

@@ -18,6 +18,7 @@ namespace ghpc
                 std::vector<uint8_t> faces;
                 uint32_t vertCnt = 0u;
                 uint32_t faceCnt = 0u;
+                uint32_t gen = 0u;
             };
 
             std::unordered_map<uint32_t, Entry> &cache()
@@ -25,6 +26,19 @@ namespace ghpc
                 static std::unordered_map<uint32_t, Entry> s_map;
                 return s_map;
             }
+
+            uint32_t nextGeneration()
+            {
+                static uint32_t s_gen = 0u;
+                return ++s_gen;
+            }
+        }
+
+        uint32_t generation(uint32_t self)
+        {
+            auto &m = cache();
+            auto it = m.find(self);
+            return it != m.end() ? it->second.gen : 0u;
         }
 
         void store(uint32_t self, const uint8_t *verts, uint32_t vertCnt,
@@ -38,6 +52,7 @@ namespace ghpc
             }
             e.vertCnt = vertCnt;
             e.faceCnt = (faces != nullptr) ? faceCnt : 0u;
+            e.gen = nextGeneration();
             cache()[self] = std::move(e);
         }
 
@@ -96,6 +111,8 @@ bool ghpcMeshCacheDeserializeState(GhpcStateReader &r)
         {
             return false;
         }
+        // Fresh, so nothing cached downstream before the load matches.
+        e.gen = ghpc::meshcache::nextGeneration();
         m[key] = std::move(e);
     }
     std::fprintf(stderr, "[ghpc/state] mesh cache restored, %u meshes\n", count);
