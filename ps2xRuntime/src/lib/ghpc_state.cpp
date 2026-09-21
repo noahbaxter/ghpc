@@ -255,6 +255,10 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent)
     ghpcMeshCacheSerializeState(w);
     w.endChunk();
 
+    w.beginChunk("CDFS");
+    ghpcCdSerializeState(w);
+    w.endChunk();
+
     if (!schedulerWritten)
     {
         std::fprintf(stderr,
@@ -347,6 +351,15 @@ bool ghpcStateLoad(PS2Runtime &runtime, const std::string &slot)
     {
         std::fprintf(stderr, "[ghpc/state] %s has no MESH chunk; the Rnd seam will serve no draws\n",
                      path.c_str());
+    }
+    if (r.seekChunk("CDFS"))
+    {
+        if (!ghpcCdDeserializeState(r)) return false;
+    }
+    else
+    {
+        std::fprintf(stderr, "[ghpc/state] %s has no CDFS chunk; a streamed song will stall "
+                             "on its next disc read\n", path.c_str());
     }
 
     if (!r.ok())

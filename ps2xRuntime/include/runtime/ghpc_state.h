@@ -127,6 +127,12 @@ bool ghpcPadDeserializeState(GhpcStateReader &r);
 // RAM implies it and does not hold it. Without it a restored run serves no
 // draws through the Rnd seam, measured as draws=0 against 504 driven.
 void ghpcMeshCacheSerializeState(GhpcStateWriter &w);
+
+// The CD layer's pseudo-LBN file table and stream position. The guest holds
+// these LBNs in RAM; without the table a resumed song stalls on its next
+// stream read.
+void ghpcCdSerializeState(GhpcStateWriter &w);
+bool ghpcCdDeserializeState(GhpcStateReader &r);
 bool ghpcMeshCacheDeserializeState(GhpcStateReader &r);
 
 // Resolve a slot name to its path under work/states/, creating the directory.

@@ -2,6 +2,7 @@
 #include "CD.h"
 #include "MPEG.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/ghpc_state.h"
 
 namespace ps2_stubs
 {
@@ -1012,4 +1013,59 @@ namespace ps2_stubs
         }
         setReturnS32(ctx, 1);
     }
+}
+
+// Save state hooks, here because the file table lives in this translation
+// unit's copy of Support.h's unnamed namespace.
+//
+// The LBNs a game holds are this layer's pseudo LBNs, handed out in the order
+// files are first looked up, and the guest keeps them in RAM. A resumed
+// process starts with an empty table, so the song's stream LBN resolved to
+// nothing and the game stalled about four seconds into the chart, the next
+// time it read the stream: sceCdRead unresolved LBN 0x250c00.
+void ghpcCdSerializeState(GhpcStateWriter &w)
+{
+    w.u32(g_nextPseudoLbn);
+    w.u32(g_cdMode);
+    w.u32(g_cdStreamingLbn);
+    w.u32(g_cdStreamingEndLbn);
+    w.u32(g_cdInitialized ? 1u : 0u);
+    w.pod(ps2_stubs::g_cdStreamTiming);
+    w.u32((uint32_t)g_cdFilesByKey.size());
+    for (const auto &[key, entry] : g_cdFilesByKey)
+    {
+        w.str(key);
+        w.str(entry.hostPath.string());
+        w.u32(entry.sizeBytes);
+        w.u32(entry.baseLbn);
+        w.u32(entry.sectors);
+    }
+}
+
+bool ghpcCdDeserializeState(GhpcStateReader &r)
+{
+    uint32_t initialized = 0u;
+    uint32_t count = 0u;
+    if (!r.u32(g_nextPseudoLbn) || !r.u32(g_cdMode) || !r.u32(g_cdStreamingLbn) ||
+        !r.u32(g_cdStreamingEndLbn) || !r.u32(initialized) ||
+        !r.pod(ps2_stubs::g_cdStreamTiming) || !r.u32(count))
+    {
+        return false;
+    }
+    g_cdInitialized = initialized != 0u;
+    g_cdFilesByKey.clear();
+    for (uint32_t i = 0u; i < count; ++i)
+    {
+        std::string key;
+        std::string path;
+        CdFileEntry entry;
+        if (!r.str(key) || !r.str(path) || !r.u32(entry.sizeBytes) ||
+            !r.u32(entry.baseLbn) || !r.u32(entry.sectors))
+        {
+            return false;
+        }
+        entry.hostPath = path;
+        g_cdFilesByKey.emplace(std::move(key), std::move(entry));
+    }
+    return true;
 }
