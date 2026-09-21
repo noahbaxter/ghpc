@@ -470,6 +470,7 @@ add_library(ps2_runtime STATIC
     src/lib/gs/gs_cpu_backend.cpp
     src/lib/gs/ghpc_native_draw.cpp
     src/lib/gs/ghpc_scene.cpp
+    src/lib/gs/ghpc_mesh_cache.cpp
     src/lib/ghpc_state.cpp
     src/lib/ghpc_vulkan_renderer.cpp
     src/lib/gs/ghpc_fixture.cpp

@@ -47,72 +47,47 @@
 
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "ghpc_mesh_cache.h"
 
 #ifdef PS2_FUNCTION_LOG_TRACKER
 #include "ps2_log.h"
 #endif
 
-// Host-side mesh cache. overlay.sh only maps .cpp files onto generated ones, so
-// there is no header to share; these two functions are the whole interface and
-// DrawFaces__6PsMesh_0x43eea0.cpp redeclares them. Non-static and non-inline
-// on purpose: the runner is a unity build, and if both overrides land in the
-// same batch a second definition of anything here would collide. The map is a
-// function-local static so it needs no init order. Helper names in the
-// anonymous namespace below are suffixed Sync for the same reason.
-namespace ghpc_mesh_cache_detail {
-struct Entry {
-    std::vector<uint8_t> verts;   // vertCnt * 64 bytes, guest layout
-    std::vector<uint8_t> faces;   // faceCnt * 6 bytes, three u16 each
-    uint32_t vertCnt = 0;
-    uint32_t faceCnt = 0;
-};
-std::unordered_map<uint32_t, Entry>& ghpcMeshCacheMap() {
-    static std::unordered_map<uint32_t, Entry> s_map;
-    return s_map;
-}
-// Copy [addr, addr+bytes) out of guest RAM through the same mask the fast
-// path uses, refusing scratchpad/MMIO addresses and any range that would wrap.
-bool ghpcMeshCacheCopy(const uint8_t* rdram, uint32_t addr, uint32_t bytes, std::vector<uint8_t>& out) {
-    if (addr == 0 || bytes == 0 || PS2Runtime::isSpecialAddress(addr)) return false;
+// Host-side mesh cache. The map itself lives in the runtime
+// (ghpc_mesh_cache.h) so a save state can carry it; these two functions are
+// the override-side interface and DrawFaces__6PsMesh_0x43eea0.cpp redeclares
+// them, since overlay.sh only maps .cpp files and there is no header to share.
+// Non-static and non-inline on purpose: the runner is a unity build, and if
+// both overrides land in the same batch a second definition would collide.
+
+// A guest range as a host pointer, through the same mask the fast path uses,
+// refusing scratchpad/MMIO addresses and any range that would wrap.
+static const uint8_t* ghpcMeshCacheRangeSync(const uint8_t* rdram, uint32_t addr, uint32_t bytes) {
+    if (addr == 0 || bytes == 0 || PS2Runtime::isSpecialAddress(addr)) return nullptr;
     const uint32_t off = addr & PS2_RAM_MASK;
-    if (bytes > PS2_RAM_SIZE - off) return false;
-    out.assign(rdram + off, rdram + off + bytes);
-    return true;
+    if (bytes > PS2_RAM_SIZE - off) return nullptr;
+    return rdram + off;
 }
-} // namespace ghpc_mesh_cache_detail
 
 // Replace the entry for `self`. Counts come from the guest vectors at +0x100..
 // +0x10c; sizes are capped so a garbage pointer cannot make us copy megabytes.
 void ghpcMeshCacheStore(const uint8_t* rdram, uint32_t self, uint32_t vertPtr, uint32_t vertCnt, uint32_t faceBeg, uint32_t faceEnd) {
-    using namespace ghpc_mesh_cache_detail;
     const uint32_t faceCnt = (faceEnd >= faceBeg) ? (faceEnd - faceBeg) / 6u : 0u;
     if (vertCnt == 0 || vertCnt > (1u << 20) || faceCnt > (1u << 20)) return;
-    Entry e;
-    if (!ghpcMeshCacheCopy(rdram, vertPtr, vertCnt * 64u, e.verts)) return;
-    if (faceCnt != 0 && !ghpcMeshCacheCopy(rdram, faceBeg, faceCnt * 6u, e.faces)) return;
-    e.vertCnt = vertCnt;
-    e.faceCnt = faceCnt;
-    ghpcMeshCacheMap()[self] = std::move(e);
+    const uint8_t* verts = ghpcMeshCacheRangeSync(rdram, vertPtr, vertCnt * 64u);
+    if (verts == nullptr) return;
+    const uint8_t* faces = nullptr;
+    if (faceCnt != 0) {
+        faces = ghpcMeshCacheRangeSync(rdram, faceBeg, faceCnt * 6u);
+        if (faces == nullptr) return;
+    }
+    ghpc::meshcache::store(self, verts, vertCnt, faces, faceCnt);
 }
 
 // Returns true on a hit. Out pointers may be null. Data pointers stay valid
 // until the next store for the same `self`.
 bool ghpcMeshCacheLookup(uint32_t self, uint32_t* vertCnt, uint32_t* faceCnt, const uint8_t** verts, const uint8_t** faces) {
-    using namespace ghpc_mesh_cache_detail;
-    auto& m = ghpcMeshCacheMap();
-    auto it = m.find(self);
-    if (it == m.end()) {
-        if (vertCnt) *vertCnt = 0;
-        if (faceCnt) *faceCnt = 0;
-        if (verts) *verts = nullptr;
-        if (faces) *faces = nullptr;
-        return false;
-    }
-    if (vertCnt) *vertCnt = it->second.vertCnt;
-    if (faceCnt) *faceCnt = it->second.faceCnt;
-    if (verts) *verts = it->second.verts.data();
-    if (faces) *faces = it->second.faces.data();
-    return true;
+    return ghpc::meshcache::lookup(self, vertCnt, faceCnt, verts, faces);
 }
 
 namespace {

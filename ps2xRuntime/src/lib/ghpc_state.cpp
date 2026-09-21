@@ -251,6 +251,10 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent)
     ghpcPadSerializeState(w);
     w.endChunk();
 
+    w.beginChunk("MESH");
+    ghpcMeshCacheSerializeState(w);
+    w.endChunk();
+
     if (!schedulerWritten)
     {
         std::fprintf(stderr,
@@ -333,6 +337,17 @@ bool ghpcStateLoad(PS2Runtime &runtime, const std::string &slot)
     if (!r.pod(runtime.vu0().state())) return false;
     if (!r.pod(runtime.vu1().state())) return false;
     if (!need("PADS") || !ghpcPadDeserializeState(r)) return false;
+    // Optional, so a state written before the chunk existed still loads. It
+    // just draws nothing through the Rnd seam, and says so.
+    if (r.seekChunk("MESH"))
+    {
+        if (!ghpcMeshCacheDeserializeState(r)) return false;
+    }
+    else
+    {
+        std::fprintf(stderr, "[ghpc/state] %s has no MESH chunk; the Rnd seam will serve no draws\n",
+                     path.c_str());
+    }
 
     if (!r.ok())
     {

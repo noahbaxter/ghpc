@@ -123,6 +123,12 @@ bool ghpcStateLoad(PS2Runtime &runtime, const std::string &slot);
 void ghpcPadSerializeState(GhpcStateWriter &w);
 bool ghpcPadDeserializeState(GhpcStateReader &r);
 
+// The host mesh cache, ghpc_mesh_cache.h. Same class as the pads: the guest's
+// RAM implies it and does not hold it. Without it a restored run serves no
+// draws through the Rnd seam, measured as draws=0 against 504 driven.
+void ghpcMeshCacheSerializeState(GhpcStateWriter &w);
+bool ghpcMeshCacheDeserializeState(GhpcStateReader &r);
+
 // Resolve a slot name to its path under work/states/, creating the directory.
 std::string ghpcStateSlotPath(const std::string &slot);
 
