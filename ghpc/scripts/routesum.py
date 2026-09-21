@@ -12,7 +12,9 @@ as zero: a trace that never got written is not a clean run.
     songs     game_screen visits
     stale     mesh cache rebuilds on a reused guest address (last mesh line)
     noCam     draws with no camera (last mesh line)
+    texStale  texture binds with the old pointers and dims but new bytes
     presents  presents in the trace
+    hz        presents a second, which is the display's refresh
     repeat    presents that showed the same scene serial as the one before
     skip      scene serials never presented, against the serial span
     blank     presents with no camera, which show an empty frame
@@ -87,8 +89,11 @@ def presents(rows):
     repeat = sum(1 for a, b in zip(serials, serials[1:]) if a == b)
     skipped = sum(b - a - 1 for a, b in zip(serials, serials[1:]) if b > a + 1)
     span = max(1, serials[-1] - serials[0])
+    wall = float(rows[-1]["wall"]) - float(rows[0]["wall"])
     out = {
         "presents": n,
+        # repeat scales with this: a 120 Hz display repeats every guest frame.
+        "hz": "%.0f" % (n / wall if wall > 0 else 0.0),
         "repeat": "%.1f%%" % (100.0 * repeat / max(1, n - 1)),
         "skip": "%.1f%%" % (100.0 * skipped / span),
     }
@@ -106,13 +111,13 @@ def presents(rows):
     return out
 
 
-def mesh_line(log):
+def last_line(log, prefix):
     if not os.path.exists(log):
         return None
     last = None
     with open(log, errors="replace") as f:
         for line in f:
-            if line.startswith("[ghpc/vk/mesh] "):
+            if line.startswith(prefix):
                 last = line
     return last
 
@@ -126,7 +131,7 @@ def summarise(arm):
         seq = screens(clock)
         parts.append("screens=" + ">".join(s.replace("_screen", "") for s in seq))
         parts.append("songs=%d" % seq.count("game_screen"))
-    line = mesh_line(os.path.join(arm, "run.log"))
+    line = last_line(os.path.join(arm, "run.log"), "[ghpc/vk/mesh] ")
     if line is None:
         parts.append("mesh=MISSING")
     else:
@@ -134,6 +139,9 @@ def summarise(arm):
         for key, pattern in (("stale", r"\bstale=(\d+)"), ("noCam", r"\bnoCam(?:era)?=(\d+)")):
             m = re.search(pattern, line)
             parts.append("%s=%s" % (key, m.group(1) if m else "MISSING"))
+    tex = last_line(os.path.join(arm, "run.log"), "[ghpc/scene/tex] ")
+    m = re.search(r"\btexStale=(\d+)", tex or "")
+    parts.append("texStale=%s" % (m.group(1) if m else "MISSING"))
     rows = read_csv(os.path.join(arm, "present.csv"))
     if rows is None:
         parts.append("present=MISSING")

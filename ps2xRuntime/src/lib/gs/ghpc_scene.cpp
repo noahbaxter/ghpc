@@ -110,6 +110,7 @@ namespace ghpc
                 uint32_t boneUploads = 0u;
                 uint32_t worldUploads = 0u;
                 uint32_t materialBinds = 0u;
+                uint32_t unbound = 0u; // draws before the frame's first material bind
                 uint64_t serial = 0ull;
 
                 void clear()
@@ -125,6 +126,7 @@ namespace ghpc
                     boneUploads = 0u;
                     worldUploads = 0u;
                     materialBinds = 0u;
+                    unbound = 0u;
                 }
             };
 
@@ -157,12 +159,15 @@ namespace ghpc
             };
 
             // What makes two binds of one PsTex the same image. The guest
-            // pointers rather than a content hash, because hashing a 256x256
-            // bitmap on each of about 260 material binds a frame is the kind
-            // of cost this phase exists to remove. The gap that leaves: a
-            // bitmap rewritten in place keeps its pointers and is not seen.
+            // pointers plus a sample of the bytes rather than a full content
+            // hash, because hashing a 256x256 bitmap on each of about 260
+            // material binds a frame is the kind of cost this phase exists to
+            // remove. Pointers alone served the old image once a menu
+            // unloaded and the game put a new PsTex and bitmap at the same
+            // addresses; the sample is what sees that.
             struct TextureSignature
             {
+                uint32_t sample = 0u;
                 uint32_t pixelsAddr = 0u;
                 uint32_t paletteAddr = 0u;
                 uint32_t width = 0u;
@@ -175,7 +180,7 @@ namespace ghpc
 
                 bool operator==(const TextureSignature &o) const
                 {
-                    return pixelsAddr == o.pixelsAddr && paletteAddr == o.paletteAddr &&
+                    return sample == o.sample && pixelsAddr == o.pixelsAddr && paletteAddr == o.paletteAddr &&
                            width == o.width && height == o.height && bpp == o.bpp &&
                            order == o.order && tw == o.tw && th == o.th &&
                            renderTarget == o.renderTarget;
@@ -242,6 +247,7 @@ namespace ghpc
                 uint64_t textureVersions = 0ull;
                 uint32_t texDecoded = 0u;
                 uint32_t texRedecoded = 0u;
+                uint32_t texStale = 0u; // same pointers and dims, different bytes
                 uint32_t texRenderTarget = 0u;
                 uint32_t texNoPixels = 0u;
                 uint32_t texUnsupported = 0u;
@@ -576,6 +582,7 @@ namespace ghpc
             d.matrixCount = s.pendingMatrixCount;
             d.matrixOffset = (uint32_t)s.building.matrices.size();
             d.material = s.pendingMaterial;
+            s.building.unbound += s.building.materialBinds == 0u ? 1u : 0u;
             d.target = s.pendingTarget;
             d.cameraIndex = s.building.cameras.empty() ? kNoCamera
                                                         : (uint32_t)s.building.cameras.size() - 1u;
@@ -612,6 +619,10 @@ namespace ghpc
             static uint64_t frames = 0ull;
             ++frames;
             f.serial = frames;
+            // Frames where a draw took the default material because nothing
+            // was bound yet: a draw drawn with the wrong texture, or none.
+            static uint64_t unboundFrames = 0ull;
+            unboundFrames += f.unbound != 0u ? 1u : 0u;
 
             // Publish. The arena is stable now, so the views can point into
             // it; they could not while it was still growing.
@@ -745,7 +756,8 @@ namespace ghpc
                          "[ghpc/scene] frame=%llu draws=%zu verts=%llu tris=%llu "
                          "skinned=%u noIndices=%u cam=%d cams=%zu bones=%u world=%u meshes=%zu "
                          "mats=%u ztst=%u/%u/%u/%u noZWrite=%u noZTest=%u blend=%u tex=%u "
-                         "ate=%u atst=%u/%u/%u/%u/%u/%u/%u/%u aref=%u..%u afail=%u\n",
+                         "ate=%u atst=%u/%u/%u/%u/%u/%u/%u/%u aref=%u..%u afail=%u "
+                         "unbound=%u unboundFrames=%llu\n",
                          (unsigned long long)frames, p.draws.size(),
                          (unsigned long long)verts, (unsigned long long)tris,
                          skinned, noIndices, p.cameraSeen ? 1 : 0, p.cameras.size(),
@@ -754,7 +766,8 @@ namespace ghpc
                          noZWrite, noZTest, blended, textured,
                          alphaTested, atst[0], atst[1], atst[2], atst[3],
                          atst[4], atst[5], atst[6], atst[7],
-                         (arefMin == 0xFFFFFFFFu) ? 0u : arefMin, arefMax, afailNonKeep);
+                         (arefMin == 0xFFFFFFFFu) ? 0u : arefMin, arefMax, afailNonKeep,
+                         p.unbound, (unsigned long long)unboundFrames);
 
             // Lighting: which VU1 program each draw's colour comes from, and
             // one sample of the scale and the light block, since the formula
@@ -814,11 +827,11 @@ namespace ghpc
             const uint32_t texa = s.texa.load(std::memory_order_relaxed);
             std::fprintf(stderr,
                          "[ghpc/scene/tex] frame=%llu afail=%u/%u/%u/%u ateOpaque=%u tfx=%u/%u/%u/%u "
-                         "clamp=%u texMissing=%u decoded=%u redecoded=%u renderTarget=%u "
+                         "clamp=%u texMissing=%u decoded=%u redecoded=%u texStale=%u renderTarget=%u "
                          "noPixels=%u unsupported=%u oddOrder=%u scaled=%u texa=%u/%u/%u\n",
                          (unsigned long long)frames, afail[0], afail[1], afail[2], afail[3],
                          ateOpaque, tfx[0], tfx[1], tfx[2], tfx[3], clampWrap, texMissing,
-                         s.texDecoded, s.texRedecoded, s.texRenderTarget, s.texNoPixels,
+                         s.texDecoded, s.texRedecoded, s.texStale, s.texRenderTarget, s.texNoPixels,
                          s.texUnsupported, s.texOddOrder, s.texScaled,
                          texa & 0xFFu, (texa >> 8) & 0xFFu, (texa >> 16) & 1u);
         }
@@ -944,6 +957,32 @@ namespace ghpc
             s.texaSeen.store(true, std::memory_order_relaxed);
         }
 
+        namespace
+        {
+            // 32 bytes spread over the pixels and 8 over the palette. Two
+            // different images differ almost everywhere, so a sparse sample
+            // sees a swap; it is not meant to see a single edited texel.
+            uint32_t sampleTexture(const TextureSource &source)
+            {
+                uint32_t h = 2166136261u;
+                auto mix = [&h](const uint8_t *p, size_t bytes, uint32_t taps) {
+                    if (p == nullptr || bytes == 0u)
+                    {
+                        return;
+                    }
+                    for (uint32_t i = 0u; i < taps; ++i)
+                    {
+                        h = (h ^ p[(bytes - 1u) * i / (taps - 1u)]) * 16777619u;
+                    }
+                };
+                const size_t row = source.rowBytes ? source.rowBytes : (size_t)source.width * source.bpp / 8u;
+                mix(source.pixels, row * source.height, 32u);
+                const size_t palette = source.bpp == 4u ? 16u * 4u : (source.bpp == 8u ? 256u * 4u : 0u);
+                mix(source.palette, palette, 8u);
+                return h;
+            }
+        }
+
         void setTexture(uint32_t texKey, const TextureSource &source)
         {
             if (!active() || texKey == 0u)
@@ -962,6 +1001,7 @@ namespace ghpc
             sig.tw = source.tw;
             sig.th = source.th;
             sig.renderTarget = source.renderTarget;
+            sig.sample = source.renderTarget ? 0u : sampleTexture(source);
 
             bool known = false;
             {
@@ -974,6 +1014,22 @@ namespace ghpc
                         return;
                     }
                     known = true;
+                    TextureSignature old = it->second.signature;
+                    old.sample = sig.sample;
+                    if (old == sig)
+                    {
+                        ++s.texStale;
+                        // GHPC_TEX_SAMPLE=0 counts the stale binds and serves
+                        // the old image anyway: the control arm.
+                        static const bool keepOld = []() {
+                            const char *e = std::getenv("GHPC_TEX_SAMPLE");
+                            return e != nullptr && std::atoi(e) == 0;
+                        }();
+                        if (keepOld)
+                        {
+                            return;
+                        }
+                    }
                 }
             }
 
