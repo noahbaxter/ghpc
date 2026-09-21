@@ -3,6 +3,7 @@
 #include "ps2_runtime.h"
 #include "runtime/ee_scheduler.h"
 #include "runtime/ps2_memory.h"
+#include "ghpc_host_renderer.h"
 
 #include <atomic>
 #include <cstdio>
@@ -187,6 +188,7 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent)
             std::fprintf(stderr,
                          "[ghpc/state] still waiting for a quiescent frame after %u frames\n",
                          g_refusedFrames);
+            ghpc::hostNotice("save still waiting for a clean frame");
         }
         return;
     }
@@ -269,6 +271,7 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent)
                      "[ghpc/state] scheduler refused to serialise on a frame the gate called "
                      "quiescent; not writing %s\n",
                      slot.c_str());
+        ghpc::hostNotice("SAVE REFUSED " + slot + ", try again");
         g_savePending.store(false, std::memory_order_release);
         g_refusedFrames = 0;
         return;
@@ -280,6 +283,7 @@ void ghpcStateServicePendingSave(PS2Runtime &runtime, bool quiescent)
                  wrote ? "saved" : "FAILED to write", path.c_str(),
                  (double)w.buffer().size() / (1024.0 * 1024.0),
                  wrote ? "" : ", check the path is writable");
+    ghpc::hostNotice(wrote ? "SAVED " + slot : "SAVE FAILED " + slot);
 
     g_savePending.store(false, std::memory_order_release);
     g_refusedFrames = 0;

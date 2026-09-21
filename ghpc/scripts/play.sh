@@ -11,6 +11,14 @@
 #   ./ghpc/scripts/play.sh --ingame        walk the menus and stop in the song
 #   ./ghpc/scripts/play.sh --native        Vulkan at the Rnd seam with VU1 off:
 #                                          realtime gameplay, see NEXT.md
+#   ./ghpc/scripts/play.sh --guitar        present the pad as a PS2 guitar, so
+#                                          notes need a strum. Without it the
+#                                          game sees a joypad and frets alone
+#                                          play notes
+#
+# Keys: 1-5 frets, arrows D-pad (up/down strum), X/C/Z/V cross/circle/
+# square/triangle, Enter start. F5 saves the screen on show as
+# work/states/menu_<screen>, confirmed in the window title; not under --native.
 #   ./ghpc/scripts/play.sh --state song    resume a save state from work/states
 #   ./ghpc/scripts/play.sh --intro         boot the whole way through the intro
 #   ./ghpc/scripts/play.sh --debug         diagnostics build, 2.5-4x slower
@@ -35,6 +43,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --ingame)   INGAME=1 ;;
     --native)   export GHPC_RENDERER=vulkan GHPC_VK_MESH=2 GHPC_VU1_OFF=1 ;;
+    --guitar)   export GHPC_PAD_GUITAR=1 ;;
     --state)    shift; export GHPC_STATE_LOAD="${1:?--state needs a slot}" ;;
     --intro)    WANT_SKIP=0 ;;
     --debug)    BUILD_DIR="build-debug" ;;

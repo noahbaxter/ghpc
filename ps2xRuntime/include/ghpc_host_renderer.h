@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 // Host presentation seam.
 //
@@ -60,4 +61,16 @@ namespace ghpc
 
     // True when GHPC_RENDERER names the Vulkan backend.
     bool vulkanRendererRequested();
+
+    // Keyboard state of the Vulkan backend's window, for the pad when there
+    // is no raylib window to ask. Takes raylib key codes, which the pad
+    // already speaks. False for every key when that window does not exist.
+    bool hostKeyDown(int raylibKey);
+
+    // A few seconds of status in the window title, e.g. "SAVED menu_x".
+    // Callable from any thread; the window's own loop applies it, since
+    // neither raylib nor SDL takes a title change off the main thread.
+    void hostNotice(const std::string &text);
+    // `base` plus any notice still live, for that loop to set.
+    std::string hostTitle(const std::string &base);
 }

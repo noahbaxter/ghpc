@@ -1,6 +1,8 @@
 #include "ghpc_host_renderer.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <mutex>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -12,6 +14,28 @@ namespace ghpc
         const char *name = std::getenv("GHPC_RENDERER");
         return name != nullptr && std::strcmp(name, "vulkan") == 0;
     }
+
+    namespace
+    {
+        std::mutex s_noticeMutex;
+        std::string s_notice;
+        std::chrono::steady_clock::time_point s_noticeUntil;
+    }
+
+    void hostNotice(const std::string &text)
+    {
+        std::lock_guard<std::mutex> lock(s_noticeMutex);
+        s_notice = text;
+        s_noticeUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    }
+
+    std::string hostTitle(const std::string &base)
+    {
+        std::lock_guard<std::mutex> lock(s_noticeMutex);
+        if (s_notice.empty() || std::chrono::steady_clock::now() >= s_noticeUntil)
+            return base;
+        return base + "   >>> " + s_notice + " <<<";
+    }
 }
 
 #if !defined(GHPC_ENABLE_VULKAN)
@@ -22,6 +46,11 @@ namespace ghpc
     {
         std::cerr << "[ghpc/vk] GHPC_RENDERER=vulkan but this build has no Vulkan support" << std::endl;
         return nullptr;
+    }
+
+    bool hostKeyDown(int)
+    {
+        return false;
     }
 }
 
@@ -44,6 +73,13 @@ namespace ghpc
 #include <cstdio>
 #include <unordered_map>
 #include <vector>
+#include <atomic>
+
+namespace ghpc
+{
+    // Set once SDL has pumped events, read by hostKeyDown on the pad's thread.
+    static std::atomic<bool> s_keysLive{false};
+}
 
 #if defined(GHPC_ENABLE_VULKAN_MESH)
 namespace
@@ -253,6 +289,8 @@ namespace ghpc
             void reportMesh();
 
             SDL_Window *m_window = nullptr;
+            std::string m_baseTitle;
+            std::string m_shownTitle;
             VkInstance m_instance = VK_NULL_HANDLE;
             VkSurfaceKHR m_surface = VK_NULL_HANDLE;
             VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
@@ -2951,9 +2989,10 @@ namespace ghpc
                 const char *vu1 = std::getenv("GHPC_VU1_OFF");
                 const bool vu1Off = vu1 != nullptr && vu1[0] != '0';
                 const char *path = m_meshMode >= 2 ? "native" : m_meshMode == 1 ? "native over software GS" : "software GS";
-                const std::string title = std::string(config.title ? config.title : "") + "  [Vulkan: " + path +
-                                          (vu1Off ? ", VU1 off" : "") + "]";
-                SDL_SetWindowTitle(m_window, title.c_str());
+                m_baseTitle = std::string(config.title ? config.title : "") + "  [Vulkan: " + path +
+                              (vu1Off ? ", VU1 off" : "") + "]";
+                m_shownTitle = m_baseTitle;
+                SDL_SetWindowTitle(m_window, m_baseTitle.c_str());
                 std::cout << "[ghpc/vk] title: " << SDL_GetWindowTitle(m_window) << std::endl;
             }
 
@@ -3119,6 +3158,9 @@ namespace ghpc
 
         void VulkanRenderer::pumpEvents()
         {
+            // SDL's key array is only safe to read once SDL is up, and this is
+            // the first point it is known to be.
+            s_keysLive.store(true, std::memory_order_release);
             SDL_Event event;
             while (SDL_PollEvent(&event))
             {
@@ -3140,6 +3182,12 @@ namespace ghpc
         void VulkanRenderer::present()
         {
             pumpEvents();
+
+            if (std::string title = hostTitle(m_baseTitle); title != m_shownTitle)
+            {
+                m_shownTitle = title;
+                SDL_SetWindowTitle(m_window, title.c_str());
+            }
 
             if (m_swapchainDirty || m_swapchain == VK_NULL_HANDLE)
             {
@@ -3472,6 +3520,39 @@ namespace ghpc
 
             ++m_frame;
         }
+    }
+
+    bool hostKeyDown(int raylibKey)
+    {
+        if (!s_keysLive.load(std::memory_order_acquire)) return false;
+        // raylib's codes are GLFW's: ASCII for letters and digits, 256 and up
+        // for the rest. Only the keys the pad reads are mapped.
+        SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
+        if (raylibKey >= 'A' && raylibKey <= 'Z')
+            sc = static_cast<SDL_Scancode>(SDL_SCANCODE_A + (raylibKey - 'A'));
+        else if (raylibKey >= '1' && raylibKey <= '9')
+            sc = static_cast<SDL_Scancode>(SDL_SCANCODE_1 + (raylibKey - '1'));
+        else if (raylibKey == '0')
+            sc = SDL_SCANCODE_0;
+        else
+        {
+            switch (raylibKey)
+            {
+            case 257: sc = SDL_SCANCODE_RETURN; break;
+            case 262: sc = SDL_SCANCODE_RIGHT; break;
+            case 263: sc = SDL_SCANCODE_LEFT; break;
+            case 264: sc = SDL_SCANCODE_DOWN; break;
+            case 265: sc = SDL_SCANCODE_UP; break;
+            case 294: sc = SDL_SCANCODE_F5; break;
+            case 341: sc = SDL_SCANCODE_LCTRL; break;
+            case 344: sc = SDL_SCANCODE_RSHIFT; break;
+            case 345: sc = SDL_SCANCODE_RCTRL; break;
+            default: return false;
+            }
+        }
+        int count = 0;
+        const bool *keys = SDL_GetKeyboardState(&count);
+        return keys != nullptr && static_cast<int>(sc) < count && keys[sc];
     }
 
     std::unique_ptr<HostRenderer> createVulkanRenderer(const HostRenderer::Config &config)

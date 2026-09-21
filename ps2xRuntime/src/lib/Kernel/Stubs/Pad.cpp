@@ -1,6 +1,7 @@
 #include "Common.h"
 #include "Pad.h"
 #include "ghpc_drive.h"
+#include "ghpc_host_renderer.h"
 #include "runtime/ghpc_state.h"
 
 namespace ps2_stubs
@@ -203,36 +204,48 @@ namespace
             setButton(state, kPadBtnStart, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT));
         }
 
+        // raylib's window when it owns one, else the Vulkan backend's SDL one.
+        bool keyDown(int key)
+        {
+            return IsWindowReady() ? IsKeyDown(key) : ghpc::hostKeyDown(key);
+        }
+
         void applyKeyboardState(PadInputState &state, bool allowAnalog)
         {
-            if (!IsWindowReady())
+            // Keyboard mapping (PS2 -> keys):
+            // D-Pad: arrows (up/down strum), Square/Cross/Circle/Triangle: Z/X/C/V
+            // L1/R1: Q/E, Start/Select: Enter/RightShift
+            // L3/R3: LeftCtrl/RightCtrl, Analog left: WASD
+            // Frets green..orange: 1-5, onto whichever buttons the game reads
+            // as frets for the controller it sees (beatmatch_controller.dtb):
+            //   joypad  L2 L1 R1 R2 Cross
+            //   guitar  R2 Circle Triangle Cross Square   (GHPC_PAD_GUITAR)
+            setButton(state, kPadBtnUp, keyDown(KEY_UP));
+            setButton(state, kPadBtnDown, keyDown(KEY_DOWN));
+            setButton(state, kPadBtnLeft, keyDown(KEY_LEFT));
+            setButton(state, kPadBtnRight, keyDown(KEY_RIGHT));
+
+            setButton(state, kPadBtnSquare, keyDown(KEY_Z));
+            setButton(state, kPadBtnCross, keyDown(KEY_X));
+            setButton(state, kPadBtnCircle, keyDown(KEY_C));
+            setButton(state, kPadBtnTriangle, keyDown(KEY_V));
+
+            setButton(state, kPadBtnL1, keyDown(KEY_Q));
+            setButton(state, kPadBtnR1, keyDown(KEY_E));
+
+            static const uint16_t kJoypadFrets[5] = {kPadBtnL2, kPadBtnL1, kPadBtnR1, kPadBtnR2, kPadBtnCross};
+            static const uint16_t kGuitarFrets[5] = {kPadBtnR2, kPadBtnCircle, kPadBtnTriangle, kPadBtnCross, kPadBtnSquare};
+            const uint16_t *frets = ghpcGuitarMode() ? kGuitarFrets : kJoypadFrets;
+            for (int i = 0; i < 5; ++i)
             {
-                return;
+                if (keyDown(KEY_ONE + i))
+                    setButton(state, frets[i], true);
             }
 
-            // Keyboard mapping (PS2 -> keys):
-            // D-Pad: arrows, Square/Cross/Circle/Triangle: Z/X/C/V
-            // L1/R1: Q/E, L2/R2: 1/3, Start/Select: Enter/RightShift
-            // L3/R3: LeftCtrl/RightCtrl, Analog left: WASD
-            setButton(state, kPadBtnUp, IsKeyDown(KEY_UP));
-            setButton(state, kPadBtnDown, IsKeyDown(KEY_DOWN));
-            setButton(state, kPadBtnLeft, IsKeyDown(KEY_LEFT));
-            setButton(state, kPadBtnRight, IsKeyDown(KEY_RIGHT));
-
-            setButton(state, kPadBtnSquare, IsKeyDown(KEY_Z));
-            setButton(state, kPadBtnCross, IsKeyDown(KEY_X));
-            setButton(state, kPadBtnCircle, IsKeyDown(KEY_C));
-            setButton(state, kPadBtnTriangle, IsKeyDown(KEY_V));
-
-            setButton(state, kPadBtnL1, IsKeyDown(KEY_Q));
-            setButton(state, kPadBtnR1, IsKeyDown(KEY_E));
-            setButton(state, kPadBtnL2, IsKeyDown(KEY_ONE));
-            setButton(state, kPadBtnR2, IsKeyDown(KEY_THREE));
-
-            setButton(state, kPadBtnStart, IsKeyDown(KEY_ENTER));
-            setButton(state, kPadBtnSelect, IsKeyDown(KEY_RIGHT_SHIFT));
-            setButton(state, kPadBtnL3, IsKeyDown(KEY_LEFT_CONTROL));
-            setButton(state, kPadBtnR3, IsKeyDown(KEY_RIGHT_CONTROL));
+            setButton(state, kPadBtnStart, keyDown(KEY_ENTER));
+            setButton(state, kPadBtnSelect, keyDown(KEY_RIGHT_SHIFT));
+            setButton(state, kPadBtnL3, keyDown(KEY_LEFT_CONTROL));
+            setButton(state, kPadBtnR3, keyDown(KEY_RIGHT_CONTROL));
 
             if (!allowAnalog)
             {
@@ -241,13 +254,13 @@ namespace
 
             float ax = 0.0f;
             float ay = 0.0f;
-            if (IsKeyDown(KEY_D))
+            if (keyDown(KEY_D))
                 ax += 1.0f;
-            if (IsKeyDown(KEY_A))
+            if (keyDown(KEY_A))
                 ax -= 1.0f;
-            if (IsKeyDown(KEY_S))
+            if (keyDown(KEY_S))
                 ay += 1.0f;
-            if (IsKeyDown(KEY_W))
+            if (keyDown(KEY_W))
                 ay -= 1.0f;
 
             if (ax != 0.0f || ay != 0.0f)
@@ -361,26 +374,52 @@ namespace
                 }
             }
 
-            bool usedBackend = false;
-            if (!useOverride)
+            // PSPadBackend is not consulted. Its readState always succeeds,
+            // so it shadowed the mapping below entirely: raylib only, every
+            // port, no frets. The functions below read either window.
+            const bool usedBackend = false;
+            if (!useOverride && port == 0)
             {
-                uint8_t backendData[32]{};
-                if (runtime && runtime->padBackend().readState(port, slot, backendData, sizeof(backendData)))
+                // One host controller is one guest controller. Applied to
+                // every open port, a keypress reached both, and a menu
+                // that takes input from either moved twice per press.
+                applyGamepadState(state);
+                applyKeyboardState(state, portState.analogMode);
+
+                // F5 saves the screen on show as slot menu_<screen>, by hand,
+                // overwriting it. On the press edge, so a held key saves once.
+                static bool s_f5 = false;
+                const bool f5 = keyDown(KEY_F5);
+                if (f5 && !s_f5)
                 {
-                    state.buttons = static_cast<uint16_t>(backendData[2] | (backendData[3] << 8));
-                    state.rx = backendData[4];
-                    state.ry = backendData[5];
-                    state.lx = backendData[6];
-                    state.ly = backendData[7];
-                    usedBackend = true;
+                    const std::string slot = "menu_" + ghpc_drive::taggedScreen();
+                    const char *vu1 = std::getenv("GHPC_VU1_OFF");
+                    if (vu1 && vu1[0] != '0')
+                    {
+                        // VU1 never ran, so the state would carry VU1 memory
+                        // the emulated path cannot resume from.
+                        std::fprintf(stderr, "[ghpc/state] F5: not saving '%s', VU1 is off; capture without --native\n",
+                                     slot.c_str());
+                        ghpc::hostNotice("NOT SAVED: capture without --native");
+                    }
+                    else
+                    {
+                        std::fprintf(stderr, "[ghpc/state] F5: saving '%s'\n", slot.c_str());
+                        ghpc::hostNotice("saving " + slot + "...");
+                        ghpcStateRequestSave(slot);
+                    }
                 }
-                else if (port == 0)
+                s_f5 = f5;
+
+                // GHPC_PAD_KEYLOG: every change in the host's buttons, to tell
+                // a key that never arrived from one the game ignored.
+                static const bool s_keyLog = std::getenv("GHPC_PAD_KEYLOG") != nullptr;
+                static uint16_t s_last = 0u; // never a real read, so the first one prints
+                if (s_keyLog && state.buttons != s_last)
                 {
-                    // One host controller is one guest controller. Applied to
-                    // every open port, a keypress reached both, and a menu
-                    // that takes input from either moved twice per press.
-                    applyGamepadState(state);
-                    applyKeyboardState(state, portState.analogMode);
+                    s_last = state.buttons;
+                    std::fprintf(stderr, "[pad/keys] buttons=0x%04x window=%s\n", state.buttons,
+                                 IsWindowReady() ? "raylib" : "sdl");
                 }
             }
 

@@ -916,6 +916,9 @@ bool PS2Runtime::syncCoreSubsystems()
     return true;
 }
 
+// The raylib window's title before any notice, set once in initialize.
+static std::string g_ghpcRaylibTitle;
+
 bool PS2Runtime::initialize(const char *title)
 {
     try
@@ -974,8 +977,8 @@ bool PS2Runtime::initialize(const char *title)
         if (std::getenv("GHPC_HIDE_WINDOW") != nullptr)
             windowFlags |= FLAG_WINDOW_HIDDEN;
         SetConfigFlags(windowFlags);
-        const std::string labelled = std::string(title ? title : "") + "  [raylib: software GS]";
-        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, labelled.c_str());
+        g_ghpcRaylibTitle = std::string(title ? title : "") + "  [raylib: software GS]";
+        InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, g_ghpcRaylibTitle.c_str());
         InitAudioDevice();
         m_audioBackend.setAudioReady(IsAudioDeviceReady());
 #endif
@@ -3785,6 +3788,15 @@ void PS2Runtime::run()
             m_debugUiDrawCallback(*this, m_debugUiUserData);
         }
         EndDrawing();
+
+        {
+            static std::string shown;
+            if (std::string title = ghpc::hostTitle(g_ghpcRaylibTitle); title != shown)
+            {
+                shown = title;
+                SetWindowTitle(title.c_str());
+            }
+        }
 
         if (WindowShouldClose())
         {
