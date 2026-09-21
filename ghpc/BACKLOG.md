@@ -24,13 +24,30 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 `NEXT.md`, numbers in `notes/evidence/2026-09-21-r2-cameras-targets-lighting.txt`.
 In order:
 
-1. **Screens outside gameplay under `--native`.** A cold boot with
-   `--native --ingame` walks every screen to `lose_screen` in under 100s at
-   60 fps and `uirate=1.000` throughout. `qp_selsong_screen` and
-   `lose_screen` render natively. Not yet compared against the emulated path,
-   and `main_screen` was never shot (the driver leaves it inside one shot
-   interval). One suspect: `lose_screen` draws a solid black panel behind the
-   text, likely a translucent backdrop on PS2, so a blend or alpha gap.
+1. **Menus under `--native`: compared one to one, one gap left.** Each menu
+   is a save state (`menu_<screen>`, `GHPC_STATE_SAVE_SCREENS=1`) and
+   `ghpc/scripts/vkscreens.sh` shoots every arm on it at the same ui-clock
+   moments. The emulated reference repeats at iou 1.0000.
+
+       native vs ref   main 0.887   setlist 0.973   difficulty 0.875
+
+   **The gap: the button icons** (green CONTINUE, red BACK, grey UP/DOWN) are
+   missing on every menu. They are meshes with no geometry in the engine's
+   vectors, ever: `[ghpc/scene/miss]` shows them non-mutable with `verts=0`
+   at draw time and never cached at Sync. Their triangles exist only in the
+   converted PS2 face packet (`mFacePacket` at +0x150, layout in
+   rnd-seam.md and vu1-tl-semantics.md, 4 qw per vertex). Serving them means
+   decoding that packet. The mutable quad beside each icon is served (live
+   vectors, strip order) but is not the icon; its texture is genuinely blank
+   in RAM and in VRAM.
+
+   Not yet shot: career, multiplayer, training, options, results. Capture by
+   hand with `GHPC_STATE_SAVE_SCREENS=1`, or give the driver a route.
+   `lose_screen` drew a solid black panel behind its text in an earlier run.
+
+   Material programs still unreproduced, from `[ghpc/scene/light]` on
+   gameplay: 8 draws sphere map (0x347), 9 others. The texture transform
+   (0x17c) is in and took gameplay from iou 0.82-0.87 to 0.89-0.93.
 2. **What the 128x256 offscreen target is for.** 87 draws render into it
    through the venue's second camera and are skipped. If a screen draw samples
    it (a render-target PsTex, `renderTarget=` in `[ghpc/scene/tex]`, is 0 on

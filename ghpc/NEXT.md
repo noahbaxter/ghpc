@@ -89,7 +89,17 @@ fired at `song=2.016`.
 
 Chunks: RDRM, SPAD, VRAM, VUMM, EECX, SCHD (kernel tables), MEMS (IO
 registers, TLB, EE timers, GS registers, VIF1 residual), VUST (VU register
-files), PADS (pad ports), MESH (the host mesh cache).
+files), PADS (pad ports), MESH (the host mesh cache), CDFS (the CD layer's
+pseudo-LBN table; without it a resumed song stalls on its next stream read),
+GSST (the GS frontend's drawing state; without it a resumed menu draws with
+reset defaults on the emulated path).
+
+Menus save one state per screen: `GHPC_STATE_SAVE_SCREENS=1` writes
+`menu_<screen>` once a screen has held for 120 vblanks, under the pad driver
+or by hand. Capture on the emulated path, never with `--native`: a state saved
+with VU1 off carries VU1 state that never ran. Compare with
+`ghpc/scripts/vkscreens.sh`, which shoots on the ui clock
+(`GHPC_VK_SHOT_UI`) since menus have no chart.
 
 **The mesh cache is carried since 2026-09-21.** Without it a resumed run
 served no draws (`draws=0` against 504 driven), because the cache fills at
