@@ -13,6 +13,19 @@ the same swapchain by GHPC_VK_SHOT, so they are the same size with the same
 letterbox, and a coverage mask from one lines up with the other by
 construction.
 
+PAIR THE TWO SHOTS BY THE `serial=` FIELD IN [ghpc/vk/shot], NOTHING ELSE.
+serial is the guest frame. Shot index is not a chart position and neither is
+`frame=`, the host present counter: the present loop runs free at about 60 Hz
+while the guest advances at about a tenth of that, so two arms of one batch
+sat at serials 653 and 857 at the same present frame. Coverage moves about
+0.2 iou over 240 present frames as the chart advances, which is far more than
+a render change does, so mispaired shots produce a large, smooth and entirely
+convincing difference that is nothing but the offset. That happened, twice, in
+opposite directions. notes/gotchas.md has the account.
+
+If the two shots do not carry the same serial, this tool's output is not
+evidence, whatever it says.
+
     ghpc/scripts/vkcoverage.py <software-shot.ppm> <native-shot.ppm>
 
 Reports, over the letterboxed picture only:
