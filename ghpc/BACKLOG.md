@@ -24,9 +24,13 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 `NEXT.md`, numbers in `notes/evidence/2026-09-21-r2-cameras-targets-lighting.txt`.
 In order:
 
-1. **Screens outside gameplay under `--native`.** Menus, loading, results.
-   Only `game_screen` is checked. Boot with `--native` and shoot each screen
-   against the emulated path; anything VU1 drew outside the seam is black.
+1. **Screens outside gameplay under `--native`.** A cold boot with
+   `--native --ingame` walks every screen to `lose_screen` in under 100s at
+   60 fps and `uirate=1.000` throughout. `qp_selsong_screen` and
+   `lose_screen` render natively. Not yet compared against the emulated path,
+   and `main_screen` was never shot (the driver leaves it inside one shot
+   interval). One suspect: `lose_screen` draws a solid black panel behind the
+   text, likely a translucent backdrop on PS2, so a blend or alpha gap.
 2. **What the 128x256 offscreen target is for.** 87 draws render into it
    through the venue's second camera and are skipped. If a screen draw samples
    it (a render-target PsTex, `renderTarget=` in `[ghpc/scene/tex]`, is 0 on
