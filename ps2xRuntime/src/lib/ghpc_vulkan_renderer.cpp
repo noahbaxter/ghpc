@@ -39,6 +39,7 @@ namespace ghpc
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <unordered_map>
@@ -270,6 +271,21 @@ namespace ghpc
             // swapchain, so it shows the letterbox itself.
             int m_shotEvery = 0;
             int m_shotLimit = 8;
+            // GHPC_VK_SHOT_BEAT=N captures once per N beats of the chart
+            // instead of every N present frames, and it is the only mode whose
+            // output two runs can be compared on.
+            //
+            // A present-frame interval cannot work: about 40 presents pass per
+            // guest frame on game_screen, so the interval steps the chart by a
+            // fraction of a frame and any phase difference between runs lands
+            // somewhere else. Beat buckets are the chart's own clock, so run A
+            // and run B both capture at beat 16 whatever the host was doing,
+            // and the files even come out with matching names.
+            double m_shotBeatEvery = 0.0;
+            long long m_shotBeatBucket = -1;
+            // What the last shot was taken at, for the log line and the name.
+            double m_shotBeat = 0.0;
+            double m_shotGame = 0.0;
             // GHPC_VK_SHOT_SCREEN=<name> holds the shots until the guest is on
             // that screen. Without it a run that takes 600 frames to reach
             // gameplay spends its whole shot budget on the loading screen,
@@ -1833,7 +1849,20 @@ namespace ghpc
 
             const std::string screen = ghpc_drive::taggedScreen();
             char path[256];
-            std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_%d_%s.ppm", m_shots, screen.c_str());
+            if (m_shotBeatEvery > 0.0)
+            {
+                // Named by the beat bucket, not by a counter, so run A and run
+                // B write the same filenames for the same chart positions and
+                // pairing two arms is matching names. A counter cannot do
+                // that: an arm that starts capturing one bucket earlier
+                // shifts every later index by one.
+                std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_b%06lld_%s.ppm",
+                              m_shotBeatBucket, screen.c_str());
+            }
+            else
+            {
+                std::snprintf(path, sizeof(path), "/tmp/ghpc_vk_%d_%s.ppm", m_shots, screen.c_str());
+            }
             FILE *f = std::fopen(path, "wb");
             if (f == nullptr)
             {
@@ -1875,10 +1904,11 @@ namespace ghpc
             // chart, and coverage moves by 0.2 iou across 240 present frames,
             // so that difference swamps anything a render change does.
             std::fprintf(stderr,
-                         "[ghpc/vk/shot] wrote %s %ux%u lit=%llu of %llu frame=%u serial=%llu"
-                         " mesh=%d screen=%s\n",
+                         "[ghpc/vk/shot] wrote %s %ux%u lit=%llu of %llu beat=%.3f game=%.3f"
+                         " frame=%u serial=%llu mesh=%d screen=%s\n",
                          path, m_shotWidth, m_shotHeight, (unsigned long long)lit,
-                         (unsigned long long)m_shotWidth * m_shotHeight, m_frame,
+                         (unsigned long long)m_shotWidth * m_shotHeight,
+                         m_shotBeat, m_shotGame, m_frame,
                          (unsigned long long)m_meshSerial, m_meshMode, screen.c_str());
         }
 
@@ -1910,6 +1940,10 @@ namespace ghpc
             if (const char *shotScreen = std::getenv("GHPC_VK_SHOT_SCREEN"); shotScreen != nullptr)
             {
                 m_shotScreen = shotScreen;
+            }
+            if (const char *shotBeat = std::getenv("GHPC_VK_SHOT_BEAT"); shotBeat != nullptr)
+            {
+                m_shotBeatEvery = std::atof(shotBeat);
             }
             if (const char *depth = std::getenv("GHPC_VK_MESH_DEPTH"); depth != nullptr)
             {
@@ -2384,11 +2418,39 @@ namespace ghpc
             // The whole presented image, for evidence. Recorded after the mesh
             // pass on purpose: what a shot has to show is what went to the
             // screen, not an intermediate.
-            m_shotThisFrame = m_shotEvery > 0 && m_shots < m_shotLimit && m_hasFrame &&
+            // Beat mode wins when it is set, because a present-frame interval
+            // cannot produce comparable shots across runs.
+            bool shotDue = false;
+            long long candidateBucket = m_shotBeatBucket;
+            {
+                const ghpc_drive::GameClocks clocks = ghpc_drive::gameClocks();
+                m_shotBeat = (double)clocks.beat;
+                m_shotGame = (double)clocks.game;
+                if (m_shotBeatEvery > 0.0)
+                {
+                    if (clocks.valid && clocks.beat > 0.0f)
+                    {
+                        candidateBucket =
+                            (long long)std::floor((double)clocks.beat / m_shotBeatEvery);
+                        shotDue = candidateBucket != m_shotBeatBucket;
+                    }
+                }
+                else if (m_shotEvery > 0)
+                {
+                    shotDue = (m_frame % static_cast<uint32_t>(m_shotEvery)) == 0u;
+                }
+            }
+
+            m_shotThisFrame = shotDue && m_shots < m_shotLimit && m_hasFrame &&
                               m_swapchainReadable &&
-                              (m_frame % static_cast<uint32_t>(m_shotEvery)) == 0u &&
                               (m_shotScreen.empty() || ghpc_drive::taggedScreen() == m_shotScreen) &&
                               ensureShotBuffer();
+            // Only now, so a bucket rejected by the screen gate or the cap is
+            // still available when the run reaches the screen that wants it.
+            if (m_shotThisFrame)
+            {
+                m_shotBeatBucket = candidateBucket;
+            }
             if (m_shotThisFrame)
             {
                 VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
