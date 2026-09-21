@@ -172,6 +172,44 @@ static void ghpcSceneMaterial(uint8_t* rdram, R5900Context* ctx, PS2Runtime* run
         std::memcpy(&m.color[k], &bits, sizeof(float));
     }
     m.texKey = READ32(self + 0x134u);
+    m.tfx = READ32(self + 0x130u) & 3u;
+    const uint64_t clamp = READ64(self + 0x150u);
+    m.wrapS = (uint32_t)(clamp & 3ull);
+    m.wrapT = (uint32_t)((clamp >> 2) & 3ull);
+
+    // The bound PsTex's RndBitmap, read here because this is the one place
+    // that knows which texture a draw gets. Offsets are the ones
+    // Select__5PsTexQ25PsTex5Blend_0x43f490.cpp pins: bitmap at +0x28, the
+    // render-target flag in +0x48, TEX0 at +0x70. TW and TH are not touched
+    // by PsTex::Select's patch, so the stored image is good for them.
+    if (m.texKey != 0u) {
+        const uint32_t tex = m.texKey;
+        const uint32_t b = tex + 0x28u;
+        ghpc::scene::TextureSource src{};
+        src.width = READ16(b + 0x0u);
+        src.height = READ16(b + 0x2u);
+        src.rowBytes = READ16(b + 0x4u);
+        src.bpp = READ8(b + 0x6u);
+        src.order = READ32(b + 0x8u);
+        src.pixelsAddr = READ32(b + 0xcu);
+        src.paletteAddr = READ32(b + 0x10u);
+        const uint64_t tex0 = READ64(tex + 0x70u);
+        src.tw = (uint32_t)((tex0 >> 26) & 0xFull);
+        src.th = (uint32_t)((tex0 >> 30) & 0xFull);
+        src.renderTarget = (READ32(tex + 0x48u) & 8u) != 0u;
+
+        // Host pointers only when the whole run of bytes sits in RAM, since
+        // the decoder reads them directly.
+        const uint32_t pixelBytes = (uint32_t)src.rowBytes * src.height;
+        const uint32_t paletteBytes = (src.bpp == 4u) ? 64u : (src.bpp == 8u) ? 1024u : 0u;
+        const uint32_t pixOff = src.pixelsAddr & PS2_RAM_MASK;
+        const uint32_t palOff = src.paletteAddr & PS2_RAM_MASK;
+        src.pixels = (src.pixelsAddr != 0u && pixelBytes != 0u &&
+                      Ps2FastRangeIsContiguous(pixOff, pixelBytes)) ? rdram + pixOff : nullptr;
+        src.palette = (paletteBytes != 0u && src.paletteAddr != 0u &&
+                       Ps2FastRangeIsContiguous(palOff, paletteBytes)) ? rdram + palOff : nullptr;
+        ghpc::scene::setTexture(tex, src);
+    }
 
     ghpc::scene::setMaterial(m);
 }

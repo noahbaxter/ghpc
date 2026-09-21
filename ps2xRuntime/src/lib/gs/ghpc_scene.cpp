@@ -63,6 +63,9 @@ namespace ghpc
                 m.atst = 1u;
                 m.aref = 0u;
                 m.afail = 0u;
+                m.tfx = 0u;
+                m.wrapS = 0u;
+                m.wrapT = 0u;
                 return m;
             }
 
@@ -96,6 +99,44 @@ namespace ghpc
                 std::vector<uint16_t> indices;
             };
 
+            // What makes two binds of one PsTex the same image. The guest
+            // pointers rather than a content hash, because hashing a 256x256
+            // bitmap on each of about 260 material binds a frame is the kind
+            // of cost this phase exists to remove. The gap that leaves: a
+            // bitmap rewritten in place keeps its pointers and is not seen.
+            struct TextureSignature
+            {
+                uint32_t pixelsAddr = 0u;
+                uint32_t paletteAddr = 0u;
+                uint32_t width = 0u;
+                uint32_t height = 0u;
+                uint32_t bpp = 0u;
+                uint32_t order = 0u;
+                uint32_t tw = 0u;
+                uint32_t th = 0u;
+                bool renderTarget = false;
+
+                bool operator==(const TextureSignature &o) const
+                {
+                    return pixelsAddr == o.pixelsAddr && paletteAddr == o.paletteAddr &&
+                           width == o.width && height == o.height && bpp == o.bpp &&
+                           order == o.order && tw == o.tw && th == o.th &&
+                           renderTarget == o.renderTarget;
+                }
+            };
+
+            struct TextureEntry
+            {
+                TextureSignature signature;
+                uint64_t version = 0ull;
+                // Empty when the bitmap could not be decoded: a render target,
+                // a null pixel pointer, or a depth this does not handle.
+                std::vector<uint8_t> rgba;
+                uint32_t width = 0u;
+                uint32_t height = 0u;
+                float uvScale[2] = {1.0f, 1.0f};
+            };
+
             struct State
             {
                 // Submit side, guest thread only.
@@ -124,8 +165,25 @@ namespace ghpc
                 std::unordered_map<uint32_t, MeshGeometry> geometry;
                 std::mutex geometryMutex;
 
+                // Textures, keyed by the PsTex. Unlike geometry an entry can
+                // be replaced, when a PsTex starts naming another bitmap, so
+                // the consumer copies out under the lock rather than holding
+                // a pointer.
+                std::unordered_map<uint32_t, TextureEntry> textures;
+                std::mutex textureMutex;
+                uint64_t textureVersions = 0ull;
+                uint32_t texDecoded = 0u;
+                uint32_t texRedecoded = 0u;
+                uint32_t texRenderTarget = 0u;
+                uint32_t texNoPixels = 0u;
+                uint32_t texUnsupported = 0u;
+                uint32_t texOddOrder = 0u;
+                uint32_t texScaled = 0u;
+
                 std::atomic<float> ofx{0.0f};
                 std::atomic<float> ofy{0.0f};
+                std::atomic<uint32_t> texa{0u}; // ta0 | ta1 << 8 | aem << 16
+                std::atomic<bool> texaSeen{false};
             };
 
             State &state()
@@ -153,6 +211,126 @@ namespace ghpc
                     return e ? std::atoi(e) : 60;
                 }();
                 return every;
+            }
+
+            // RndBitmap to RGBA8, alpha left in the GS's sense (0x80 is 1.0)
+            // so the shader can run the GS's own arithmetic on it.
+            //
+            // Indexed depths look up a CT32 palette of RGBA bytes, which is
+            // mOrder bit 0. Bit 1 is the CSM1 swizzle RndBitmap::PaletteOffset
+            // (0x1d75e0) undoes: an 8-bit index whose bits 3..4 are 01 or 10
+            // has them exchanged. 16-bit texels are the GS's 5551 with R low,
+            // expanded by shifting as the GS does, and the alpha bit picks
+            // TA1 or TA0 out of TEXA.
+            bool decodeBitmap(const TextureSource &src, uint32_t texa, std::vector<uint8_t> &out)
+            {
+                const uint32_t w = src.width;
+                const uint32_t h = src.height;
+                if (src.pixels == nullptr || w == 0u || h == 0u)
+                {
+                    return false;
+                }
+                const bool indexed = src.bpp == 4u || src.bpp == 8u;
+                if ((indexed && src.palette == nullptr) ||
+                    (!indexed && src.bpp != 16u && src.bpp != 32u))
+                {
+                    return false;
+                }
+
+                const uint8_t ta0 = (uint8_t)(texa & 0xFFu);
+                const uint8_t ta1 = (uint8_t)((texa >> 8) & 0xFFu);
+                const bool aem = ((texa >> 16) & 1u) != 0u;
+                const bool swizzled = (src.order & 2u) != 0u;
+
+                out.resize((size_t)w * h * 4u);
+                uint8_t *dst = out.data();
+                for (uint32_t y = 0u; y < h; ++y)
+                {
+                    const uint8_t *row = src.pixels + (size_t)y * src.rowBytes;
+                    for (uint32_t x = 0u; x < w; ++x, dst += 4)
+                    {
+                        if (indexed)
+                        {
+                            uint32_t index;
+                            if (src.bpp == 4u)
+                            {
+                                const uint8_t pair = row[x >> 1];
+                                index = (x & 1u) ? (uint32_t)(pair >> 4) : (uint32_t)(pair & 0xFu);
+                            }
+                            else
+                            {
+                                index = row[x];
+                                if (swizzled)
+                                {
+                                    const uint32_t bits = index & 0x18u;
+                                    if (bits == 0x08u)
+                                    {
+                                        index += 8u;
+                                    }
+                                    else if (bits == 0x10u)
+                                    {
+                                        index -= 8u;
+                                    }
+                                }
+                            }
+                            std::memcpy(dst, src.palette + (size_t)index * 4u, 4u);
+                        }
+                        else if (src.bpp == 16u)
+                        {
+                            const uint32_t v = (uint32_t)row[x * 2u] | ((uint32_t)row[x * 2u + 1u] << 8);
+                            dst[0] = (uint8_t)((v & 0x1Fu) << 3);
+                            dst[1] = (uint8_t)(((v >> 5) & 0x1Fu) << 3);
+                            dst[2] = (uint8_t)(((v >> 10) & 0x1Fu) << 3);
+                            const bool rgbZero = (v & 0x7FFFu) == 0u;
+                            dst[3] = (v & 0x8000u) ? ta1 : ((aem && rgbZero) ? 0u : ta0);
+                        }
+                        else
+                        {
+                            std::memcpy(dst, row + (size_t)x * 4u, 4u);
+                        }
+                    }
+                }
+                return true;
+            }
+
+            // GHPC_TEX_DUMP=<dir> writes the first decoded textures as PPM,
+            // colour composited over a checker by its alpha, so a wrong
+            // palette swizzle, nibble order or alpha scale is visible by
+            // looking. Capped, because a run decodes hundreds.
+            void dumpTexture(uint32_t texKey, const TextureSource &src, const std::vector<uint8_t> &rgba)
+            {
+                static const char *dir = std::getenv("GHPC_TEX_DUMP");
+                static int dumped = 0;
+                if (dir == nullptr || dumped >= 64)
+                {
+                    return;
+                }
+                ++dumped;
+                char path[512];
+                std::snprintf(path, sizeof(path), "%s/tex_%08x_%ux%u_%ubpp.ppm",
+                              dir, texKey, src.width, src.height, src.bpp);
+                FILE *f = std::fopen(path, "wb");
+                if (f == nullptr)
+                {
+                    return;
+                }
+                std::fprintf(f, "P6\n%u %u\n255\n", src.width, src.height);
+                std::vector<uint8_t> line((size_t)src.width * 3u);
+                for (uint32_t y = 0u; y < src.height; ++y)
+                {
+                    for (uint32_t x = 0u; x < src.width; ++x)
+                    {
+                        const uint8_t *p = rgba.data() + ((size_t)y * src.width + x) * 4u;
+                        const float a = std::min(1.0f, (float)p[3] / 128.0f);
+                        const float bg = (((x >> 3) ^ (y >> 3)) & 1u) ? 200.0f : 90.0f;
+                        for (uint32_t c = 0u; c < 3u; ++c)
+                        {
+                            line[(size_t)x * 3u + c] = (uint8_t)((float)p[c] * a + bg * (1.0f - a));
+                        }
+                    }
+                    std::fwrite(line.data(), 1u, line.size(), f);
+                }
+                std::fclose(f);
             }
         }
 
@@ -351,6 +529,16 @@ namespace ghpc
             uint32_t afailNonKeep = 0u;
             uint32_t arefMin = 0xFFFFFFFFu;
             uint32_t arefMax = 0u;
+            // AFAIL decides what a failed texel still writes, 0 keep, 1 fb
+            // only, 2 zb only, 3 rgb only, and an alpha-tested draw that does
+            // not blend is the case where fb-only still paints a solid
+            // colour. Both are counted because a discard is only exact for
+            // some of them.
+            uint32_t afail[4] = {0u, 0u, 0u, 0u};
+            uint32_t ateOpaque = 0u;
+            uint32_t tfx[4] = {0u, 0u, 0u, 0u};
+            uint32_t clampWrap = 0u;
+            uint32_t texMissing = 0u;
             for (const PendingDraw &d : p.draws)
             {
                 if (d.material.alphaTest)
@@ -358,8 +546,18 @@ namespace ghpc
                     ++alphaTested;
                     atst[d.material.atst & 7u] += 1u;
                     afailNonKeep += (d.material.afail != 0u) ? 1u : 0u;
+                    afail[d.material.afail & 3u] += 1u;
+                    ateOpaque += d.material.blend ? 0u : 1u;
                     arefMin = std::min(arefMin, d.material.aref);
                     arefMax = std::max(arefMax, d.material.aref);
+                }
+                if (d.material.texKey != 0u)
+                {
+                    tfx[d.material.tfx & 3u] += 1u;
+                    clampWrap += (d.material.wrapS | d.material.wrapT) ? 1u : 0u;
+                    std::lock_guard<std::mutex> texLock(s.textureMutex);
+                    auto it = s.textures.find(d.material.texKey);
+                    texMissing += (it == s.textures.end() || it->second.rgba.empty()) ? 1u : 0u;
                 }
                 verts += d.vertCount;
                 tris += d.indexCount / 3u;
@@ -388,6 +586,19 @@ namespace ghpc
                          alphaTested, atst[0], atst[1], atst[2], atst[3],
                          atst[4], atst[5], atst[6], atst[7],
                          (arefMin == 0xFFFFFFFFu) ? 0u : arefMin, arefMax, afailNonKeep);
+
+            // The texture side of the same frame. texMissing is draws naming
+            // a PsTex with no decoded image, which a backend draws untextured.
+            const uint32_t texa = s.texa.load(std::memory_order_relaxed);
+            std::fprintf(stderr,
+                         "[ghpc/scene/tex] frame=%llu afail=%u/%u/%u/%u ateOpaque=%u tfx=%u/%u/%u/%u "
+                         "clamp=%u texMissing=%u decoded=%u redecoded=%u renderTarget=%u "
+                         "noPixels=%u unsupported=%u oddOrder=%u scaled=%u texa=%u/%u/%u\n",
+                         (unsigned long long)frames, afail[0], afail[1], afail[2], afail[3],
+                         ateOpaque, tfx[0], tfx[1], tfx[2], tfx[3], clampWrap, texMissing,
+                         s.texDecoded, s.texRedecoded, s.texRenderTarget, s.texNoPixels,
+                         s.texUnsupported, s.texOddOrder, s.texScaled,
+                         texa & 0xFFu, (texa >> 8) & 0xFFu, (texa >> 16) & 1u);
         }
 
         bool acquireFrame(Camera &camera, bool &cameraValid,
@@ -452,6 +663,132 @@ namespace ghpc
         {
             ofx = state().ofx.load(std::memory_order_relaxed);
             ofy = state().ofy.load(std::memory_order_relaxed);
+        }
+
+        void setGsTexa(uint32_t ta0, uint32_t ta1, bool aem)
+        {
+            State &s = state();
+            s.texa.store((ta0 & 0xFFu) | ((ta1 & 0xFFu) << 8) | (aem ? 0x10000u : 0u),
+                         std::memory_order_relaxed);
+            s.texaSeen.store(true, std::memory_order_relaxed);
+        }
+
+        void setTexture(uint32_t texKey, const TextureSource &source)
+        {
+            if (!active() || texKey == 0u)
+            {
+                return;
+            }
+            State &s = state();
+
+            TextureSignature sig;
+            sig.pixelsAddr = source.pixelsAddr;
+            sig.paletteAddr = source.paletteAddr;
+            sig.width = source.width;
+            sig.height = source.height;
+            sig.bpp = source.bpp;
+            sig.order = source.order;
+            sig.tw = source.tw;
+            sig.th = source.th;
+            sig.renderTarget = source.renderTarget;
+
+            bool known = false;
+            {
+                std::lock_guard<std::mutex> lock(s.textureMutex);
+                auto it = s.textures.find(texKey);
+                if (it != s.textures.end())
+                {
+                    if (it->second.signature == sig)
+                    {
+                        return;
+                    }
+                    known = true;
+                }
+            }
+
+            // A 16-bit texel's alpha is TEXA's, and TEXA is read off the GS
+            // at present. Before the first present it is not known, so the
+            // texture is left undecided and tried again on the next bind
+            // rather than cached with every alpha zero.
+            const bool texaSeen = s.texaSeen.load(std::memory_order_relaxed);
+            if (source.bpp == 16u && !texaSeen)
+            {
+                return;
+            }
+
+            TextureEntry entry;
+            entry.signature = sig;
+            if (source.renderTarget)
+            {
+                ++s.texRenderTarget;
+            }
+            else if (source.pixels == nullptr)
+            {
+                ++s.texNoPixels;
+            }
+            else if (decodeBitmap(source, s.texa.load(std::memory_order_relaxed), entry.rgba))
+            {
+                entry.width = source.width;
+                entry.height = source.height;
+                // UVs are normalised to the GS's 2^TW x 2^TH texture, which
+                // is the bitmap's own size unless the bitmap is not a power
+                // of two. tw 0 is an uninitialised TEX0 and is taken as 1:1.
+                if (source.tw != 0u && source.th != 0u)
+                {
+                    entry.uvScale[0] = (float)(1u << source.tw) / (float)source.width;
+                    entry.uvScale[1] = (float)(1u << source.th) / (float)source.height;
+                    if (entry.uvScale[0] != 1.0f || entry.uvScale[1] != 1.0f)
+                    {
+                        ++s.texScaled;
+                    }
+                }
+                if ((source.order & 1u) == 0u)
+                {
+                    ++s.texOddOrder;
+                }
+                ++(known ? s.texRedecoded : s.texDecoded);
+                dumpTexture(texKey, source, entry.rgba);
+            }
+            else
+            {
+                ++s.texUnsupported;
+            }
+
+            std::lock_guard<std::mutex> lock(s.textureMutex);
+            entry.version = ++s.textureVersions;
+            s.textures[texKey] = std::move(entry);
+        }
+
+        bool textureInfo(uint32_t texKey, uint32_t &width, uint32_t &height,
+                         uint64_t &version, float uvScale[2])
+        {
+            State &s = state();
+            std::lock_guard<std::mutex> lock(s.textureMutex);
+            auto it = s.textures.find(texKey);
+            if (it == s.textures.end() || it->second.rgba.empty())
+            {
+                return false;
+            }
+            width = it->second.width;
+            height = it->second.height;
+            version = it->second.version;
+            uvScale[0] = it->second.uvScale[0];
+            uvScale[1] = it->second.uvScale[1];
+            return true;
+        }
+
+        bool copyTexture(uint32_t texKey, uint64_t version, void *dst, uint64_t bytes)
+        {
+            State &s = state();
+            std::lock_guard<std::mutex> lock(s.textureMutex);
+            auto it = s.textures.find(texKey);
+            if (it == s.textures.end() || it->second.version != version ||
+                it->second.rgba.size() != bytes)
+            {
+                return false;
+            }
+            std::memcpy(dst, it->second.rgba.data(), (size_t)bytes);
+            return true;
         }
     }
 }

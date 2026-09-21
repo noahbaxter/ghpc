@@ -127,16 +127,43 @@ namespace ghpc
 
         // One entry per draw in the storage buffer the vertex shader indexes.
         // Matches DrawData in ghpc_mesh.vert: std430 puts the four mat4s at 0,
-        // the colour at 256 and the count at 272, and the tail pads the
-        // stride to 288.
+        // the colour at 256, the count at 272, the mode at 276 and the UV
+        // scale at 280, for a stride of 288.
         struct GpuDrawData
         {
             float m[4][16];
             float color[4];
             uint32_t matrixCount;
-            uint32_t pad[3];
+            uint32_t mode; // bit layout in ghpc_mesh.frag
+            float uvScale[2];
         };
         static_assert(sizeof(GpuDrawData) == 288u, "DrawData stride must match the shader's std430 layout");
+        static_assert(offsetof(GpuDrawData, uvScale) == 280u, "a vec2 in std430 aligns to 8");
+
+        // A decoded PsTex on the GPU, keyed by the same texKey the seam
+        // carries, and uploaded again only when the collector's version for
+        // that key moves.
+        struct GpuTexture
+        {
+            VkImage image = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkImageView view = VK_NULL_HANDLE;
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            uint64_t version = 0ull;
+            float uvScale[2] = {1.0f, 1.0f};
+        };
+
+        // What a frame in flight may still be reading when it is replaced.
+        // Freed when that frame's fence has been waited, which is the next
+        // time the same frame index records.
+        struct Garbage
+        {
+            std::vector<VkBuffer> buffers;
+            std::vector<VkDeviceMemory> memories;
+            std::vector<VkImage> images;
+            std::vector<VkImageView> views;
+            std::vector<VkDescriptorSet> sets;
+        };
 
         // The material state a pipeline has to bake in, packed small so it can
         // key a cache. Everything else about a material is a uniform or a
@@ -203,6 +230,11 @@ namespace ghpc
             bool ensureDrawBuffer(uint32_t frameIndex, VkDeviceSize size);
             VkPipeline pipelineFor(PipelineKey key);
             const MeshBuffers *meshBuffers(uint32_t meshKey);
+            bool uploadTexture(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t width, uint32_t height,
+                               const uint8_t *rgba, uint32_t texKey, uint64_t version, GpuTexture &out);
+            const GpuTexture *textureFor(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t texKey);
+            void releaseTexture(uint32_t frameIndex, GpuTexture &t);
+            void collectGarbage(uint32_t frameIndex);
             void drawScene(VkCommandBuffer cmd, uint32_t imageIndex, VkRect2D viewportRect);
             void reportMesh();
 
@@ -371,6 +403,30 @@ namespace ghpc
 
             std::unordered_map<uint32_t, MeshBuffers> m_meshCache;
             std::vector<GpuDrawData> m_drawStaging;
+            std::vector<VkDescriptorSet> m_drawSets;
+
+            // Textures, set 1 of the mesh layout. One combined image sampler
+            // per texture, all through one repeat sampler: clamp is done in
+            // the shader, so the wrap mode, which is per material rather than
+            // per texture, needs no sampler of its own.
+            //
+            // GHPC_VK_TEX=0 draws untextured with no alpha test, which is the
+            // picture before texture landed and the control arm for it.
+            bool m_textures = true;
+            VkDescriptorSetLayout m_texSetLayout = VK_NULL_HANDLE;
+            VkDescriptorPool m_texPool = VK_NULL_HANDLE;
+            VkSampler m_sampler = VK_NULL_HANDLE;
+            // Bound for untextured draws, since the shader declares the
+            // sampler and a layout's sets have to be valid when bound.
+            GpuTexture m_whiteTexture;
+            bool m_whiteReady = false;
+            std::unordered_map<uint32_t, GpuTexture> m_texCache;
+            std::array<Garbage, kFramesInFlight> m_garbage{};
+            uint64_t m_texUploads = 0ull;
+            uint64_t m_texReuploads = 0ull;
+            uint64_t m_texFailed = 0ull;
+            uint64_t m_texMissingDraws = 0ull;
+            uint64_t m_texDraws = 0ull;
 
             int m_meshLogEvery = 0;
             uint64_t m_meshFrames = 0ull;
@@ -882,6 +938,11 @@ namespace ghpc
         void VulkanRenderer::destroyMeshTargets() {}
         bool VulkanRenderer::ensureDrawBuffer(uint32_t, VkDeviceSize) { return false; }
         const MeshBuffers *VulkanRenderer::meshBuffers(uint32_t) { return nullptr; }
+        bool VulkanRenderer::uploadTexture(VkCommandBuffer, uint32_t, uint32_t, uint32_t,
+                                           const uint8_t *, uint32_t, uint64_t, GpuTexture &) { return false; }
+        const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer, uint32_t, uint32_t) { return nullptr; }
+        void VulkanRenderer::releaseTexture(uint32_t, GpuTexture &) {}
+        void VulkanRenderer::collectGarbage(uint32_t) {}
         void VulkanRenderer::drawScene(VkCommandBuffer, uint32_t, VkRect2D) {}
         void VulkanRenderer::reportMesh() {}
 
@@ -948,9 +1009,58 @@ namespace ghpc
                 return false;
             }
 
+            // Set 1, the texture. A pool of individually freeable sets,
+            // because a texture whose bitmap changes gets a new set while the
+            // old one may still be in flight. 4096 is several times the
+            // distinct textures a whole gameplay run binds.
+            VkDescriptorSetLayoutBinding texBinding{};
+            texBinding.binding = 0u;
+            texBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            texBinding.descriptorCount = 1u;
+            texBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+            VkDescriptorSetLayoutCreateInfo texLayoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            texLayoutInfo.bindingCount = 1u;
+            texLayoutInfo.pBindings = &texBinding;
+            if (!check(vkCreateDescriptorSetLayout(m_device, &texLayoutInfo, nullptr, &m_texSetLayout),
+                       "vkCreateDescriptorSetLayout(tex)"))
+            {
+                return false;
+            }
+
+            VkDescriptorPoolSize texPoolSize{};
+            texPoolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            texPoolSize.descriptorCount = 4096u;
+            VkDescriptorPoolCreateInfo texPoolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            texPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+            texPoolInfo.maxSets = 4096u;
+            texPoolInfo.poolSizeCount = 1u;
+            texPoolInfo.pPoolSizes = &texPoolSize;
+            if (!check(vkCreateDescriptorPool(m_device, &texPoolInfo, nullptr, &m_texPool),
+                       "vkCreateDescriptorPool(tex)"))
+            {
+                return false;
+            }
+
+            // Bilinear with no mips, which is TEX1 as every bind in the
+            // census sets it (0x60: MMAG and MMIN linear, MXL 0).
+            VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+            samplerInfo.magFilter = VK_FILTER_LINEAR;
+            samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.maxLod = 0.0f;
+            if (!check(vkCreateSampler(m_device, &samplerInfo, nullptr, &m_sampler), "vkCreateSampler"))
+            {
+                return false;
+            }
+
+            const std::array<VkDescriptorSetLayout, 2> setLayouts{m_meshSetLayout, m_texSetLayout};
             VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-            layoutInfo.setLayoutCount = 1u;
-            layoutInfo.pSetLayouts = &m_meshSetLayout;
+            layoutInfo.setLayoutCount = (uint32_t)setLayouts.size();
+            layoutInfo.pSetLayouts = setLayouts.data();
             layoutInfo.pushConstantRangeCount = 1u;
             layoutInfo.pPushConstantRanges = &pushRange;
             if (!check(vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_meshLayout),
@@ -1274,6 +1384,35 @@ namespace ghpc
                 }
             }
             m_meshCache.clear();
+
+            // Released through the garbage lists and then collected at once,
+            // since nothing is in flight by the time this runs.
+            for (auto &entry : m_texCache)
+            {
+                releaseTexture(0u, entry.second);
+            }
+            m_texCache.clear();
+            releaseTexture(0u, m_whiteTexture);
+            m_whiteReady = false;
+            for (uint32_t i = 0u; i < kFramesInFlight; ++i)
+            {
+                collectGarbage(i);
+            }
+            if (m_sampler != VK_NULL_HANDLE)
+            {
+                vkDestroySampler(m_device, m_sampler, nullptr);
+                m_sampler = VK_NULL_HANDLE;
+            }
+            if (m_texPool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(m_device, m_texPool, nullptr);
+                m_texPool = VK_NULL_HANDLE;
+            }
+            if (m_texSetLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_device, m_texSetLayout, nullptr);
+                m_texSetLayout = VK_NULL_HANDLE;
+            }
 
             for (auto &entry : m_pipelines)
             {
@@ -1610,6 +1749,251 @@ namespace ghpc
             return &inserted.first->second;
         }
 
+        void VulkanRenderer::releaseTexture(uint32_t frameIndex, GpuTexture &t)
+        {
+            Garbage &g = m_garbage[frameIndex % kFramesInFlight];
+            if (t.set != VK_NULL_HANDLE)
+            {
+                g.sets.push_back(t.set);
+            }
+            if (t.view != VK_NULL_HANDLE)
+            {
+                g.views.push_back(t.view);
+            }
+            if (t.image != VK_NULL_HANDLE)
+            {
+                g.images.push_back(t.image);
+            }
+            if (t.memory != VK_NULL_HANDLE)
+            {
+                g.memories.push_back(t.memory);
+            }
+            t = GpuTexture{};
+        }
+
+        void VulkanRenderer::collectGarbage(uint32_t frameIndex)
+        {
+            Garbage &g = m_garbage[frameIndex % kFramesInFlight];
+            if (!g.sets.empty() && m_texPool != VK_NULL_HANDLE)
+            {
+                vkFreeDescriptorSets(m_device, m_texPool, (uint32_t)g.sets.size(), g.sets.data());
+            }
+            for (VkImageView v : g.views)
+            {
+                vkDestroyImageView(m_device, v, nullptr);
+            }
+            for (VkImage i : g.images)
+            {
+                vkDestroyImage(m_device, i, nullptr);
+            }
+            for (VkBuffer b : g.buffers)
+            {
+                vkDestroyBuffer(m_device, b, nullptr);
+            }
+            for (VkDeviceMemory m : g.memories)
+            {
+                vkFreeMemory(m_device, m, nullptr);
+            }
+            g = Garbage{};
+        }
+
+        // Records the copy into `cmd`, ahead of the render pass that samples
+        // it. The staging buffer is released to this frame's garbage list,
+        // which is freed once this frame's fence has been waited.
+        bool VulkanRenderer::uploadTexture(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t width,
+                                           uint32_t height, const uint8_t *rgba, uint32_t texKey,
+                                           uint64_t version, GpuTexture &out)
+        {
+            Garbage &g = m_garbage[frameIndex % kFramesInFlight];
+            const VkDeviceSize bytes = (VkDeviceSize)width * height * 4u;
+
+            VkBuffer staging = VK_NULL_HANDLE;
+            VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+            VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+            bufferInfo.size = bytes;
+            bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (!check(vkCreateBuffer(m_device, &bufferInfo, nullptr, &staging), "vkCreateBuffer(tex staging)"))
+            {
+                return false;
+            }
+            g.buffers.push_back(staging);
+            VkMemoryRequirements stagingReq{};
+            vkGetBufferMemoryRequirements(m_device, staging, &stagingReq);
+            uint32_t stagingType = 0u;
+            if (!findMemoryType(stagingReq.memoryTypeBits,
+                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                stagingType))
+            {
+                return false;
+            }
+            VkMemoryAllocateInfo stagingAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            stagingAlloc.allocationSize = stagingReq.size;
+            stagingAlloc.memoryTypeIndex = stagingType;
+            if (!check(vkAllocateMemory(m_device, &stagingAlloc, nullptr, &stagingMemory),
+                       "vkAllocateMemory(tex staging)"))
+            {
+                return false;
+            }
+            g.memories.push_back(stagingMemory);
+            vkBindBufferMemory(m_device, staging, stagingMemory, 0u);
+            void *mapped = nullptr;
+            if (!check(vkMapMemory(m_device, stagingMemory, 0u, bytes, 0u, &mapped), "vkMapMemory(tex staging)"))
+            {
+                return false;
+            }
+            // Either the caller's bytes, or straight out of the collector,
+            // which refuses when the version has moved on since it was read.
+            const bool filled = (rgba != nullptr)
+                                    ? (std::memcpy(mapped, rgba, (size_t)bytes), true)
+                                    : scene::copyTexture(texKey, version, mapped, bytes);
+            vkUnmapMemory(m_device, stagingMemory);
+            if (!filled)
+            {
+                return false;
+            }
+
+            GpuTexture t;
+            VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+            imageInfo.extent = {width, height, 1u};
+            imageInfo.mipLevels = 1u;
+            imageInfo.arrayLayers = 1u;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            if (!check(vkCreateImage(m_device, &imageInfo, nullptr, &t.image), "vkCreateImage(tex)"))
+            {
+                return false;
+            }
+            VkMemoryRequirements imageReq{};
+            vkGetImageMemoryRequirements(m_device, t.image, &imageReq);
+            uint32_t imageType = 0u;
+            VkMemoryAllocateInfo imageAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            imageAlloc.allocationSize = imageReq.size;
+            if (!findMemoryType(imageReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, imageType) ||
+                (imageAlloc.memoryTypeIndex = imageType,
+                 !check(vkAllocateMemory(m_device, &imageAlloc, nullptr, &t.memory), "vkAllocateMemory(tex)")))
+            {
+                releaseTexture(frameIndex, t);
+                return false;
+            }
+            vkBindImageMemory(m_device, t.image, t.memory, 0u);
+
+            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            viewInfo.image = t.image;
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.levelCount = 1u;
+            viewInfo.subresourceRange.layerCount = 1u;
+            if (!check(vkCreateImageView(m_device, &viewInfo, nullptr, &t.view), "vkCreateImageView(tex)"))
+            {
+                releaseTexture(frameIndex, t);
+                return false;
+            }
+
+            VkDescriptorSetAllocateInfo setAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            setAlloc.descriptorPool = m_texPool;
+            setAlloc.descriptorSetCount = 1u;
+            setAlloc.pSetLayouts = &m_texSetLayout;
+            if (!check(vkAllocateDescriptorSets(m_device, &setAlloc, &t.set), "vkAllocateDescriptorSets(tex)"))
+            {
+                t.set = VK_NULL_HANDLE;
+                releaseTexture(frameIndex, t);
+                return false;
+            }
+            VkDescriptorImageInfo imageDesc{};
+            imageDesc.sampler = m_sampler;
+            imageDesc.imageView = t.view;
+            imageDesc.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = t.set;
+            write.dstBinding = 0u;
+            write.descriptorCount = 1u;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &imageDesc;
+            vkUpdateDescriptorSets(m_device, 1u, &write, 0u, nullptr);
+
+            VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            toDst.srcAccessMask = 0u;
+            toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toDst.image = t.image;
+            toDst.subresourceRange = viewInfo.subresourceRange;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0u, 0u, nullptr, 0u, nullptr, 1u, &toDst);
+
+            VkBufferImageCopy region{};
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.layerCount = 1u;
+            region.imageExtent = {width, height, 1u};
+            vkCmdCopyBufferToImage(cmd, staging, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &region);
+
+            VkImageMemoryBarrier toRead = toDst;
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0u, 0u, nullptr, 0u, nullptr, 1u, &toRead);
+
+            t.version = version;
+            out = t;
+            return true;
+        }
+
+        // The GPU texture for a texKey, uploading it on first sight or when
+        // the collector's version has moved. Null when the collector has no
+        // decoded image, which the caller draws untextured and counts.
+        const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t texKey)
+        {
+            uint32_t width = 0u;
+            uint32_t height = 0u;
+            uint64_t version = 0ull;
+            float uvScale[2] = {1.0f, 1.0f};
+            if (!scene::textureInfo(texKey, width, height, version, uvScale))
+            {
+                return nullptr;
+            }
+
+            auto it = m_texCache.find(texKey);
+            if (it != m_texCache.end() && it->second.version == version)
+            {
+                return it->second.image != VK_NULL_HANDLE ? &it->second : nullptr;
+            }
+
+            GpuTexture fresh;
+            const bool ok = uploadTexture(cmd, frameIndex, width, height, nullptr, texKey, version, fresh);
+            if (it != m_texCache.end())
+            {
+                releaseTexture(frameIndex, it->second);
+                ++m_texReuploads;
+            }
+            if (!ok)
+            {
+                // Remembered at this version, so a failure costs one attempt
+                // and not one a frame.
+                ++m_texFailed;
+                GpuTexture failed;
+                failed.version = version;
+                m_texCache[texKey] = failed;
+                return nullptr;
+            }
+            ++m_texUploads;
+            fresh.uvScale[0] = uvScale[0];
+            fresh.uvScale[1] = uvScale[1];
+            GpuTexture &slot = m_texCache[texKey];
+            slot = fresh;
+            return &slot;
+        }
+
         void VulkanRenderer::drawScene(VkCommandBuffer cmd, uint32_t imageIndex, VkRect2D viewportRect)
         {
             if (!m_meshReady || imageIndex >= m_meshFramebuffers.size())
@@ -1638,12 +2022,60 @@ namespace ghpc
                 return;
             }
 
+            // present() has waited this frame index's fence, so whatever it
+            // last retired is no longer read by the GPU.
+            const uint32_t frameIndex = m_frame % kFramesInFlight;
+            collectGarbage(frameIndex);
+
+            if (!m_whiteReady)
+            {
+                const uint8_t white[4] = {0x80u, 0x80u, 0x80u, 0x80u};
+                m_whiteReady = uploadTexture(cmd, frameIndex, 1u, 1u, white, 0u, 0ull, m_whiteTexture);
+                if (!m_whiteReady)
+                {
+                    return;
+                }
+            }
+
+            // Textures are resolved, and uploaded if new, before the render
+            // pass begins, since a copy cannot be recorded inside one. The
+            // set is copied out rather than pointed to, because a later
+            // upload can rehash the cache.
+            m_drawSets.clear();
+            m_drawSets.reserve(drawCount);
+
             m_drawStaging.clear();
             m_drawStaging.reserve(drawCount);
             for (uint32_t i = 0u; i < drawCount; ++i)
             {
                 const scene::DrawView &d = draws[i];
                 GpuDrawData entry{};
+                const scene::Material &mat = d.material;
+                const GpuTexture *tex = nullptr;
+                if (m_textures && mat.texKey != 0u)
+                {
+                    tex = textureFor(cmd, frameIndex, mat.texKey);
+                    ++m_texDraws;
+                    m_texMissingDraws += (tex == nullptr) ? 1u : 0u;
+                }
+                entry.uvScale[0] = tex ? tex->uvScale[0] : 1.0f;
+                entry.uvScale[1] = tex ? tex->uvScale[1] : 1.0f;
+                m_drawSets.push_back(tex ? tex->set : m_whiteTexture.set);
+                if (m_textures)
+                {
+                    // Bit layout in ghpc_mesh.frag. The alpha test runs on
+                    // untextured draws too, against the vertex alpha, since
+                    // that is what the GS tests when TME is off.
+                    entry.mode = (tex ? 1u : 0u) |
+                                 ((mat.tfx & 3u) << 1) |
+                                 ((mat.alphaTest ? 1u : 0u) << 3) |
+                                 ((mat.atst & 7u) << 4) |
+                                 ((mat.aref & 0xFFu) << 7) |
+                                 ((mat.afail & 3u) << 15) |
+                                 ((mat.wrapS == 1u ? 1u : 0u) << 17) |
+                                 ((mat.wrapT == 1u ? 1u : 0u) << 18) |
+                                 ((mat.blend ? 1u : 0u) << 19);
+                }
                 const uint32_t count = std::min<uint32_t>(d.matrixCount, 4u);
                 for (uint32_t m = 0u; m < count; ++m)
                 {
@@ -1668,7 +2100,6 @@ namespace ghpc
                 m_drawStaging.push_back(entry);
             }
 
-            const uint32_t frameIndex = m_frame % kFramesInFlight;
             if (m_drawStaging.empty() ||
                 !ensureDrawBuffer(frameIndex, m_drawStaging.size() * sizeof(GpuDrawData)))
             {
@@ -1737,6 +2168,7 @@ namespace ghpc
             // material because PsMat::Select binds once for a run of them, so
             // a frame with 534 draws rebinds a handful of times.
             VkPipeline bound = VK_NULL_HANDLE;
+            VkDescriptorSet boundSet = VK_NULL_HANDLE;
             for (uint32_t i = firstDraw; i < lastDraw; ++i)
             {
                 const MeshBuffers *buffers = meshBuffers(draws[i].meshKey);
@@ -1767,6 +2199,12 @@ namespace ghpc
                     bound = pipeline;
                     ++m_pipelineBinds;
                 }
+                if (m_drawSets[i] != boundSet)
+                {
+                    boundSet = m_drawSets[i];
+                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshLayout, 1u, 1u,
+                                            &boundSet, 0u, nullptr);
+                }
 
                 push.drawIndex = i;
                 vkCmdPushConstants(cmd, m_meshLayout, VK_SHADER_STAGE_VERTEX_BIT, 0u, sizeof(push), &push);
@@ -1788,14 +2226,20 @@ namespace ghpc
                 std::fprintf(stderr,
                              "[ghpc/vk/mesh] frames=%llu serial=%llu submitted=%u drawn=%llu tris=%llu "
                              "cached=%zu hits=%llu misses=%llu noGeom=%llu noCam=%llu "
-                             "pipelines=%zu binds=%llu ofx=%.1f ofy=%.1f src=%ux%u\n",
+                             "pipelines=%zu binds=%llu ofx=%.1f ofy=%.1f src=%ux%u "
+                             "tex=%d texDraws=%llu texMissing=%llu textures=%zu uploads=%llu "
+                             "reuploads=%llu texFailed=%llu\n",
                              (unsigned long long)m_meshFrames, (unsigned long long)serial,
                              drawCount, (unsigned long long)drawn, (unsigned long long)tris,
                              m_meshCache.size(), (unsigned long long)m_meshCacheHits,
                              (unsigned long long)m_meshCacheMisses,
                              (unsigned long long)m_meshNoGeometry, (unsigned long long)m_meshNoCamera,
                              m_pipelines.size(), (unsigned long long)m_pipelineBinds,
-                             ofx, ofy, m_sourceWidth, m_sourceHeight);
+                             ofx, ofy, m_sourceWidth, m_sourceHeight,
+                             m_textures ? 1 : 0, (unsigned long long)m_texDraws,
+                             (unsigned long long)m_texMissingDraws, m_texCache.size(),
+                             (unsigned long long)m_texUploads, (unsigned long long)m_texReuploads,
+                             (unsigned long long)m_texFailed);
             }
         }
 
@@ -1990,6 +2434,10 @@ namespace ghpc
             }
             m_skipAlphaTested = std::getenv("GHPC_VK_MESH_SKIP_ATE") != nullptr;
             m_tint = std::getenv("GHPC_VK_MESH_TINT") != nullptr;
+            if (const char *tex = std::getenv("GHPC_VK_TEX"); tex != nullptr)
+            {
+                m_textures = std::atoi(tex) != 0;
+            }
             if (const char *depth = std::getenv("GHPC_VK_MESH_DEPTH"); depth != nullptr)
             {
                 m_depthMode = std::atoi(depth);

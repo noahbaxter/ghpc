@@ -108,9 +108,63 @@ namespace ghpc
             uint32_t atst;
             uint32_t aref;
             uint32_t afail;
+
+            // +0x130, the value PsMat::Select hands PsTex::Select, which packs
+            // it into TEX0 bits 35..36: 0 modulate, 1 decal, 2 highlight,
+            // 3 highlight2. TCC is 1 on every select the census saw, so the
+            // texture's alpha always takes part.
+            uint32_t tfx;
+            // +0x150 CLAMP_1 WMS bits 0..1 and WMT bits 2..3, 0 repeat and
+            // 1 clamp. The mask the body passes is 0xF, so the region fields
+            // are not the material's and the region modes cannot arise.
+            uint32_t wrapS;
+            uint32_t wrapT;
         };
 
         void setMaterial(const Material &material);
+
+        // The texture a material binds, as the engine holds it: PsTex's
+        // RndBitmap at +0x28, which stays in guest RAM for the life of the
+        // texture because PsTex::LoadVram re-uploads from it whenever the
+        // VRAM allocator evicts. Linear rows, not GS-swizzled, so decoding it
+        // needs no GS state and does not race the packet path.
+        //
+        // Measured on a driven run, 2026-09-21: PSMT8 58%, PSMT4 35%,
+        // PSMCT16 6%, no PSMCT32; CPSM 0 (a CT32 palette) and CSM 0 on every
+        // select; mOrder 3 on every bitmap sampled, bit 0 RGBA and bit 1 the
+        // CSM1 index swizzle RndBitmap::PaletteOffset applies.
+        struct TextureSource
+        {
+            uint32_t width;       // RndBitmap +0x00
+            uint32_t height;      // +0x02
+            uint32_t rowBytes;    // +0x04
+            uint32_t bpp;         // +0x06: 4, 8, 16 or 32
+            uint32_t order;       // +0x08
+            uint32_t pixelsAddr;  // +0x0c, guest address, the cache signature
+            uint32_t paletteAddr; // +0x10
+            const uint8_t *pixels;  // host pointers to the same bytes
+            const uint8_t *palette; // null when bpp > 8
+            uint32_t tw;          // TEX0 TW and TH, log2 of the GS's texture
+            uint32_t th;          // space, which the UVs are normalised to
+            bool renderTarget;    // PsTex +0x48 & 8: drawn by the GS, no bitmap
+        };
+
+        // Decoded once per distinct bitmap and kept. Called from the material
+        // bind; a texKey seen before with the same signature costs one lookup.
+        void setTexture(uint32_t texKey, const TextureSource &source);
+
+        // The consumer side of the texture cache. `version` changes when the
+        // PsTex at texKey starts naming a different bitmap, so a backend
+        // re-uploads on a changed version and never otherwise. `uvScale`
+        // takes the vertex UV from the GS's 2^TW space into this image.
+        bool textureInfo(uint32_t texKey, uint32_t &width, uint32_t &height,
+                         uint64_t &version, float uvScale[2]);
+        // RGBA8, width * height * 4 bytes, alpha in the GS's sense where 0x80
+        // is 1.0. False when the version moved on since textureInfo.
+        bool copyTexture(uint32_t texKey, uint64_t version, void *dst, uint64_t bytes);
+
+        // GS TEXA, which is what a 16-bit texel's alpha bit selects between.
+        void setGsTexa(uint32_t ta0, uint32_t ta1, bool aem);
 
         // DrawShowing picks one of these per mesh, on mBones at +0x13c.
         //

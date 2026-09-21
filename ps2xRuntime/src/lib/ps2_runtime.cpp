@@ -3730,6 +3730,7 @@ void PS2Runtime::run()
                 const GSDebugSnapshot snap = m_gs.getDebugSnapshot();
                 ghpc::scene::setGsOffset((float)snap.ctx[0].xyoffset.ofx / 16.0f,
                                          (float)snap.ctx[0].xyoffset.ofy / 16.0f);
+                ghpc::scene::setGsTexa(snap.texa.ta0, snap.texa.ta1, snap.texa.aem);
             }
 
             uint32_t vkWidth = FB_WIDTH;

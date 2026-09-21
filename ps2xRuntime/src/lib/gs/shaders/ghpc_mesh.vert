@@ -28,8 +28,8 @@ layout(location = 3) in vec2 aUv;
 
 // One entry per draw. Four matrices always: a skinned draw uses all of them,
 // an unskinned draw uses matrix 0 and reports matrixCount 1.
-// std430: the four mat4s at 0, the colour at 256, the count at 272, and the
-// tail pads the stride to 288. The colour lives here rather than in the push
+// std430: the four mat4s at 0, the colour at 256, the count at 272, the mode
+// at 276 and the UV scale at 280, for a stride of 288. The colour lives here rather than in the push
 // constants because those are already at 116 of the 128 bytes every
 // implementation guarantees, and the camera has the better claim on them.
 struct DrawData
@@ -37,9 +37,8 @@ struct DrawData
     mat4 m[4];
     vec4 color; // PsMat mColor at +0x30
     uint matrixCount;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    uint mode;      // texture and alpha-test state, packed; see ghpc_mesh.frag
+    vec2 uvScale;   // the GS's 2^TW x 2^TH texture space into the image's
 };
 
 layout(std430, set = 0, binding = 0) readonly buffer Draws
@@ -59,6 +58,7 @@ layout(push_constant) uniform Push
 layout(location = 0) out vec3 vNorm;
 layout(location = 1) out vec2 vUv;
 layout(location = 2) out vec4 vColor;
+layout(location = 3) flat out uint vMode;
 
 void main()
 {
@@ -115,6 +115,9 @@ void main()
                        clip.w);
 
     vNorm = worldNorm;
-    vUv = aUv;
+    // Scaled here rather than per fragment because it is linear, so it
+    // interpolates the same either way.
+    vUv = aUv * d.uvScale;
     vColor = d.color;
+    vMode = d.mode;
 }
