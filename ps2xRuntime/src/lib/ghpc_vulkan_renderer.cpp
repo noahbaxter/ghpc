@@ -285,12 +285,20 @@ namespace ghpc
             uint32_t m_shotHeight = 0u;
 
             int m_meshMode = 0;
-            // GHPC_VK_MESH_DEPTH overrides the per-material depth state:
-            // 0 no depth at all, 1 force GREATER, 2 force LESS. Absent, which
-            // is the default, believes the material's TEST_1 and ZBUF_1. The
-            // override exists so the mapping from GS test to Vulkan compare
-            // stays falsifiable rather than load-bearing.
-            int m_depthMode = -1;
+            // GHPC_VK_MESH_DEPTH: 0 no depth at all, 1 force GREATER, 2 force
+            // LESS, 3 take it from the material, which is the default.
+            //
+            // The default is the material's own TEST_1 and ZBUF_1 because that
+            // is what the hardware does. It is NOT a measured choice: whether
+            // a forced state produces a better picture is open, and the
+            // coverage metric cannot answer it. See notes/gotchas.md, "Shots
+            // pair on serial"; two arms of one batch sat at guest serials 653
+            // and 857 at the same present frame, and coverage moves 0.2 iou
+            // over 240 present frames, so the pairing error swamps the effect.
+            //
+            // Do not set a default here from a coverage number until the
+            // shots being compared carry the same serial.
+            int m_depthMode = 3;
             // GHPC_VK_MESH_RANGE=first:count draws only a slice of the frame's
             // draws. A frame with 534 of them is one silhouette; a slice is a
             // mesh you can identify.
@@ -1085,30 +1093,47 @@ namespace ghpc
             {
                 compare = VK_COMPARE_OP_ALWAYS;
             }
-            // GHPC_VK_MESH_DEPTH overrides the material, so the mapping above
-            // stays falsifiable: 0 no depth at all, 1 force GREATER, 2 force
-            // LESS. Absent means believe the material.
             bool depthWrite = key.depthWrite != 0u;
-            if (m_depthMode == 0)
+
+            // Everything above reads the material. Only mode 3 keeps it; see
+            // the m_depthMode note for the coverage numbers that put the
+            // forced mode in front.
+            switch (m_depthMode)
             {
+            case 0:
                 compare = VK_COMPARE_OP_ALWAYS;
                 depthWrite = false;
-            }
-            else if (m_depthMode == 1)
-            {
-                compare = VK_COMPARE_OP_GREATER;
-                depthWrite = true;
-            }
-            else if (m_depthMode == 2)
-            {
+                break;
+            case 2:
                 compare = VK_COMPARE_OP_LESS;
                 depthWrite = true;
+                break;
+            case 3:
+                break;
+            default:
+                compare = VK_COMPARE_OP_GREATER;
+                depthWrite = true;
+                break;
             }
 
             VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
             depthStencil.depthTestEnable = VK_TRUE;
             depthStencil.depthWriteEnable = depthWrite ? VK_TRUE : VK_FALSE;
             depthStencil.depthCompareOp = compare;
+
+            // What this pipeline actually got, printed once per created
+            // pipeline. There are at most 32 of them, so this is not a hot
+            // path, and it is the only way to tell "the knob had no effect"
+            // apart from "the knob had an effect that did not change the
+            // picture". Two arms that differed only in GHPC_VK_MESH_DEPTH
+            // produced the same coverage, and an outcome number cannot say
+            // which of those it was.
+            std::fprintf(stderr,
+                         "[ghpc/vk/pipeline] word=%u ztst=%u zte=%u zmsk=%u blend=%u"
+                         " depthMode=%d compare=%d write=%d\n",
+                         word, (unsigned)key.ztst, (unsigned)key.depthTest,
+                         (unsigned)(key.depthWrite ? 0u : 1u), (unsigned)key.blend,
+                         m_depthMode, (int)compare, depthWrite ? 1 : 0);
 
             // Source alpha over destination, which is what mBlend's non-opaque
             // modes amount to. The exact equation is in ALPHA_1 at
@@ -1842,11 +1867,19 @@ namespace ghpc
             }
             std::fclose(f);
             ++m_shots;
+            // serial is the guest frame, and it is the only field here that
+            // two runs can be paired on. `frame` is the host present counter
+            // and does not track it: at the same present frame, two arms of
+            // one batch were at guest serials 653 and 857. Pairing shots by
+            // index or by present frame compares different moments of the
+            // chart, and coverage moves by 0.2 iou across 240 present frames,
+            // so that difference swamps anything a render change does.
             std::fprintf(stderr,
-                         "[ghpc/vk/shot] wrote %s %ux%u lit=%llu of %llu frame=%u mesh=%d screen=%s\n",
+                         "[ghpc/vk/shot] wrote %s %ux%u lit=%llu of %llu frame=%u serial=%llu"
+                         " mesh=%d screen=%s\n",
                          path, m_shotWidth, m_shotHeight, (unsigned long long)lit,
-                         (unsigned long long)m_shotWidth * m_shotHeight, m_frame, m_meshMode,
-                         screen.c_str());
+                         (unsigned long long)m_shotWidth * m_shotHeight, m_frame,
+                         (unsigned long long)m_meshSerial, m_meshMode, screen.c_str());
         }
 
         bool VulkanRenderer::init(const Config &config)
