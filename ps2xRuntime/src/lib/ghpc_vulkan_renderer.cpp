@@ -2265,6 +2265,27 @@ namespace ghpc
             ++m_meshFrames;
             m_meshSerial = serial;
 
+            // GHPC_PRESENTTRACE=path: which guest frame each present shows.
+            // The present loop and the guest's vblank run on separate clocks,
+            // so a serial shown twice or skipped is judder the game clock
+            // itself never shows.
+            {
+                static FILE *trace = []() -> FILE * {
+                    const char *e = std::getenv("GHPC_PRESENTTRACE");
+                    FILE *f = (e && *e) ? std::fopen(e, "w") : nullptr;
+                    if (f) std::fprintf(f, "wall,present,serial\n");
+                    return f;
+                }();
+                if (trace)
+                {
+                    static const auto t0 = std::chrono::steady_clock::now();
+                    std::fprintf(trace, "%.6f,%llu,%llu\n",
+                                 std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(),
+                                 (unsigned long long)m_frame, (unsigned long long)serial);
+                    if ((m_frame & 63u) == 0u) std::fflush(trace);
+                }
+            }
+
             // A frame with no camera cannot be transformed at all, so it is
             // counted and skipped rather than drawn through a stale one.
             if (!cameraValid)

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -210,9 +211,14 @@ namespace ghpc
                 bool hasLights = false;
                 float pendingLightMatrix[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 
-                // Published, under `publishMutex`.
-                Frame published;
-                bool hasPublished = false;
+                // Published, under `publishMutex`: an ordered queue rather
+                // than a latest-only slot. The guest's vblank and the display
+                // are two 60 Hz clocks, and latest-only showed a frame twice
+                // and dropped the next every time their phases crossed, 12%
+                // of presents. Frames go through in order; the cap only
+                // trims when one clock has really drifted from the other.
+                std::deque<Frame> published;
+                std::vector<Frame> pool; // recycled, so arenas keep capacity
                 std::mutex publishMutex;
 
                 // Consumer side, consumer thread only.
@@ -624,17 +630,35 @@ namespace ghpc
             }
             {
                 std::lock_guard<std::mutex> lock(s.publishMutex);
-                std::swap(s.published, f);
-                s.hasPublished = true;
-                // Redundant while this is a swap, and kept deliberately.
-                // std::swap exchanges the vectors' heap buffers, so a view
-                // built above still points into the arena that travelled with
-                // it. Turn either swap in this file into an assignment and
-                // that stops being true silently, with no crash until an
-                // arena reallocates under a live pointer. Repointing from the
-                // offsets costs one pass over a few hundred draws and holds
-                // either way.
-                pointViews(s.published);
+                // Swap into a recycled frame, so `f` comes back with an old
+                // frame's capacity for beginFrame to clear.
+                Frame slot;
+                if (!s.pool.empty())
+                {
+                    std::swap(slot, s.pool.back());
+                    s.pool.pop_back();
+                }
+                std::swap(slot, f);
+                s.published.push_back(std::move(slot));
+                // Three is about 50 ms of slack. Past it the guest is really
+                // ahead of the display, and the oldest frame goes.
+                // GHPC_SCENE_QUEUE=1 is the old latest-only handoff.
+                static const size_t kMaxQueued = []() -> size_t {
+                    const char *e = std::getenv("GHPC_SCENE_QUEUE");
+                    const int n = e ? std::atoi(e) : 3;
+                    return n < 1 ? 1u : (size_t)n;
+                }();
+                while (s.published.size() > kMaxQueued)
+                {
+                    s.pool.push_back(std::move(s.published.front()));
+                    s.published.pop_front();
+                }
+                // Moves and swaps carry the vectors' heap buffers, so the
+                // views built above still point into their arena. Repointed
+                // anyway: turn any of these into a copy and that stops being
+                // true silently, with no crash until an arena reallocates
+                // under a live pointer.
+                pointViews(s.published.back());
             }
 
             const int every = logEvery();
@@ -643,10 +667,15 @@ namespace ghpc
                 return;
             }
 
-            // Reported off the published copy, since `f` is now the recycled
-            // frame the swap handed back.
+            // Reported off the newest queued frame, since `f` is now the
+            // recycled one. Held under the lock, which is what stops the
+            // consumer taking it mid-read.
             std::lock_guard<std::mutex> lock(s.publishMutex);
-            const Frame &p = s.published;
+            if (s.published.empty())
+            {
+                return;
+            }
+            const Frame &p = s.published.back();
             uint64_t verts = 0ull;
             uint64_t tris = 0ull;
             uint32_t skinned = 0u;
@@ -801,10 +830,14 @@ namespace ghpc
             State &s = state();
             {
                 std::lock_guard<std::mutex> lock(s.publishMutex);
-                if (s.hasPublished)
+                if (!s.published.empty())
                 {
-                    std::swap(s.consuming, s.published);
-                    s.hasPublished = false;
+                    if (s.hasConsuming)
+                    {
+                        s.pool.push_back(std::move(s.consuming));
+                    }
+                    s.consuming = std::move(s.published.front());
+                    s.published.pop_front();
                     s.hasConsuming = true;
                     // Same reason as the repoint in endFrame.
                     pointViews(s.consuming);
