@@ -823,6 +823,57 @@ namespace ghpc
                          texa & 0xFFu, (texa >> 8) & 0xFFu, (texa >> 16) & 1u);
         }
 
+        namespace
+        {
+            // Both run on the thread executing the guest, so plain counters.
+            constexpr uint64_t kGuestBoundaryVblanks = 8u;
+            uint64_t g_vblanks = 0u;
+            uint64_t g_lastGuestEnd = 0u;
+            bool g_guestEndSeen = false;
+
+            bool vblankBoundary()
+            {
+                static const bool on = []() {
+                    const char *e = std::getenv("GHPC_SCENE_BOUNDARY");
+                    return e != nullptr && std::strcmp(e, "vblank") == 0;
+                }();
+                return on;
+            }
+        }
+
+        void guestFrameEnd()
+        {
+            if (vblankBoundary())
+            {
+                return;
+            }
+            g_guestEndSeen = true;
+            g_lastGuestEnd = g_vblanks;
+            endFrame();
+            beginFrame();
+        }
+
+        void vblank()
+        {
+            ++g_vblanks;
+            if (!vblankBoundary())
+            {
+                if (g_guestEndSeen && g_vblanks - g_lastGuestEnd <= kGuestBoundaryVblanks)
+                {
+                    return;
+                }
+                // A vblank with nothing drawn is the guest not drawing, and the
+                // PS2 keeps showing its last frame then. Publishing it would
+                // present a blank.
+                if (active() && state().building.draws.empty())
+                {
+                    return;
+                }
+            }
+            endFrame();
+            beginFrame();
+        }
+
         bool acquireFrame(Camera &camera, bool &cameraValid,
                           const DrawView **draws, uint32_t &drawCount,
                           uint64_t &serial)

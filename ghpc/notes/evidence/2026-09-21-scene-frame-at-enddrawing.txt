@@ -1,0 +1,31 @@
+Scene frames close at PsRnd::EndDrawing, not at vblank. 2026-09-21.
+
+Symptom: flashing under --native, reported by hand play.
+
+Metric, declared before the run: presents with no camera (blank) and presents
+under 80% of their neighbours' draw median (short), both toward 0. The change
+cannot move repeat/skip on game_screen if the guest already runs at 60.
+
+One binary, three route.sh arms, 85s each, full career loop to the second
+song. The vblank arm is GHPC_SCENE_BOUNDARY=vblank, the old boundary.
+
+    vblank  presents=4929 repeat=0.0%  skip=0.2% blank=754 short=4.5%
+    guest   presents=5018 repeat=13.8% skip=0.0% blank=21  short=0.3%
+    guest2  presents=5017 repeat=13.8% skip=0.0% blank=20  short=0.3%
+
+Both arms reached the same screens in the same order and game rate held
+1.00. Blank presents were exactly the zero-draw presents in the vblank arm:
+a vblank that landed between two guest frames published an empty one.
+
+Per screen, guest arm:
+
+    game_screen     n=1785 repeat=1   blank=0  short=0
+    loading_screen  n=349  repeat=79  blank=0  short=0
+    boot (none)     n=606  repeat=543 blank=21 short=0
+    lose_screen     n=129  repeat=4   blank=0  short=14
+
+The repeats are the presenter re-showing the last frame while the guest draws
+nothing through the seam (boot, loading, menu transitions), which is what the
+PS2 does with its display buffer. The 21 blanks are boot, before any guest
+frame. vblank still closes a frame when EndDrawing has not run for 8 vblanks
+and something was drawn, so a screen that never reaches EndDrawing publishes.

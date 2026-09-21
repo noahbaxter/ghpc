@@ -2833,17 +2833,11 @@ void EeScheduler::processEvent(const EeEvent &event)
         // three the screen read already costs here.
         ghpc_drive::setGameClocks(ghpc_drive::readGameClocks(m_rdram));
 
-        // Frame boundary for the Rnd seam. Driven from vblank because this
-        // runs on the thread executing the guest, where the draws are
-        // submitted; the host present loop is a different thread and closing
-        // the frame from there would race every submit.
-        //
-        // Approximate, not the guest's own boundary: that is
-        // PsRnd::BeginDrawing 0x1bfed0 and EndDrawing 0x1c0070, and neither
-        // has an override yet. Good enough to count what arrives, not good
-        // enough to drive presentation.
-        ghpc::scene::endFrame();
-        ghpc::scene::beginFrame();
+        // The Rnd seam's fallback frame boundary. The real one is the
+        // PsRnd::EndDrawing override; this closes a frame only when the guest
+        // has stopped reaching it. Runs here because this is the thread
+        // executing the guest, where the draws are submitted.
+        ghpc::scene::vblank();
 
         // GHPC_CLOCKTRACE=path: one CSV line per vblank, wall seconds against
         // TaskMgr's clocks. GHPC_CLOCKRATE averages over N vblanks, which
