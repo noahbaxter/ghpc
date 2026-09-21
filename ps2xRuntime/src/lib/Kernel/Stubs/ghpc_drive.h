@@ -16,6 +16,7 @@
 #ifndef GHPC_DRIVE_H
 #define GHPC_DRIVE_H
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -325,11 +326,23 @@ namespace ghpc_drive
                 if (eq != std::string::npos)
                 {
                     std::string key = trim(tok.substr(0, eq));
-                    const uint16_t btn = buttonByName(trim(tok.substr(eq + 1)));
-                    if (btn)
+                    // "down+down+cross" is a sequence: one press each, then
+                    // the last repeats. It is how a menu item other than the
+                    // highlighted one gets picked.
+                    std::vector<uint16_t> seq;
+                    const std::string val = tok.substr(eq + 1);
+                    for (size_t a = 0, b; a <= val.size(); a = b + 1)
                     {
-                        if (key == "*") m_fallback = btn;
-                        else m_rules[key] = btn;
+                        b = val.find('+', a);
+                        if (b == std::string::npos) b = val.size();
+                        const uint16_t btn = buttonByName(trim(val.substr(a, b - a)));
+                        if (!btn) { seq.clear(); break; }
+                        seq.push_back(btn);
+                    }
+                    if (!seq.empty())
+                    {
+                        if (key == "*") m_fallback = seq.back();
+                        else m_rules[key] = seq;
                     }
                 }
                 else if (!trim(tok).empty())
@@ -356,7 +369,12 @@ namespace ghpc_drive
         uint16_t ruleFor(const std::string &screen) const
         {
             const auto it = m_rules.find(screen);
-            const uint16_t btn = it != m_rules.end() ? it->second : m_fallback;
+            uint16_t btn = m_fallback;
+            if (it != m_rules.end())
+            {
+                const size_t i = m_presses > 0 ? static_cast<size_t>(m_presses - 1) : 0u;
+                btn = it->second[std::min(i, it->second.size() - 1u)];
+            }
             return btn == kNoPress ? 0u : btn;
         }
 
@@ -367,7 +385,7 @@ namespace ghpc_drive
         }
 
         bool m_enabled = false;
-        std::unordered_map<std::string, uint16_t> m_rules;
+        std::unordered_map<std::string, std::vector<uint16_t>> m_rules;
         uint16_t m_fallback = kCross;
         std::string m_screen;
         double m_enteredAt = 0.0;

@@ -2993,9 +2993,21 @@ void EeScheduler::processEvent(const EeEvent &event)
                 }
                 else if (++held == settle && screen != "none" && saved.insert(screen).second)
                 {
-                    std::fprintf(stderr, "[ghpc/state] arming save 'menu_%s' after %d vblanks\n",
-                                 screen.c_str(), settle);
-                    ghpcStateRequestSave("menu_" + screen);
+                    // An existing slot is kept: a route resumed from one menu
+                    // would otherwise overwrite that menu's slot with a
+                    // capture taken after a resume.
+                    const std::string slot = "menu_" + screen;
+                    if (FILE *f = std::fopen(ghpcStateSlotPath(slot).c_str(), "rb"))
+                    {
+                        std::fclose(f);
+                        std::fprintf(stderr, "[ghpc/state] '%s' exists, kept\n", slot.c_str());
+                    }
+                    else
+                    {
+                        std::fprintf(stderr, "[ghpc/state] arming save '%s' after %d vblanks\n",
+                                     slot.c_str(), settle);
+                        ghpcStateRequestSave(slot);
+                    }
                 }
             }
         }
