@@ -20,8 +20,30 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**R2: the Rnd seam.** Exit criteria in `NEXT.md`, and they are not met. Steps
-1 to 3 are in, with the depth half of step 4. Numbers and knobs in
+**`--native` plays gameplay at realtime. Make it the whole game.** State in
+`NEXT.md`, numbers in `notes/evidence/2026-09-21-r2-cameras-targets-lighting.txt`.
+In order:
+
+1. **Screens outside gameplay under `--native`.** Menus, loading, results.
+   Only `game_screen` is checked. Boot with `--native` and shoot each screen
+   against the emulated path; anything VU1 drew outside the seam is black.
+2. **What the 128x256 offscreen target is for.** 87 draws render into it
+   through the venue's second camera and are skipped. If a screen draw samples
+   it (a render-target PsTex, `renderTarget=` in `[ghpc/scene/tex]`, is 0 on
+   game_screen) it needs an offscreen Vulkan target; if nothing does, it is
+   something the GS path composites outside the seam.
+3. **The remaining picture error**, 13-15 per channel. Fog (XYZF2, never
+   implemented), the point light's unclamped dot, ZB_ONLY depth writes, the
+   depth default. Shoot with `vkarms.sh`, read with `vkdrawid.py`.
+4. **Audio (A1).** With gameplay at realtime it is now the thing between the
+   port and playable.
+
+Everything below this line in `Now` is the history of getting here, kept
+for its measurements.
+
+**R2: the Rnd seam.** Exit criteria in `NEXT.md`. Steps 1 to 4 are in; step
+5 (stub the packet path) turned out to be `GHPC_VU1_OFF` once the seam drew
+everything. Numbers and knobs in
 `notes/evidence/2026-09-20-r2-vulkan-mesh-pipeline.txt`.
 
 What arrives per frame on `game_screen`, and what the GPU does with it:
@@ -120,25 +142,10 @@ between them. It is not the punch-outs: texture and the alpha test moved it
 1-5%. **The depth default is not settled on this**; settle it once the
 surfaces below are found.
 
-**THE NEXT TASK: a few surfaces cover the frame.** With the punch-outs
-skipped and each remaining mesh tinted its own colour, one frame holds about
-three distinct colours once the chart is running (617 distinct at beat bucket
-0, then 4 and 10 at buckets 1 and 2). 339 meshes are drawn and roughly three
-are visible, so a few large surfaces cover everything else. Independent of the
-alpha test, and bucket 0's 617 says the geometry arrives and then gets hidden
-rather than never arriving.
-
-Chase it with `GHPC_VK_MESH_RANGE` to find which draws own the big surfaces.
-Note that `0:64` covers nothing visible, so the low indices are the wrong
-place to start. This is also the likeliest home of whatever is left of the
-depth question, since occlusion is what depth state decides.
-
-**Next on rendering correctness: the surfaces above.** Texture and the alpha
-test are in and moved `nvOnly` 1-5%, so the punch-outs were never the excess
-coverage; these surfaces are. Iterate from the `songmesh` state with
-`ghpc/scripts/vkarms.sh`, three arms in under three minutes, and
-`GHPC_VK_MESH_RANGE`/`GHPC_VK_MESH_TINT` in the arm envs. Then settle the
-depth default, then the blend equation.
+**Solved: a few surfaces covered the frame.** It was one camera per frame
+where GH2 uses five, and 87 offscreen draws painted onto the screen. Per-draw
+camera and render target fixed it; `GHPC_VK_MESH_ID` and `vkdrawid.py` found
+it in two runs, after `GHPC_VK_MESH_RANGE` sweeps had not.
 
 **Per-material depth is the default and its mapping is verified by log, not by
 picture.** `[ghpc/vk/pipeline]` prints the resolved compare op and write flag

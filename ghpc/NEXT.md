@@ -9,7 +9,10 @@ the rules below.
 
 ## Where things stand
 
-Gameplay is reachable, renders correctly, and is far too slow to play.
+**Gameplay runs at realtime through the native renderer:** `play.sh --native`,
+60 fps, game rate 1.000, lit and textured, close to the software picture but
+not identical to it (R2 below). The emulated path is still far too slow, and
+there is still no audio.
 
 **`eerate` is not game speed, and the difference is not small.** It measures how
 fast emulated cycles retire. What a player feels is the rate TaskMgr's own
@@ -20,9 +23,9 @@ and halved every clock the game derives from it
 (`notes/evidence/2026-09-20-cop0-count-halved-game-time.txt`).
 
     menus        43% of realtime, game speed 0.43   was 0.21 before the fix
-    gameplay     19% with the rasteriser throttled, game speed 0.19
+    gameplay     19% emulated; 100% with --native (2026-09-21)
     audio        none
-    picture      correct (notes/evidence/2026-09-11-gameplay-frame-59.png)
+    picture      correct on the emulated path; --native in R2
 
 The old "menus ~100% of realtime" line in this file was `eerate` on the loading
 screen. The main menu has never run at full speed, and it is capped by the same
@@ -41,7 +44,9 @@ arm had managed inside the run cap. So VU1 interpretation is effectively the
 entire gameplay cost, and the recompiled EE code holds full realtime on its
 own. Detail in `notes/evidence/2026-09-19-vu1-off-confirms-the-seam.txt`.
 
-`GHPC_VU1_OFF` draws nothing. It is a ceiling measurement, never a build.
+`GHPC_VU1_OFF` alone draws nothing. With the native path on (`--native`) it is
+the fast path, since the seam replaces everything VU1 drew on `game_screen`.
+Screens outside gameplay are not checked yet.
 
 ## The target, decided 2026-09-20
 
@@ -141,20 +146,31 @@ already says hashes are not stable across runs. Neither form of that
 comparison can fail. The readback can, and it covers the swizzle, the filter
 and the rect, which a source-side hash never could.
 
-### R2: the Rnd seam, textured on the GPU, a few surfaces cover the frame
-**Texture and the alpha test are in, 2026-09-21, and they were not what was
-wrong with the picture.** Every textured draw gets its texture (`texMissing=0`),
-decoded from PsTex's `RndBitmap` in guest RAM rather than from GS VRAM, and
-the fragment shader runs the GS's TFX equations and alpha test in GS units.
-The handoff predicted this would collapse `nvOnly`. It moved it 1-5%:
-56073 against 56424 at one bucket, 84918 against 86156 at another. Detail in
-`notes/evidence/2026-09-21-r2-texture.txt`.
+### R2: gameplay renders natively, lit, at realtime with VU1 off
+**`./ghpc/scripts/play.sh --native` plays gameplay at 60 fps and game rate
+1.000**, against 2.84 fps with VU1 emulated. The picture is iou 0.82-0.87
+against the software path with a mean error of 13-15 per channel, where
+unlit it was 0.66-0.80 and 42-63. `notes/evidence/2026-09-21-r2-cameras-targets-lighting.txt`.
 
-**Do this next: the surfaces that cover the frame.** The native frame shows a
-floor and a wall where the software path shows the scoreboard, lamps and
-fretboard. The tinted count already said so: about three meshes visible of
-339 drawn. Chase it with `GHPC_VK_MESH_RANGE` from the `songmesh` state.
-Sequenced in `BACKLOG.md`.
+What it took, in the order it was found, each one measured before it was
+fixed:
+- **Texture and the alpha test** (`2026-09-21-r2-texture.txt`). Needed, and
+  not the fault: `nvOnly` moved 1-5%.
+- **A camera per draw.** 5 distinct cameras in a gameplay frame; one frame-wide
+  camera put the venue through the track's. Found with `GHPC_VK_MESH_ID`.
+- **A render target per draw**, from PsRnd's register shadow. 87 draws render
+  into a 128x256 offscreen target and were painted over the screen.
+- **The blend equation**, ALPHA_1. The light cones are additive.
+- **VU1's lighting**, all three overlays decoded and reproduced in the vertex
+  shader, lights captured by a new `PsEnviron::Select` override.
+
+`--native` sets `GHPC_RENDERER=vulkan GHPC_VK_MESH=2 GHPC_VU1_OFF=1`.
+`GHPC_VU1_OFF` was a ceiling measurement while nothing replaced VU1; with the
+native path drawing everything it is the fast path, and on `game_screen` the
+software GS draws nothing at all without VU1.
+
+**Do this next** is in `BACKLOG.md`: what `--native` still gets wrong, and
+the screens outside gameplay.
 
 Geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
 measured transform in a vertex shader, a depth buffer, a render pass, one

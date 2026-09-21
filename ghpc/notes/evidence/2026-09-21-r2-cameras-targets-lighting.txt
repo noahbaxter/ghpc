@@ -1,0 +1,96 @@
+R2: per-draw camera and render target, the blend equation, VU1's lighting,
+and gameplay at realtime with VU1 off
+2026-09-21, release, M4 Pro, MoltenVK, every arm resumed from `songmesh`
+
+What was wrong with the picture
+-------------------------------
+Not the punch-outs (2026-09-21-r2-texture.txt). A draw-ID capture named it:
+GHPC_VK_MESH_ID=1 paints each draw its index, writes the frame's draw table
+beside the shot, and ghpc/scripts/vkdrawid.py counts pixels per draw.
+
+Two draws owned 70% of the frame, a floor (36%) and a wall (34%). Hiding them
+(GHPC_VK_MESH_HIDE) showed the whole venue squashed into a strip at the top,
+which is a camera, not geometry: the collector kept one camera per frame, the
+last PsCam::Select, and GH2 uses several. The table, one frame:
+
+  cam  draws  target
+  0    87     fbp=176 fbw=2  XYOFFSET 1984/1920  scissor 128x256   offscreen
+  1    377    fbp=56  fbw=8  XYOFFSET 1792/1824  scissor 512x448   venue
+  2    24     main frame                                           track
+  3,4  52     main frame                                           HUD
+
+13 camera changes, 5 distinct cameras. Camera 0 renders into a 128-wide
+offscreen target, the one the provenance note's `ofx 31744 ofy 30720` sample
+came from, and its 87 draws were being painted over the screen.
+
+Fixed by carrying both per draw:
+- the camera, latched at each DrawFaces from PsCam::Select's capture
+- the render target, from PsRnd's register shadow: SetRegister (0x43e320)
+  keeps every register at ThePsRnd 0x4f2780 + 0xF0 + reg * 8, so FRAME_1,
+  XYOFFSET_1 and SCISSOR_1 are readable at submit
+The backend uses each draw's own XYOFFSET and skips draws whose scissor is
+not the displayed frame (`offscreen=` in [ghpc/vk/mesh]).
+
+The blend equation
+------------------
+ALPHA_1 (+0x138) mapped onto Vulkan factors, FIX as a dynamic blend constant.
+Three equations in gameplay: 0x44 source-over, 0x48 additive (Cs*As + Cd),
+0x68 additive by FIX. The light cones are additive; they were opaque slabs.
+
+Lighting
+--------
+VU1 lights per vertex with one of three overlays, chosen per material by
+qw688.x (PsMat::Select 0x43ec78):
+  +0x124 == 0          0x614  bare return, vertex keeps Vert+0x20
+  else !mUseEnviron    0x7C5  overlay 0x3e28, ambient/mColor only
+  else                 PsEnviron's program at 0x440E24:
+                       0x6EC  overlay 0x3760, three directional lights
+                       0x436  overlay 0x21b0, one point light with a range
+
+Decoded from the overlays (vudis.py on .vutext, extracted with llvm-objcopy):
+  base  = prelit ? (env ? ambient : (1,1,1,a)) * Vert+0x20
+                 : (env ? mColor * ambient : mColor)
+  dir   = min(1, base + sum_i max(0, (n * W3) . column_i(qw685..687))
+                             * qw682+i * mColor)
+  point = clamp(base + qw682 * mColor * dot(L, n) * (qw685.w + 1/|L|), 0, 1)
+          with L = W * ((qw685.x, qw686.x, qw687.x) - qw679) - v,
+          and zero light term when |L|^2 > qw686.w
+  GS colour = min(255, qw695 * colour)          qw695 = 128 on every draw seen
+W3 is qw676..678, the world matrix for unskinned draws and the four quadwords
+after the bone palette in the 20-qw skinned upload.
+
+The light block is captured in a new PsEnviron::Select override at the
+header store (0x1c7c4c), not by scanning the packet: a scan found headers 500
+quadwords back, stale ones from older packets. About 65 selects and 17
+distinct environments per gameplay frame.
+
+Correction to the Select__5PsMat override's header: qw690.w becomes 0.035f
+when +0x130 == 2 (TFX highlight), not when it is not. 0x43ed48 is
+`bnel $v0, $a1` with $a1 = 2. The vu1-tl-semantics note had it right.
+
+Mix on game_screen: directional 312, point ~110, ambient ~118, passthrough 3.
+
+Against the software reference, same state, same beats:
+
+                         bucket 1   bucket 2   bucket 3
+  unlit   iou            0.6618     0.7991     0.7080
+          mean abs err   42.6       61.5       63.4       per channel, 0..255
+  lit     iou            0.8171     0.8723     0.8522
+          mean abs err   13.0       14.0       15.1
+
+Speed
+-----
+With the native path drawing everything, GHPC_VU1_OFF=1 stops being a
+ceiling measurement: VU1 is the whole gameplay cost, and nothing needs it.
+
+  VU1 on,  native   [fps] 2.84        game rate ~0.2
+  VU1 off, native   [fps] 59.9-60.0   game rate 1.000, beat 6 to 56, then
+                                      lose_screen (nobody is playing)
+
+VU1 off changes nothing in the native picture: bucket 1's coverage is
+0.6618 / 9718 / 57667 in both arms. With VU1 off the software GS picture on
+game_screen is solid black, so gameplay draws nothing outside VU1.
+
+A save state stalled 4s in, which was the CD layer, not VU1: its pseudo-LBN
+file table was not in the state, so the song's stream LBN resolved to nothing
+(sceCdRead unresolved LBN 0x250c00). Now a CDFS chunk.

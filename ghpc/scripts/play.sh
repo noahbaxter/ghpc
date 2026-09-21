@@ -9,6 +9,9 @@
 #
 #   ./ghpc/scripts/play.sh                 release, straight to the main menu
 #   ./ghpc/scripts/play.sh --ingame        walk the menus and stop in the song
+#   ./ghpc/scripts/play.sh --native        Vulkan at the Rnd seam with VU1 off:
+#                                          realtime gameplay, see NEXT.md
+#   ./ghpc/scripts/play.sh --state song    resume a save state from work/states
 #   ./ghpc/scripts/play.sh --intro         boot the whole way through the intro
 #   ./ghpc/scripts/play.sh --debug         diagnostics build, 2.5-4x slower
 #   ./ghpc/scripts/play.sh --build         rebuild before launching
@@ -31,6 +34,8 @@ VERBOSE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --ingame)   INGAME=1 ;;
+    --native)   export GHPC_RENDERER=vulkan GHPC_VK_MESH=2 GHPC_VU1_OFF=1 ;;
+    --state)    shift; export GHPC_STATE_LOAD="${1:?--state needs a slot}" ;;
     --intro)    WANT_SKIP=0 ;;
     --debug)    BUILD_DIR="build-debug" ;;
     --calls)    BUILD_DIR="build-calls" ;;
