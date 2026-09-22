@@ -48,6 +48,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <stdexcept>
 #include <type_traits>
 #include "ps2_runtime_macros.h"
@@ -285,6 +286,22 @@ void Select__5PsMatRUl_0x43ea70(uint8_t* rdram, R5900Context* ctx, PS2Runtime *r
             const uint64_t n = ++s_calls;
             if (n <= 40 || (n % 500) == 0) {
                 ghpcMatLog(rdram, ctx, runtime, GPR_U32(ctx, 4), GPR_U32(ctx, 5), n);
+            }
+        }
+        // GHPC_DRAWPATH_CENSUS=N: who selects a material, by return address,
+        // the same table FlushPacket prints. ghpc/scripts/drawpaths.py.
+        static const long s_every = []() {
+            const char* e = std::getenv("GHPC_DRAWPATH_CENSUS");
+            return e ? std::atol(e) : 0L;
+        }();
+        if (s_every > 0) {
+            static std::map<uint32_t, uint64_t> s_byRa;
+            static long s_calls = 0;
+            ++s_byRa[GPR_U32(ctx, 31)];
+            if (++s_calls % s_every == 0) {
+                for (const auto& kv : s_byRa)
+                    std::fprintf(stderr, "[ghpc/drawpath] select ra=0x%08x n=%llu\n", kv.first,
+                                 (unsigned long long)kv.second);
             }
         }
     }

@@ -42,7 +42,9 @@
 // body opens with `addiu $sp, $sp, -0x10` and `sd $ra, 0($sp)`, so leaving
 // both undone and jumping straight to $ra is balanced; there is nothing to pop
 // because nothing was pushed.
+#include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <stdexcept>
 #include "ps2_runtime_macros.h"
 #include "ps2_runtime.h"
@@ -80,6 +82,26 @@ void FlushPacket__5PsRnd_0x43e400(uint8_t* rdram, R5900Context* ctx, PS2Runtime 
         case 0x43e4f8u: goto label_43e4f8;
         case 0x43e500u: goto label_43e500;
         default: break;
+    }
+
+    // GHPC_DRAWPATH_CENSUS=N: who flushes, by return address, as a table every
+    // N calls. Every draw path ends here, so a caller the Rnd seam does not
+    // hook is content --native drops. ghpc/scripts/drawpaths.py names them.
+    {
+        static const long s_every = []() {
+            const char* e = std::getenv("GHPC_DRAWPATH_CENSUS");
+            return e ? std::atol(e) : 0L;
+        }();
+        if (s_every > 0) {
+            static std::map<uint32_t, uint64_t> s_byRa;
+            static long s_calls = 0;
+            ++s_byRa[GPR_U32(ctx, 31)];
+            if (++s_calls % s_every == 0) {
+                for (const auto& kv : s_byRa)
+                    std::fprintf(stderr, "[ghpc/drawpath] flush ra=0x%08x n=%llu\n", kv.first,
+                                 (unsigned long long)kv.second);
+            }
+        }
     }
 
     ctx->pc = 0x43e400u;

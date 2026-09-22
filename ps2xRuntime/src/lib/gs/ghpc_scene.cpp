@@ -1079,6 +1079,19 @@ namespace ghpc
                 }
                 ++(known ? s.texRedecoded : s.texDecoded);
                 dumpTexture(texKey, source, entry.rgba);
+                // GHPC_TEX_LOG=1: every decode, with the guest memory it read,
+                // so two live textures claiming the same bytes can be found.
+                static const bool texLog = std::getenv("GHPC_TEX_LOG") != nullptr;
+                if (texLog)
+                {
+                    const size_t row = source.rowBytes ? source.rowBytes
+                                                       : (size_t)source.width * source.bpp / 8u;
+                    std::fprintf(stderr,
+                                 "[ghpc/tex] %s key=0x%08x pixels=0x%08x bytes=%zu palette=0x%08x %ux%u %ubpp sample=0x%08x\n",
+                                 known ? "redecode" : "decode", texKey, source.pixelsAddr,
+                                 row * source.height, source.paletteAddr, source.width, source.height,
+                                 source.bpp, sig.sample);
+                }
             }
             else
             {
