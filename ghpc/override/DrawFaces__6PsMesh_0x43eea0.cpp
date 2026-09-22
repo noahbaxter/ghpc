@@ -260,9 +260,52 @@ bool ghpcDecodeFacePacket(const uint8_t* rdram, uint32_t self,
     if (buf == 0u || PS2Runtime::isSpecialAddress(buf)) return false;
     const uint32_t start = (buf & PS2_RAM_MASK) + 0x10u;
     if (start + qwc * 16u > PS2_RAM_SIZE) return false;
-    const uint8_t* s = rdram + start;
-    const uint32_t words = qwc * 4u;
-    auto word = [&](uint32_t w) { uint32_t v; std::memcpy(&v, s + w * 4u, 4u); return v; };
+
+    // A mutable mesh's packet is a DMA chain rather than bare VIF: a CNT tag
+    // carries the index unpack and the vertex unpack's header, then one REF
+    // tag per vertex points at the live vertex data, so VU1 draws this frame's
+    // verts through indices built once. Flattened here into the VIF stream
+    // the channel would deliver, tag data only: the REF tags fall in the
+    // middle of an UNPACK, so the channel runs with TTE off and a tag's upper
+    // words are not data. The chain ends at an END, RET or REFE tag or at the
+    // packet's quadword count, where DrawFaces appends its own terminator.
+    static std::vector<uint32_t> stream;
+    stream.clear();
+    const bool chain = (*reinterpret_cast<const uint32_t*>(rdram + ((self + 0x140u) & PS2_RAM_MASK)) & 0x1fu) != 0u;
+    auto append = [&](uint32_t addr, uint32_t count) -> bool {
+        addr &= PS2_RAM_MASK;
+        if (addr + count * 16u > PS2_RAM_SIZE) return false;
+        const size_t at = stream.size();
+        stream.resize(at + count * 4u);
+        std::memcpy(stream.data() + at, rdram + addr, count * 16u);
+        return true;
+    };
+    if (!chain) {
+        if (!append(start, qwc)) return false;
+    } else {
+        const uint32_t end = start + qwc * 16u;
+        uint32_t tag = start;
+        for (uint32_t guard = 0; tag + 16u <= end && guard < 8192u; ++guard) {
+            uint32_t t[4];
+            std::memcpy(t, rdram + tag, 16u);
+            const uint32_t n = t[0] & 0xFFFFu, id = (t[0] >> 28) & 7u;
+            if (id == 1u || id == 2u || id == 7u || id == 6u) {  // CNT, NEXT, END, RET: data follows
+                if (!append(tag + 16u, n)) return false;
+                if (id == 2u) tag = t[1] & PS2_RAM_MASK;
+                else tag += 16u + n * 16u;
+                if (id == 7u || id == 6u) break;
+            } else if (id == 3u || id == 4u || id == 0u) {     // REF, REFS, REFE: data at addr
+                if (!append(t[1], n)) return false;
+                tag += 16u;
+                if (id == 0u) break;
+            } else {
+                return false;  // CALL: not seen in these packets
+            }
+        }
+    }
+    const uint32_t words = (uint32_t)stream.size();
+    const uint8_t* s = reinterpret_cast<const uint8_t*>(stream.data());
+    auto word = [&](uint32_t w) { return stream[w]; };
 
     static uint32_t mem[1024][4];
     // The packet opens with single-vector unpacks before its first STCYCL,
@@ -522,11 +565,28 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
         }
     };
 
+    // GHPC_SCENE_PACKET=0 drops these draws again, the control arm.
+    static const bool s_packet = []() {
+        const char* e = std::getenv("GHPC_SCENE_PACKET");
+        return e == nullptr || std::atoi(e) != 0;
+    }();
     // A mutable mesh (+0x140 & 0x1f) is one Sync leaves alone: its vectors
-    // stay live and change, which is why it is not cached. Serve it from the
-    // live vectors, as per-frame geometry. With no Face[] its triangles are
-    // the strip VU1 draws over the verts in order, 0-1-2, 1-2-3, and so on.
+    // stay live and change, which is why it is not cached. The generated body
+    // above sends its face packet like any other mesh's, so that packet is
+    // what VU1 draws and it is decoded first. The live vectors drawn as a
+    // strip, 0-1-2, 1-2-3, drew the sustains as a zigzag; they are the
+    // fallback, and GHPC_SCENE_MUTABLE=live forces them for a control arm.
+    static const bool s_mutableLive = []() {
+        const char* e = std::getenv("GHPC_SCENE_MUTABLE");
+        return e != nullptr && std::strcmp(e, "live") == 0;
+    }();
     if (!cached && (READ32(self + 0x140u) & 0x1fu) != 0u) {
+        uint32_t batches = 0u;
+        if (s_packet && !s_mutableLive && ghpcDecodeFacePacket(rdram, self, s_verts, s_indices, &batches)) {
+            ghpc::scene::submitDynamicMesh(self, s_verts.data(), (uint32_t)s_verts.size(),
+                                           s_indices.data(), (uint32_t)s_indices.size());
+            return;
+        }
         const uint32_t liveCnt = READ32(self + 0x104u);
         const uint32_t livePtr = READ32(self + 0x100u);
         const uint32_t fb = READ32(self + 0x108u), fe = READ32(self + 0x10cu);
@@ -552,11 +612,6 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
         }
         return;
     }
-    // GHPC_SCENE_PACKET=0 drops these draws again, the control arm.
-    static const bool s_packet = []() {
-        const char* e = std::getenv("GHPC_SCENE_PACKET");
-        return e == nullptr || std::atoi(e) != 0;
-    }();
     if (!cached && s_packet) {
         uint32_t batches = 0u;
         const bool ok = ghpcDecodeFacePacket(rdram, self, s_verts, s_indices, &batches);

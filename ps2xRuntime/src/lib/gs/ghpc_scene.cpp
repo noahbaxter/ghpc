@@ -374,8 +374,12 @@ namespace ghpc
             void dumpTexture(uint32_t texKey, const TextureSource &src, const std::vector<uint8_t> &rgba)
             {
                 static const char *dir = std::getenv("GHPC_TEX_DUMP");
+                static const int limit = []() {
+                    const char *e = std::getenv("GHPC_TEX_DUMP_MAX");
+                    return e ? std::atoi(e) : 64;
+                }();
                 static int dumped = 0;
-                if (dir == nullptr || dumped >= 64)
+                if (dir == nullptr || dumped >= limit)
                 {
                     return;
                 }
