@@ -22,58 +22,38 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 **`--native` runs the whole career loop at stable speed. Make what it draws
 right.** As of 2026-09-21 the loop main → career → expert → song → fail →
-quit → main → song runs unattended, holds game rate 0.98-1.00 under host
-load, and shows 99-100% of guest frames in order. What is still wrong is
-all on screen, reported by hand play: flashing, textures on the wrong
-things, missing geometry. In order, each with the number that says it moved:
+quit → main → song runs unattended at game rate 0.98-1.00. Flashing, wrong
+textures, sustains and the kick drum are fixed; see the round below. Left:
 
-1. **A route harness, first, because every item below is judged on it.**
-   Wrap the working driver line in `ghpc/scripts/route.sh`: career, expert,
-   mash strum, fail, quit, second song, with shots every 2s, the clock and
-   present traces, and one summary line (screens reached, `stale=`,
-   `noCamera=`, repeat/skip %, game rate min/max). Clean shots through
-   `/tmp/` (with the slash: `/tmp` is a symlink and `find /tmp` never
-   descends, which mixed old runs into two contact sheets). About 85s a
-   run. Take an arm list like `vkarms.sh` so A/B is one command.
+1. **Gem caps: the white top and the black and white base ring of every
+   note.** Missing geometry or UVs, not lighting. The gem is draw
+   `0x008ac750`/`0x008ab530` (28 verts, atlas `0x008912d0`, point light
+   0x436), and over it the cap, mesh `0x008aa400`, same vertex positions,
+   texture `0x00890d50` (black, white ellipse at the centre), blended,
+   ZTST always, UV program 0x139.
 
-       GHPC_PAD_DRIVE="main_screen=@main_career.btn+r2,nameprof_screen=r2+start,
-         sel_difficulty_screen=@sd_diff4.btn+r2,game_screen=down,
-         lose_screen=@lose_quit_career.btn+r2,*=r2"
-       GHPC_PAD_DRIVE_SETTLE=1.5 GHPC_PAD_DRIVE_PERIOD=0.2  play.sh --native --guitar
+   0x139 is overlay 0x09c8, read from the disassembly: position and normal
+   through qw676..679, then the rows E of qw691..693 (PsMat+0x170), eye
+   qw698 through E, `V = eye - pos`, `R = 2N(N.V) - V`,
+   `uv = R.xy * qw694.x / |V| + qw694.xy` (RSQRT numerator is qw694.x;
+   qw694 reads 0.5 0.5). Implemented once and backed out: offline, with
+   the logged E, eye and object matrix, the cap's upward faces land at
+   u 0.01-0.3, the black edge, where the reference is white at the centre.
+   So one input is not what VU1 sees. Suspect the eye (qw698 captured at
+   PsCam::Select, may be re-uploaded) and `lightMatrix` (its translation
+   did not match the draw's own on the first check). E changes as a gem
+   moves, so the game builds it per gem; find the writer of PsMat+0x170.
+   Also check the gem atlas UVs (u 0.52-0.74 green, 0.02-0.24 yellow) land
+   on the white and black regions and whether CLAMP_1 region modes apply.
 
-2. **Flashing.** Two candidates, and the present trace (`GHPC_PRESENTTRACE`,
-   now with `draws` and `camera` columns, uncommitted) tells them apart:
-   - frames with no camera are skipped and present blank: the last run
-     logged `noCamera=329`;
-   - scene frames are cut at vblank, not at the guest's own boundary
-     (`PsRnd::EndDrawing` 0x1c0070), so a vblank mid-frame splits one guest
-     frame in two. Latest-only used to hide many halves; the ordered queue
-     now shows every one.
-   Metric: share of presents under 80% of the median draw count, and
-   noCamera presents, both to 0. Likely fix: close the scene frame in an
-   EndDrawing override, and re-present the last complete frame rather than
-   a blank one.
+   Loop that works: `vkarms.sh` from `songmesh`, buckets 12-19 have notes;
+   the draw table now has `uvp` and `lp` columns; `GHPC_TEX_DUMP_MAX` lifts
+   the 64-texture dump cap; the MESH chunk of a state holds every cached
+   mesh's verts for offline maths. Do not judge this on `swOnly`: two
+   identical arms from the same state diverged by 4000 after bucket 10 on
+   2026-09-21. Judge it on a zoomed crop against the reference.
 
-3. **Textures on the wrong things, sometimes**, reported by hand play. First
-   suspect is the same fault the mesh caches had: the texture cache keys on
-   PsTex and bitmap pointers plus dims, and the game reuses those addresses
-   once a menu unloads, so a new texture at an old address is served the old
-   image. Give it a generation the way `meshcache::generation` works (bump on
-   PsTex rebuild or bitmap change), then run the route and compare shots
-   after a menu change. Metric: a `texStale=` count, and wrong textures gone
-   on the second lap.
-
-4. **Missing chart geometry**: the white tops of notes and sustains, and the
-   kick drum, which animates. Hand play also reports geometry missing more
-   widely than the chart; the census below covers it. Census first: `GHPC_SCENE_DROP_LOG` on
-   game_screen for cacheMiss and noFaces, then `GHPC_VK_MESH_ID` and
-   `vkdrawid.py` against a reference shot to name the missing draws.
-   Suspects: mutable meshes served in strip order when they are not strips,
-   meshes that never pass through DrawFaces (particles, RndMultiMesh), and
-   skinned meshes with more than four bones. Metric: `swOnly` on the
-   gameplay buckets, 3700-4600 now.
-
-5. **Audio (A1).** With speed and pacing stable, the next thing between the
+2. **Audio (A1).** With speed and pacing stable, the next thing between the
    port and playable. Two candidates in `notes/audio-path.md`, neither
    concluded.
 
@@ -84,6 +64,17 @@ caching the face packet decode by mesh, per-visit driver rules
 
 Everything below this line in `Now` is the history of getting here, kept
 for its measurements.
+
+**2026-09-21, the round that fixed the picture.** `route.sh` is the harness
+(one line per arm from `routesum.py`). Scene frames close in a
+`PsRnd::EndDrawing` override: blank presents 754 to 21, short 4.5% to 0.3%,
+game_screen 0 and 0 (`notes/evidence/2026-09-21-scene-frame-at-enddrawing.txt`).
+That also fixed the wrong textures: the vblank split had left 455 frames
+with draws on the default material, now 1; `texStale` read 0 over the route,
+so pointer reuse was not it. Mutable meshes (sustains, kick drum) are
+decoded from their face packet, which is a DMA chain of one REF tag per
+vertex; `GHPC_SCENE_MUTABLE=live` is the old strip, the control. Judged on
+the picture, since `swOnly` did not hold still between identical arms.
 
 **2026-09-21, the round that made the loop stable.** Button icons decoded
 from PsMesh's face packet (`ghpcDecodeFacePacket`, `GHPC_SCENE_PACKET=0` for
