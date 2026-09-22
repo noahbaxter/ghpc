@@ -41,6 +41,11 @@ namespace ghpc
             return it != m.end() ? it->second.gen : 0u;
         }
 
+        bool erase(uint32_t self)
+        {
+            return cache().erase(self) != 0u;
+        }
+
         void store(uint32_t self, const uint8_t *verts, uint32_t vertCnt,
                    const uint8_t *faces, uint32_t faceCnt)
         {

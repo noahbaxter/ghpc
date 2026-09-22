@@ -34,5 +34,12 @@ namespace ghpc
         // transform. Downstream caches key on (self, generation) instead.
         // 0 when there is no entry.
         uint32_t generation(uint32_t self);
+
+        // Drops the entry for `self`, true when there was one. Called when a
+        // new PsMesh is constructed at `self`: a Sync only stores for an
+        // owner that is not mutable and has verts, so without this a mutable
+        // mesh, an instance or an empty mesh at a reused address was served
+        // the previous occupant's geometry.
+        bool erase(uint32_t self);
     }
 }
