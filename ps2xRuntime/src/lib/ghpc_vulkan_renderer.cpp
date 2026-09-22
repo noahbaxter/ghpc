@@ -2273,15 +2273,16 @@ namespace ghpc
                 static FILE *trace = []() -> FILE * {
                     const char *e = std::getenv("GHPC_PRESENTTRACE");
                     FILE *f = (e && *e) ? std::fopen(e, "w") : nullptr;
-                    if (f) std::fprintf(f, "wall,present,serial\n");
+                    if (f) std::fprintf(f, "wall,present,serial,draws,camera\n");
                     return f;
                 }();
                 if (trace)
                 {
                     static const auto t0 = std::chrono::steady_clock::now();
-                    std::fprintf(trace, "%.6f,%llu,%llu\n",
+                    std::fprintf(trace, "%.6f,%llu,%llu,%u,%d\n",
                                  std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(),
-                                 (unsigned long long)m_frame, (unsigned long long)serial);
+                                 (unsigned long long)m_frame, (unsigned long long)serial, drawCount,
+                                 cameraValid ? 1 : 0);
                     if ((m_frame & 63u) == 0u) std::fflush(trace);
                 }
             }
@@ -2653,14 +2654,14 @@ namespace ghpc
             {
                 std::fprintf(stderr,
                              "[ghpc/vk/mesh] frames=%llu serial=%llu submitted=%u drawn=%llu tris=%llu "
-                             "cached=%zu hits=%llu misses=%llu noGeom=%llu noCam=%llu "
+                             "cached=%zu hits=%llu misses=%llu stale=%llu noGeom=%llu noCam=%llu "
                              "pipelines=%zu binds=%llu ofx=%.1f ofy=%.1f src=%ux%u "
                              "tex=%d texDraws=%llu texMissing=%llu textures=%zu uploads=%llu "
                              "reuploads=%llu texFailed=%llu offscreen=%llu dynamic=%llu\n",
                              (unsigned long long)m_meshFrames, (unsigned long long)serial,
                              drawCount, (unsigned long long)drawn, (unsigned long long)tris,
                              m_meshCache.size(), (unsigned long long)m_meshCacheHits,
-                             (unsigned long long)m_meshCacheMisses,
+                             (unsigned long long)m_meshCacheMisses, (unsigned long long)m_meshCacheStale,
                              (unsigned long long)m_meshNoGeometry, (unsigned long long)m_meshNoCamera,
                              m_pipelines.size(), (unsigned long long)m_pipelineBinds,
                              ofx, ofy, m_sourceWidth, m_sourceHeight,
@@ -2826,7 +2827,7 @@ namespace ghpc
                 if (FILE *t = std::fopen(tablePath.c_str(), "w"))
                 {
                     std::fprintf(t, "# id index meshKey matrices verts indices ztst zwrite blend "
-                                    "texKey tfx ate atst afail tx ty tz cam fbp fbw ofx ofy scissor\n");
+                                    "texKey tfx ate atst afail tx ty tz cam fbp fbw ofx ofy scissor uvp lp\n");
                     // Cameras numbered by first appearance, and listed after
                     // the draws, so a draw's camera is one lookup.
                     std::vector<scene::Camera> cams;
@@ -2845,13 +2846,14 @@ namespace ghpc
                         }
                         const scene::Target &g = r.target;
                         std::fprintf(t, "%u %u 0x%08x %u %u %u %u %d %d 0x%08x %u %d %u %u %.2f %.2f %.2f %zu "
-                                        "%u %u %.0f %.0f %u..%u,%u..%u\n",
+                                        "%u %u %.0f %.0f %u..%u,%u..%u 0x%x 0x%x\n",
                                      r.index + 1u, r.index, r.meshKey, r.matrixCount, r.vertCount,
                                      r.indexCount, m.ztst, m.depthWrite ? 1 : 0, m.blend ? 1 : 0,
                                      m.texKey, m.tfx, m.alphaTest ? 1 : 0, m.atst, m.afail,
                                      r.translation[0], r.translation[1], r.translation[2], cam,
                                      g.fbp, g.fbw, g.ofx, g.ofy,
-                                     g.scissor[0], g.scissor[1], g.scissor[2], g.scissor[3]);
+                                     g.scissor[0], g.scissor[1], g.scissor[2], g.scissor[3],
+                                     m.uvProgram, m.lightProgram);
                     }
                     for (size_t c = 0u; c < cams.size(); ++c)
                     {

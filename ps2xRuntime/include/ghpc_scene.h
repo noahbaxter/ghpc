@@ -269,6 +269,14 @@ namespace ghpc
 
         void endFrame();
 
+        // Where a frame closes. The guest's own boundary is PsRnd::EndDrawing,
+        // which calls guestFrameEnd. vblank closes a frame only when the guest
+        // has not for kGuestBoundaryVblanks, so a screen that never reaches
+        // EndDrawing still publishes. GHPC_SCENE_BOUNDARY=vblank closes on
+        // every vblank, which splits a guest frame a vblank lands inside.
+        void guestFrameEnd();
+        void vblank();
+
         // ------------------------------------------------------------------
         // The consumer side.
         //
