@@ -16,11 +16,14 @@ there is still no audio.
 
 **As of 2026-09-21 the whole career loop runs under `--native`**, menus,
 song, fail, quit and back, and holds game rate 0.98-1.00 under host load.
-What is wrong now is what it draws: flashing, textures on the wrong things,
-missing geometry (chart note tops, the kick drum). The cyan wedge that grows
-over the venue as a song fails is the game's own effect, not a fault.
-`BACKLOG.md` `Now` has the plan, in order, starting with a route harness
-that every later item is judged on.
+Flashing, wrong textures, sustains and the kick drum were fixed the same
+day (scene frames close at `PsRnd::EndDrawing`; mutable meshes decode from
+their DMA-chain face packet). The note gems still lack their white tops and
+base rings, parked in `BACKLOG.md` with what was ruled out. The cyan wedge
+that grows over the venue as a song fails is the game's own effect, not a
+fault. `ghpc/scripts/route.sh` drives the whole loop in 85s and prints one
+line per arm; judge picture changes on a zoomed crop, since `swOnly` drifts
+by thousands between identical arms.
 
 Hand play: `play.sh --native --guitar`. Keys 1-5 frets, arrows D-pad (up/down
 strum), X/C/Z/V face buttons, Enter start. F5 saves the screen on show as
@@ -210,7 +213,7 @@ button icons) are decoded from it and draw natively since 2026-09-21. The
 window title names the renderer path that came up, e.g.
 `[Vulkan: native, VU1 off]` or `[raylib: software GS]`.
 
-**Do this next:** `BACKLOG.md` `Now`, item 1 (the route harness).
+**Do this next:** `BACKLOG.md` `Now`, item 1 (the gem caps).
 
 Geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
 measured transform in a vertex shader, a depth buffer, a render pass, one
