@@ -53,9 +53,11 @@ textures, sustains and the kick drum are fixed; see the round below. Left:
    identical arms from the same state diverged by 4000 after bucket 10 on
    2026-09-21. Judge it on a zoomed crop against the reference.
 
-2. **Audio (A1).** With speed and pacing stable, the next thing between the
-   port and playable. Two candidates in `notes/audio-path.md`, neither
-   concluded.
+2. **Audio (A1): plays as of 2026-09-21.** Songs, menu music from the
+   loading screen on, SFX, crowd, and the Star Power reverb. Left: ADSR (a
+   stop cuts instead of releasing), carrying the engine in save states, a
+   by-ear check of the Star Power reverb, and the intro movie, which is not
+   staged (`\VIDEOS\INTRO.PSS`). `notes/audio-path.md`.
 
 Deferred from this round, each with its number: the brightness curve (+6
 darks, +3 mids, -1 whites, every menu), the loading glow (error 10.7),
@@ -280,18 +282,9 @@ it here:
 - The four backend inputs, and the host mesh cache: `notes/rnd-seam.md`.
 - VU1's own semantics: `notes/evidence/2026-09-19-vu1-tl-semantics.md`.
 
-**A1 audio, in parallel.** The SPU upload protocol is solved and the ack is
-implemented; it is not sufficient. `chunks=1` in both arms, control
-`GHPC_SPU_ACK=0`. Two candidates in `notes/audio-path.md`, both
-distinguishable, neither concluded:
-
-1. The ack is dropped before it is sent, because StreamInfo outranks it when
-   they share a flush.
-2. The game only calls `SPUStartSend` once here, so there is no second transfer
-   to pace.
-
-Lower `kSpuChunkLogEvery` from 32 before measuring; it currently hides chunks 2
-through 31.
+**A1 audio, 2026-09-21: plays.** `chunks=1` was the log cap hiding chunks
+2-31; the upload always flowed. Streams and samples now play through
+`ps2x::iop::synth`. Left, in `notes/audio-path.md`: ADSR, save states.
 
 **Finish the oracle.** Game time against wall clock is in (`[ghpc/clock]`,
 `GHPC_CLOCKRATE=N`) and `[fps]`/`[eerate]` now carry `screen=`, so a loading

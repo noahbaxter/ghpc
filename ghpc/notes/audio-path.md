@@ -1,154 +1,199 @@
 # Audio path
 
-Where GH2's sound goes in the port, and where it stops. Mapped 2026-09-11
-from the runtime source and the 2026-09-10 logs in `work/`. Nothing here
-has been fixed yet; this is the map for whoever does.
+Where GH2's sound goes in the port. As of 2026-09-21 songs, menu music and
+sample SFX play through `ps2x::iop::synth` (`ps2xIOP/src/modules/synth_engine.cpp`)
+and out of an SDL3 device. The hardware IRX that does this job on a PS2 is
+not loaded; the engine stands in for it.
 
 ## EE to IOP
 
-GH2's audio sits behind `SynthEE`, two SIF RPC sids recorded at
-`ps2xIOP/src/modules/synth.cpp:19-32`:
+GH2's audio sits behind `SynthEE`, two SIF RPC sids:
 
 - `0x75433178`, EE to IOP. `CtlClientCall` appends packed
   `{cmd:u32, len:u32, data[len]}` records to a buffer at 0x4FA6B0 (cursor
-  0x444D70). `CtlClientPoll` flushes the queue with one
-  `sceSifCallRpc(rpc=0, NOWAIT)` and no receive buffer, so replies cannot
-  come back that way.
+  0x444D70). `CtlClientPoll` 0x269bd0 flushes the queue with one
+  `sceSifCallRpc(rpc=0, NOWAIT)` and no receive buffer, **and only when the
+  queue is non-empty**.
 - `0x75433179`, IOP to EE, the EE's own RPC server: `CtlDispatch__7SynthEE`
-  at 0x268760, jump table 0x4EB680, entries 0..14.
+  0x268760 `(cmd, data, len)`, into `CtlDispatch_impl` 0x3eb828, jump table
+  0x4EB680, entries 0..14.
 
-The SPU send handshake (`notes/ui-draw-hang.md:44-63`): `SPUStartSend`
-0x26e3f0 sets `gSpuPending` (0x444d90); `SPUSendPoll` 0x26e4c8 ships one
-chunk of at most 0x5000 bytes and sets `gSpuInFlight` (0x444d94);
-`SPUSetSendDone` 0x26e4b8 is the only clear and its only caller is
-`CtlDispatch` message 13 arriving over 0x75433179.
+## Commands, EE to IOP
 
-## What the runtime has
+Every number read off the `addiu $a0, $zero, N` ahead of the `CtlClientCall`
+in the named body (`ctlscan.py`-style scan over `ps2xRuntime/src/runner`):
 
-- No SPU2 at all. No SPU RAM, no voice registers, no ADPCM decode of
-  uploaded data, no key-on. Grep for SPU2, 0x1f900, KON over
-  `ps2xRuntime/src` and `ps2xIOP/src` finds nothing.
-- The IOP is HLE keyed on sid. The GH2 profile registers `fileio`, `usbkb`,
-  `SYNTH` (`ps2xIOP/src/builtin_profiles.cpp:117-129`); `libsd`
-  (0x80000701) is added for every game. `SYNTH` handles two commands, 1
-  (Terminate, reply 14) and 0x190 (StreamInfo, reply 2); everything else
-  goes to `noteUnknown` and is dropped (`synth.cpp:36-38, 166-171`). It
-  never sends reply 13.
-- A host output device exists: raylib `InitAudioDevice` at
-  `ps2_runtime.cpp:885`, fed by `PS2AudioBackend` (`ps2_audio.cpp`), which
-  decodes VAG to PCM and calls `PlaySound` (`ps2_audio.cpp:306`). Its two
-  feeds are the `libsd` RPC (never used by GH2: zero 0x80000701 lines in a
-  2.6 GB log) and a `VAGp` sniffer on `fioClose`
-  (`Kernel/Syscalls/FileIO.cpp:145-158`) with no log evidence it fires.
-- EE-side `sceSdRemote` stubs are bookkeeping only
-  (`Kernel/Stubs/Audio.cpp:102-168`); nothing is forwarded.
+    0x0    SynthEE ctor         SynthConfig            len 24
+    0x1    Terminate
+    0x3-4  SetFX*               sceSdEffectAttr        reverb, not modelled
+    0x5    SetFXChain           0x6 SetInputFX
+    0xc8   SPUSendPoll          {spu dest}
+    0xc9   SPUSendPoll          raw bytes, <= 0x5000
+    0x133-136  mic volume, suspend, resume, FX
+    0x190  StreamEE::Poll       StreamInfoArg {id, short nch, freq[15], fx[15]}
+    0x191  UpdateFXCore         0x196 UpdateFX, 0x19f UpdateADSR: not modelled
+    0x192  Play {id}            0x193 Stop {id}      0x194 Destroy {id}
+    0x195  UpdateVolumePan      {id, short ch, short vol, short pan}, packed
+    0x197  UpdateSpeed          {id, short speed*1000}
+    0x198  SendToIOP            {id, short ch}, then
+    0x199  SendToIOP            that channel's raw PS-ADPCM, <= 0x1000, then
+    0x19a  SendToIOP            {id}, once its request queue is drained
+    0x19b-19d  slip offset/stop/speed      0x19e stereo pair {id, a, b}
+    0x258  EnableLevels
+    0x2bc  SampleInstEE ctor    {handle, GetSPUAddr, GetSampleRate}
+    0x2bd  dtor  0x2be Start  0x2bf Stop  0x2c0 Pause {handle, bool}
+    0x2c1  UpdateVolPan {handle, short vol, short pan}
+    0x2c2  speed*1000   0x2c3 ADSR   0x2c4 FX core   0x2c5 start offset
 
-## The SPU upload protocol, read off the ELF
+Volume is `DbToRatio(fader) * 32767`; pan is `VolumePan::SetFloatPan`'s
+signed count of 1/127ths, past +-127 into the rear positions.
 
-2026-09-19. Both commands come from `SPUSendPoll` 0x26e4c8 rather than from
-the 0x5000 length, which is what the earlier note inferred.
+## Replies, IOP to EE
 
-`SPUStartSend(src, len, dst)` 0x26e3f0 stores the EE source at 0x444D90, the
-byte count at 0x51A9A0 and the SPU RAM destination at 0x51A99C.
+`CtlDispatch_impl`'s table, read from the disassembly:
 
-`SPUSendPoll` 0x26e4c8 returns early unless 0x444D90 is set and 0x444D94
-(`gSpuInFlight`) is clear. Otherwise it sets inflight, takes
-`min(0x5000, remaining)` and issues two records:
+    0   StreamEE::DispatchStreamData({id, ch, bytes})   the IOP asks for data
+    1,2 StreamEE::Dispatch(id, op, 0)                   2 = ready (state 3)
+    3   StreamEE::Dispatch(id, 3, pos)                  play position
+    4   DispatchSlipOffset       5-8, 10, 12  mics, levels, HUD text
+    9   SampleInstEE::UpdateAddr(handle, addr)
+    11  SampleInstEE::SetDone(handle)                    one-shot finished
+    13  SPUSetSendDone           14  terminated
 
-    CtlClientCall<int>(0xC8, *(int*)0x51A99C)   the SPU RAM destination
-    CtlClientCall(0xC9, src, chunkLen)          the bytes
+**Reply 3 is the audio sync.** `StreamEE::Poll` turns `pos * 28` samples into
+ms against channel 0's rate, adds the start offset, and snaps the stream
+timer if it is more than 100 ms out. Song time is otherwise the EE-side
+`VarTimer`, which is why the chart always played without audio.
+`GHPC_SYNTH_SYNC=0` stops the reports.
 
-then advances src and dst by the chunk and subtracts it from remaining,
-clearing 0x444D90 when remaining hits zero. **The advance is unconditional**,
-so the acknowledgement paces the upload and never gates the data.
+## How a stream flows
 
-`SPUSetSendDone` 0x26e4b8 is two instructions, `sw $zero, 0x4D94($v0)`, and
-it is reached only from `CtlDispatch_impl` reply **13**. Confirmed by reading
-the jump table at 0x4EB680 (.rodata, file offset 0x3EC680) rather than
-inferring it: entry 13 is 0x3eba00, which is the `jal func_26E4B8`.
+1. EE sends 0x190. The service replies 2 (ready) and the engine creates the
+   stream.
+2. Every `SynthEE::Poll` the engine asks for data, reply 0 in 0x1000 steps,
+   until each channel holds 0x8000 bytes of ADPCM (about 1.8 s at 32 kHz).
+3. `StreamEE::PollAll` answers in `SendToIOP` with 0x198 + 0x199 per channel
+   and closes with 0x19a. A request for a channel past the reader's own count
+   is skipped silently; a channel that stays unanswered while its siblings get
+   data is marked dead after three batches.
+4. 0x192 starts it. The mixer waits until every live channel holds 64 blocks,
+   then consumes all channels together; an underrun stalls the stream rather
+   than skewing channels.
 
-## The ack is implemented, and it is not sufficient
+## How a sample flows
 
-`synth.cpp` now handles 0xC8 (keeps the destination) and 0xC9 (counts, then
-replies 13). Control arm on one binary is `GHPC_SPU_ACK=0`.
+`SPUSendPoll` uploads ADPCM into SPU RAM (0xC8 destination, 0xC9 bytes, one
+ack each, reply 13). 0x2bc names an instance by handle, address and rate;
+0x2be plays it as an SPU2 voice would, walking SPU RAM with the block flags
+(0x04 loop start, 0x01 loop end, 0x02 repeat). A one-shot that runs off its
+last block sends reply 11. No ADSR: a stop cuts.
 
-Release, `GHPC_PAD_DRIVE=cross GHPC_COUNTIN=0.5`, reaching `game_screen` at
-t=25.3: **`chunks=1 bytes=20480` in both arms.** 20480 is exactly 0x5000, the
-per-chunk cap, so a single chunk either completed a 0x5000-byte transfer or
-the send never restarted. Acknowledging the chunk did not make a second one
-ship.
+## Reverb
 
-Two candidates, and they are distinguishable:
+Two SPU2 reverb units, one per core, the PS1 algorithm and presets from
+psx-spx ("SPU Reverb Formula", "SPU Reverb Examples"), run at 24 kHz with
+the output interpolated to 48. The game sets them up once at boot:
 
-1. **The ack is being dropped before it is sent.** Only one guest call fits
-   in an RPC result, and the dispatch ranks StreamInfo above the SPU ack. The
-   observed record order in one flush is 0xC8, 0xC9, then `StreamInfoArg`,
-   so if those share a flush the SPU ack is exactly what gets discarded.
-   Test: count dispatched replies by rank, or rank the SPU ack highest for
-   one run and see whether `chunks` moves.
-2. **The game only ever calls `SPUStartSend` once** at this point, so there
-   is no second transfer to pace. Test: a counter on 0x26e3f0.
+    core 0  mode 7 ECHO       depth 0x2d6a (0.355), delay 0x40
+    core 1  mode 4 STUDIO_C   depth 0x301b (0.376)
+    chain   off (0x5 = 0)
 
-Do not conclude between them from the current run. It distinguishes neither.
+**Only Star Power uses it.** `PlayerMatcher::OnStartStarpower` calls
+`SetReverb(true)`, which is `SetFX(kFXCore1, on)` on the guitar track; the
+guitar channels already sit on core 1 (0x191) with the send off (0x196).
+Crowd, SFX and the song are dry on hardware as well: every sample gets core
+-1 (0x2c4) and every other channel's send stays off. Core 0 is presumably
+the mic's echo (0x6 InputFX), unmodelled.
 
-**Measurement defect, introduced with the fix.** `kSpuChunkLogEvery` is 32,
-so chunks 2 through 31 print nothing. The count is still visible as the
-`spu_chunks` debug metric, but the log line alone cannot tell 1 from 31.
-Lower it before the next measurement.
+Checked offline: a click through STUDIO_C at the game's depth decays about
+29 dB/s, and the same click with the send off is silent after it.
+libsd's delay and feedback tweaks for ECHO and DELAY are not applied, and
+PIPE is assumed to be psx-spx's Half Echo.
 
-## The rest of the command surface, measured
+## Menu music start
 
-Release, one run to `game_screen`, the `[SYNTH:unhandled]` census (capped at
-16 lines, so this is the set seen early, not the whole census):
+`MetaMusic` fades its stream in on a `LinearInterpolator` keyed on
+`TaskMgr::UISeconds`, and `UIManager::Poll` zeroes that clock on every screen
+change. The port's instant disc reads let the fade start just before the
+first screen change, so it waited until the UI clock climbed back to where
+it had been: the UI time spent on App::App's 3000 ms boot splashes, about
+6.3 s every boot. `ghpc/override/Poll__9MetaMusic_0x258e88.cpp` shifts the
+interpolator by however far the clock jumps back. The music now comes up
+under `bootup_load` and 0.6 s into `main_screen` with boot skip.
 
-    0x0    len 24     0x3    len 20     0x4    len 20     0x5    len 4
-    0x133  len 4      0x136  len 4      0x191  len 8      0x195  len 12
-    0x197  len 8      0x258  len 4
+## Delivering replies
 
-The `CtlClientCall` template instantiations in `work/output/` name the
-argument types and are the way to map these: `CreateSampleArg`,
-`SampleAddrArg`, `SampleADSRArg`, `SampleVolPanArg`, `SampleSpeedArg`,
-`StreamInfoArg`, `StreamDataInfoArg`, `StreamSlipOffsetArg` and the rest.
-0x3 and 0x4 at len 20 repeating in pairs look like per-voice setup.
+Only one guest call fits in an RPC result, and `CtlClientPoll` flushes only
+when it has something to send, so the IOP cannot rely on a flush to talk.
+`ghpc/override/Poll__7SynthEE_0x2685a8.cpp` calls
+`ghpc::synth::deliverReplies` on fresh entry: queued replies are copied into
+a guest ring and run as one `invokeCurrentSequence` of `CtlDispatch` calls,
+then Poll re-enters. Poll goes on to `StreamEE::PollAll` and `CtlClientPoll`,
+so a request raised this frame is answered this frame.
 
-## Where the evidence stops
+Replies earned on a flush but outranked for the RPC result are queued rather
+than dropped. Dropping one was never harmless: a lost SPU ack leaves
+`gSpuInFlight` set and nothing retries it.
 
-From `work/r6.log` and `work/r6long.log` (2026-09-10):
+## Measured, 2026-09-21
 
-    [ps2xIOP] [SYNTH:unhandled] cmd=0xc9 len=20480    once
-    [ghpc/spu] pending=0 inflight=1                   51 lines
-    [ghpc/spu] pending=26802576 inflight=1            14 lines
+Release, `--native --ingame`, 75 s, into `lose_screen`:
 
-20480 is 0x5000, `SPUSendPoll`'s maximum chunk. One sample chunk reaches
-the IOP `SYNTH` service and is discarded. No reply 13 is sent, so
-`gSpuInFlight` latches at 1 and no second chunk ships. The unknown-command
-log is capped at 16 lines, so a second 0xc9 could not have printed anyway;
-that cap is why audio was unmeasured.
+    streams=11 bytesIn=4610720 underruns=0 samples=25 starts=25
+    [ghpc/clock] rate=1.000 uirate=1.000 screen=game_screen
 
-Whether 0xc9 is the sample command is inferred from the length, not read
-from `SPUSendPoll`'s disassembly. Confirm at 0x26e4c8 before building on it.
+WAV tap RMS 3-8k during the song, 27 clipped samples in the hottest second.
+Confirmed by ear on the song.
 
-## Metric
+The old "chunks=1" result was the log, not the upload:
+`kSpuChunkLogEvery=32` hid chunks 2 through 31. With them printed, every
+`SPUStartSend` ships its chunks, the ack rides every flush, and `pending`
+clears at the end of each sample. Neither candidate from the earlier note
+held.
 
-`[ghpc/spu2] chunks=N bytes=B records=R`, printed from `synth.cpp` on every
-0xc9 record, uncapped. `progress.py` reads `spu_chunks` and `spu_bytes` and
-scores `spu_chunks` as a span like `song_tick`. It is the literal record
-header the EE wrote, counted where it arrives, upstream of everything
-unimplemented, so a fix cannot fake it. Baseline on the current build is
-`chunks=1 bytes=20480`, flat. Anything that acknowledges the chunk must make
-it climb; the control arm is the same build with the acknowledgement off.
+What a song mixes, from `GHPC_SYNTH_DUMP` on `--ingame`:
 
-Not the metric: a counter on `PlaySound`. That path is never reached in a
-GH2 run and would read 0 forever, which is a floor, not a signal.
+    song stream   5 ch: song L/R 32250 Hz, guitar L/R 32250 Hz (vol 0 while
+                  notes are missed), one mono 16125 Hz channel
+    crowd loops   2 ch 22050 Hz streams from CrowdAudio, a new one about
+                  every 10 s, vol 0.24-0.28
+    crowd one-offs  22050 Hz voices at random speed 0.84-1.06
 
-## Knobs
+Crowd alone measures RMS ~550 against the song's ~6600. The volume is the
+game's own: `CrowdAudio::UpdateVolume` sets `base + master + excitement + FX`
+dB on the stream, and a failing run sits at low excitement.
 
-- `GHPC_SYNTH_ACK`: `Kernel/Syscalls/RPC.cpp:660-679` pokes `gSpuInFlight`
-  to 0 on an unhandled call to 0x75433178. Gated on `!handled`, and the
-  SYNTH service now marks every call handled, so the probe is probably
-  dead. Unverified.
-- `[ghpc/spu] pending= inflight=` is the debug-build stall census
-  (`EeScheduler.cpp:247`), not a steady counter.
-- `SYNTH` keeps `terminate_requests`, `stream_info_requests`,
-  `replies_dispatched`, `records_left_unanswered` (`synth.cpp:181-189`), but
-  only the ImGui panel reads them.
+## Knobs and lines
+
+    GHPC_AUDIO=0          no output device
+    GHPC_AUDIO_WAV=path   16-bit stereo 48 kHz tap of the mix
+    GHPC_SYNTH_SYNC=0     no position reports (reply 3)
+    GHPC_SPU_ACK=0        leave SPU chunks unanswered, the old control arm
+    GHPC_SYNTH_SOLO=x     song | crowd | voices: mix only that part. Soloing
+                          drops voice completion replies, diagnostic only
+    GHPC_SYNTH_DUMP=1     reverb modes, every stream channel's vol, pan,
+                          buffer and FX send, and every sounding voice, with
+                          each [ghpc/audio] line
+    GHPC_SYNTH_TRACE=1    every non-bulk synth record with its payload and
+                          seconds since start; =2 adds volume updates
+    GHPC_SYNTH_REVERB_ALL=n  send every stream channel to core n, to hear a
+                          reverb without earning Star Power
+    [ghpc/audio]          every 300 polls: streams, bytes, underruns, voices
+    [ghpc/spu2]           the first 64 SPU chunks, then every 32nd
+
+Output is SDL3 only, so it needs `PS2X_ENABLE_VULKAN`; the raylib window's
+own audio device is unused. Position reports stop while nothing pulls
+samples, so a run with no device cannot pin the chart at zero.
+
+## Not done
+
+- ADSR envelopes, mics and core 0's echo, slip streaming (0x19b-d), levels
+  (0x258), sample progress (reply 9).
+- The intro movie: `\VIDEOS\INTRO.PSS` is not staged in `work/` (only the
+  ARK, the ELF and the IOP modules are), so `--intro` stops on
+  `cut_scene_screen`. Whether PSS playback works once it is staged is
+  untested.
+- Save states: the engine is host state the SYNTH chunk does not carry, so a
+  resumed song has no audio until its streams are prepared again.
+- Prepared streams that never play keep asking for data once the EE buffer
+  runs dry (about one unanswered request a frame). Harmless, not tidy.

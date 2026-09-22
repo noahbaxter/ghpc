@@ -11,8 +11,8 @@ the rules below.
 
 **Gameplay runs at realtime through the native renderer:** `play.sh --native`,
 60 fps, game rate 1.000, lit and textured, close to the software picture but
-not identical to it (R2 below). The emulated path is still far too slow, and
-there is still no audio.
+not identical to it (R2 below). The emulated path is still far too slow.
+Songs, menu music and sample SFX play since 2026-09-21 (A1 below).
 
 **As of 2026-09-21 the whole career loop runs under `--native`**, menus,
 song, fail, quit and back, and holds game rate 0.98-1.00 under host load.
@@ -53,7 +53,7 @@ and halved every clock the game derives from it
 
     menus        43% of realtime, game speed 0.43   was 0.21 before the fix
     gameplay     19% emulated; 100% with --native (2026-09-21)
-    audio        none
+    audio        streams and samples, SDL3 out (2026-09-21)
     picture      correct on the emulated path; --native in R2
 
 The old "menus ~100% of realtime" line in this file was `eerate` on the loading
@@ -371,10 +371,18 @@ incrementally rather than all at once.
 **Exit:** no visual regression against the software path, at playable speed.
 
 ### A1: audio, in parallel
-Independent of rendering and it gates playability just as hard, because note
-timing is slaved to audio position. The protocol is solved and the ack is in;
-it is not yet sufficient. Two named candidates in `notes/audio-path.md`, both
-distinguishable, neither concluded. Do that next, not a rewrite.
+**Plays, 2026-09-21.** The IRX that decodes and mixes on a PS2 is replaced
+by `ps2x::iop::synth`: streams arrive as raw PS-ADPCM the IOP asks for,
+samples play out of an emulated SPU RAM, and the mix goes to an SDL3 device.
+Replies to the EE are delivered from a `SynthEE::Poll` override, since
+`CtlClientPoll` only flushes when it has something to say. The song is
+confirmed by ear; a 75 s run shows 0 underruns and the clock unchanged at
+`uirate=1.000`.
+
+Song time is the EE's own timer; the IOP's play position (reply 3) only
+snaps it when it drifts past 100 ms. SPU2 reverb is in and only Star Power
+uses it. Map, protocol and what is left (ADSR, save states):
+`notes/audio-path.md`.
 
 ## What to build against
 
