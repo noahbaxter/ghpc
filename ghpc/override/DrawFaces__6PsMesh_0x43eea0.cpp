@@ -405,7 +405,8 @@ bool ghpcDecodeFacePacket(const uint8_t* rdram, uint32_t self,
     return !indices.empty();
 }
 
-void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
+void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self,
+                     const float* instWorld = nullptr) {
     if (!ghpc::scene::active()) return;
 
     if (g_ghpcCamSelects != 0ull) {
@@ -447,12 +448,19 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
     // which qw660..675 are the four bone matrices. Unskinned writes one matrix
     // at qw676..679 behind 0x6C0402A4. Both paths write qw676, so the palette
     // header is what distinguishes them.
+    //
+    // A multimesh instance brings its own matrix (instWorld) and uploads
+    // neither header, so nothing is searched for.
     const uint32_t cursor = runtime->Load32(rdram, ctx, 0x70000008u);
-    const uint32_t palette = ghpcFindVifHeader(rdram, ctx, runtime, cursor, 0x6C140294u);
+    const uint32_t palette =
+        instWorld ? 0u : ghpcFindVifHeader(rdram, ctx, runtime, cursor, 0x6C140294u);
     // Either way qw676..679 is the matrix the lighting programs take the
     // normal through: the last four quadwords of the 20-qw skinned upload, or
     // the unskinned world matrix itself.
-    if (palette != 0u) {
+    if (instWorld) {
+        ghpc::scene::setWorldMatrix(instWorld);
+        ghpc::scene::setLightMatrix(instWorld);
+    } else if (palette != 0u) {
         float bones[20 * 4];
         ghpcReadQuads(rdram, ctx, runtime, palette + 0x10u, 20u, bones);
         ghpc::scene::setBonePalette(bones, 4u);
@@ -773,6 +781,15 @@ void ghpcMeshNativeArm(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, u
 }
 
 } // namespace
+
+// One instance of a multimesh, from
+// DrawShowing__11PsMultiMeshQ211RndDrawable8DrawType_0x1c88b0.cpp:
+// the same submission a DrawFaces makes, with the instance's world matrix
+// in place of the one DrawShowing would have uploaded.
+void ghpcSceneSubmitInstance(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
+                             uint32_t mesh, const float world[16]) {
+    ghpcSceneSubmit(rdram, ctx, runtime, mesh, world);
+}
 
 // Function: DrawFaces__6PsMesh
 // Address: 0x43eea0 - 0x43f038
