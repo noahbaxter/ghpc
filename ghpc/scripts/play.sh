@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Spin up the port and play it by hand.
 #
-# Defaults to the release build with boot skip on, which lands on the main
-# menu in about six seconds instead of thirty-nine. There is no state snapshot
-# in the runtime, so boot skip is the fast path: it flips one symbol in
-# ui/gen/init.dtb so bootup jumps straight to main_screen, past the intro
-# video and both logo screens.
+# Defaults to the release build with a fast boot: the memory card loads, then
+# straight to the main menu, past the intro video, the splash and its button
+# wait. Scripted runs skip the card load as well. See bootskip.py.
 #
 #   ./ghpc/scripts/play.sh                 release, straight to the main menu
 #   ./ghpc/scripts/play.sh --ingame        walk the menus and stop in the song
@@ -111,8 +109,18 @@ BIN="$ROOT/$BUILD_DIR/ps2xRuntime/ps2EntryRunner"
 # whatever it found, so a --ingame run flipped skip on, ran fast, put it back
 # to off, and the next run booted the intro again. Boot skip is a persistent
 # setting, not a per-run one. Flip it, say so, move on.
+#
+# Hand play boots fast: the save loads (and autosave comes on), then straight
+# to the main menu. A scripted run (a save state, the pad driver, an
+# unfocusable test window) skips the save load too, since it has no business
+# with the player's profile.
+SCRIPTED=0
+if [ "$INGAME" = 1 ] || [ -n "${GHPC_STATE_LOAD:-}" ] || [ -n "${GHPC_PAD_DRIVE:-}" ] ||
+   [ -n "${GHPC_PAD_AUTO:-}" ] || [ -n "${GHPC_NO_FOCUS:-}" ]; then
+  SCRIPTED=1
+fi
 SKIP_NOW="$(python3 "$ROOT/ghpc/scripts/bootskip.py" --status | awk '{print $3}')"
-WANT=$([ "$WANT_SKIP" = 1 ] && echo on || echo off)
+if [ "$WANT_SKIP" = 0 ]; then WANT=off; elif [ "$SCRIPTED" = 1 ]; then WANT=on; else WANT=fast; fi
 if [ "$SKIP_NOW" != "$WANT" ]; then
   python3 "$ROOT/ghpc/scripts/bootskip.py" "--$WANT"
 fi
@@ -136,9 +144,7 @@ ghpc  $(basename "$ELF")  [$BUILD_DIR]  boot skip $WANT${COUNTIN:+  countin $COU
   q / e    L1 / R1          1 / 3   L2 / R2
   w a s d  left stick
 
-Expect the main menu in about $([ "$WANT" = on ] && echo 6 || echo 39)s. Gameplay currently runs at
-a few frames per second and has no audio; that is the known state, not a
-broken install. Ctrl-C to quit.
+Expect the main menu in about $([ "$WANT" = off ] && echo 39 || { [ "$WANT" = fast ] && echo 15 || echo 6; })s. Ctrl-C to quit.
 
 EOF
 
