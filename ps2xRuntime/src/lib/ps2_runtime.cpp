@@ -414,6 +414,42 @@ namespace
 // game_screen, which is why no picture of this game in gameplay existed.
 std::atomic<bool> g_ghpcGameStarted{false};
 
+// The aspect the picture is shown at, per ghpc.ini [display] aspect:
+// auto (the default) follows the game's widescreen option, 4:3 and 16:9 force
+// one, square keeps the old square-pixel 8:7. The option reaches the renderer
+// as PsRnd::mAspect (+0xd4 of TheRnd, 0x4f2cb0), which
+// Options::SetWideScreen sets through Rnd::SetAspect: 2 is 16:9 and the
+// projection is squeezed for it (RndCam::UpdateLocal, Rnd::YRatio). Read each
+// frame rather than hooked, so a save state or a memcard load needs nothing.
+static float displayAspect(const uint8_t *rdram)
+{
+    static const std::string mode = ghpc::settings().get("display", "aspect", "auto");
+    if (mode == "square")
+        return 0.0f;
+    if (mode == "4:3")
+        return 4.0f / 3.0f;
+    if (mode == "16:9")
+        return 16.0f / 9.0f;
+    if (mode != "auto")
+    {
+        static bool warned = false;
+        if (!warned)
+            std::cerr << "[ghpc/config] aspect = " << mode << ": want auto, 4:3, 16:9 or square" << std::endl;
+        warned = true;
+    }
+    uint32_t rnd = 0;
+    std::memcpy(&rnd, rdram + (0x4f2cb0u & PS2_RAM_MASK), 4);
+    uint32_t aspect = 0;
+    if (rnd != 0 && (rnd & PS2_RAM_MASK) + 0xd8u <= PS2_RAM_SIZE)
+        std::memcpy(&aspect, rdram + (rnd & PS2_RAM_MASK) + 0xd4u, 4);
+    const bool wide = aspect == 2;
+    static int shown = -1;
+    if (shown != (int)wide)
+        std::cerr << "[ghpc/display] " << (wide ? "16:9, widescreen on" : "4:3") << " (mAspect=" << aspect << ")" << std::endl;
+    shown = wide;
+    return wide ? 16.0f / 9.0f : 4.0f / 3.0f;
+}
+
 // Produces the RGBA8 frame both renderers present: the whole FB_WIDTH x
 // FB_HEIGHT buffer, of which outWidth x outHeight is the live picture. Returns
 // null when this vsync tick has already been presented and there is nothing
@@ -3756,6 +3792,7 @@ void PS2Runtime::run()
                 frame.bufferHeight = FB_HEIGHT;
                 frame.sourceWidth = vkWidth;
                 frame.sourceHeight = vkHeight;
+                frame.displayAspect = displayAspect(m_memory.getRDRAM());
                 m_hostRenderer->uploadFrame(frame);
             }
             m_hostRenderer->present();

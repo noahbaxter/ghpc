@@ -327,6 +327,8 @@ namespace ghpc
             uint32_t m_bufferHeight = 0u;
             uint32_t m_sourceWidth = 0u;
             uint32_t m_sourceHeight = 0u;
+            float m_displayAspect = 0.0f; // Frame::displayAspect
+
             bool m_hasFrame = false;
 
             // Parity gate, GHPC_VK_PARITY=N. Reads the presented swapchain back
@@ -3163,6 +3165,7 @@ namespace ghpc
             // the buffer would read past the staging image in the blit.
             m_sourceWidth = std::min(frame.sourceWidth, frame.bufferWidth);
             m_sourceHeight = std::min(frame.sourceHeight, frame.bufferHeight);
+            m_displayAspect = m_parityEvery > 0 ? 0.0f : frame.displayAspect;
             m_hasFrame = m_sourceWidth != 0u && m_sourceHeight != 0u;
         }
 
@@ -3343,10 +3346,12 @@ namespace ghpc
             VkRect2D dstRect{};
             if (m_hasFrame)
             {
-                // Same letterbox the raylib path computes: fit the source rect
-                // into the window, preserving aspect, centred.
-                const float srcWidth = static_cast<float>(m_sourceWidth);
+                // Fit the picture into the window at its display aspect,
+                // centred. The native path rasterises at the size of this rect
+                // and the blit stretches into it, so both de-squeeze together.
                 const float srcHeight = static_cast<float>(m_sourceHeight);
+                const float srcWidth = m_displayAspect > 0.0f ? srcHeight * m_displayAspect
+                                                              : static_cast<float>(m_sourceWidth);
                 const float scale = std::min(static_cast<float>(m_swapchainExtent.width) / srcWidth,
                                              static_cast<float>(m_swapchainExtent.height) / srcHeight);
                 const int32_t dstWidth = static_cast<int32_t>(srcWidth * scale);

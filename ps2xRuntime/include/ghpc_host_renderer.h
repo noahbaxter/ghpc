@@ -43,6 +43,11 @@ namespace ghpc
             uint32_t bufferHeight = 0;
             uint32_t sourceWidth = 0;
             uint32_t sourceHeight = 0;
+            // Width over height the picture is shown at. PS2 pixels are not
+            // square: 512x448 fills a 4:3 TV, or a 16:9 one when the game's
+            // widescreen option squeezes its projection. 0 keeps the pixels
+            // square, which the 1:1 parity check needs.
+            float displayAspect = 0.0f;
         };
 
         virtual bool init(const Config &config) = 0;
