@@ -18,8 +18,9 @@ Songs, menu music and sample SFX play since 2026-09-21 (A1 below).
 song, fail, quit and back, and holds game rate 0.98-1.00 under host load.
 Flashing, wrong textures, sustains and the kick drum were fixed the same
 day (scene frames close at `PsRnd::EndDrawing`; mutable meshes decode from
-their DMA-chain face packet). The note gems still lack their white tops and
-base rings, parked in `BACKLOG.md` with what was ruled out. The cyan wedge
+their DMA-chain face packet). On 2026-09-22 the gem tops (a `PsMultiMesh`)
+and a second song's stale meshes were fixed; what `--native` still never
+receives is listed in `BACKLOG.md` `Now`. The cyan wedge
 that grows over the venue as a song fails is the game's own effect, not a
 fault. `ghpc/scripts/route.sh` drives the whole loop in 85s and prints one
 line per arm; judge picture changes on a zoomed crop, since `swOnly` drifts
@@ -213,7 +214,7 @@ button icons) are decoded from it and draw natively since 2026-09-21. The
 window title names the renderer path that came up, e.g.
 `[Vulkan: native, VU1 off]` or `[raylib: software GS]`.
 
-**Do this next:** `BACKLOG.md` `Now`, item 1 (the gem caps).
+**Do this next:** `BACKLOG.md` `Now`, item 1c (`DrawRect`).
 
 Geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
 measured transform in a vertex shader, a depth buffer, a render pass, one

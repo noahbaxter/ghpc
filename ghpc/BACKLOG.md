@@ -20,52 +20,91 @@ Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
 
 ## Now
 
-**`--native` runs the whole career loop at stable speed. Make what it draws
-right.** As of 2026-09-21 the loop main → career → expert → song → fail →
-quit → main → song runs unattended at game rate 0.98-1.00. Flashing, wrong
-textures, sustains and the kick drum are fixed; see the round below. Left:
+**`--native` plays the career loop at realtime and a second song now draws
+like the first. What is left is content it never receives.** As of
+2026-09-22 the gems are whole and a reloaded venue is right; see the round
+below. In order of what a player sees:
 
-1. **Gem caps: the white top and the black and white base ring of every
-   note.** Missing geometry or UVs, not lighting. The gem is draw
-   `0x008ac750`/`0x008ab530` (28 verts, atlas `0x008912d0`, point light
-   0x436), and over it the cap, mesh `0x008aa400`, same vertex positions,
-   texture `0x00890d50` (black, white ellipse at the centre), blended,
-   ZTST always, UV program 0x139.
+1. **Draw paths the seam does not hook.** Measured, not guessed:
+   `GHPC_DRAWPATH_CENSUS=N` counts `PsRnd::FlushPacket` and `PsMat::Select`
+   callers by return address and `ghpc/scripts/drawpaths.py <log>` names
+   them. Every draw path ends in FlushPacket, so an unhooked caller is
+   content `--native` drops. A 60s song and the full route agree:
 
-   0x139 is overlay 0x09c8, read from the disassembly: position and normal
-   through qw676..679, then the rows E of qw691..693 (PsMat+0x170), eye
-   qw698 through E, `V = eye - pos`, `R = 2N(N.V) - V`,
-   `uv = R.xy * qw694.x / |V| + qw694.xy` (RSQRT numerator is qw694.x;
-   qw694 reads 0.5 0.5). Implemented once and backed out: offline, with
-   the logged E, eye and object matrix, the cap's upward faces land at
-   u 0.01-0.3, the black edge, where the reference is white at the centre.
-   So one input is not what VU1 sees. Suspect the eye (qw698 captured at
-   PsCam::Select, may be re-uploaded) and `lightMatrix` (its translation
-   did not match the draw's own on the first check). E changes as a gem
-   moves, so the game builds it per gem; find the writer of PsMat+0x170.
-   Also check the gem atlas UVs (u 0.52-0.74 green, 0.02-0.24 yellow) land
-   on the white and black regions and whether CLAMP_1 region modes apply.
+       PsParticleSys::DrawShowing/DrawSprites 0x1c85d8/0x1c83d8   ~3/frame
+       PsRnd::DrawRect 0x1c0258                                   ~4/frame
+       PsMultiMesh::DrawShowing, billboard mode                   skipped
 
-   Loop that works: `vkarms.sh` from `songmesh`, buckets 12-19 have notes;
-   the draw table now has `uvp` and `lp` columns; `GHPC_TEX_DUMP_MAX` lifts
-   the 64-texture dump cap; the MESH chunk of a state holds every cached
-   mesh's verts for offline maths. Do not judge this on `swOnly`: two
-   identical arms from the same state diverged by 4000 after bucket 10 on
-   2026-09-21. Judge it on a zoomed crop against the reference.
+   a. **Particles: drawn (5a1f55c, 6c4a081, ed50aaf), checked in six
+      venues.** VU1 0x5CC is decoded (header of
+      `override/DrawSprites__13PsParticleSys_0x1c83d8.cpp`): one sprite per
+      particle, colour `rgba * qw695`, ambient only under the environ.
+      Prebuilt-packet systems (`+0x2d0`, the club's spider-web bulbs) are
+      read back out of the packet. The "too bright" smoke was highlight
+      TFX: the particle DrawShowing forces TEX0.TFX to modulate, and the
+      native draw now does too. Left: Star Power effects unchecked, and no
+      venue has been compared against the software path except tier 1.
+   b. **Billboard multimeshes: the crowd, drawn (3af9f90, 17771c1).** Each
+      card is its mesh's live 4 verts; the mesh is mutable and a stale
+      cache entry at its address used to win. Matches the software path in
+      one venue. Other venues unchecked; the eyeball-head and monkey-head
+      crowd cheats (`long_cheats.dtb`) swap the characters and exercise it.
+   c. **`DrawRect`.** Full-screen overlays, fades, screen masks; some
+      flushes carry no material, so a few are flat colour. Check whether the
+      Star Power flash or the pause dim lives here.
 
-2. **Audio (A1): plays as of 2026-09-21.** Songs, menu music from the
-   loading screen on, SFX, crowd, and the Star Power reverb. Left: ADSR (a
-   stop cuts instead of releasing), carrying the engine in save states, a
-   by-ear check of the Star Power reverb, and the intro movie, which is not
-   staged (`\VIDEOS\INTRO.PSS`). `notes/audio-path.md`.
+   Not content: `PsEnviron::Select` (light upload), `SwapBuffers`,
+   `StopDrawing`. The census only sees paths through FlushPacket or
+   `PsMat::Select`; the intro movie and `ClearZBuffer` would not show.
 
-Deferred from this round, each with its number: the brightness curve (+6
-darks, +3 mids, -1 whites, every menu), the loading glow (error 10.7),
-caching the face packet decode by mesh, per-visit driver rules
-(`screen#2=`), a speed-up knob (needs spare speed measured first).
+2. **Render-target textures: done (5b8b402).** The 128x256 CT16 target at
+   FBP 0xb0 is the crowd's impostor sheet. `WorldCrowd::DrawShowing`
+   renders one character type into it, draws that type's cards, then the
+   next type (0x2aec3c..0x2af014), so a target sampled then redrawn in one
+   frame is one image per generation. `GHPC_VK_RT=0` is the control arm.
+
+3. **Performance.** The software rasteriser skip is in (592f8bf):
+   `GHPC_GS_RASTER=0`, default under `--native`. It fixed venue cameras at
+   37-42 fps, which spent 740-915k fragments a frame on a picture nothing
+   shows. Left: one 45-52 fps dip for about 3s around a camera change with
+   zero software fragments behind it, never profiled.
+
+4. **Audio (A1): plays.** Left: ADSR (a stop cuts instead of releasing),
+   carrying the engine in save states, a by-ear check of the Star Power
+   reverb, and the intro movie, which is not staged
+   (`\VIDEOS\INTRO.PSS`). `notes/audio-path.md`.
+
+5. **Coverage.** Everything here was judged on one venue and a few songs.
+   Walk the other venues, harder difficulties, multiplayer and the rest of
+   the menus under `--native`. R3's exit (no visual regression against the
+   software path) is not met, and there is still no determinism gate to
+   judge it with. Also deferred with their numbers: the brightness curve
+   (+6 darks, +3 mids, -1 whites, every menu), the loading glow (error
+   10.7), caching the face packet decode by mesh, per-visit driver rules
+   (`screen#2=`), a speed-up knob.
+
+6. **Scope still ahead**, from `CLAUDE.md`'s target, detail under `Later`
+   and `Deferred`: HID guitar input and calibration, with input and A/V
+   latency measured; consuming GH2DX-Unified for mods; GH1 and Rocks the
+   80s; Linux and Windows builds (Vulkan should carry, never tried).
 
 Everything below this line in `Now` is the history of getting here, kept
 for its measurements.
+
+**2026-09-22, gems and the second song.** The gem tops and base rings are a
+`PsMultiMesh`: material 0x00898c70 on the gem atlas, selected from
+`PsMultiMesh::DrawShowing`, which builds its own packet and never reaches
+DrawFaces. Its override submits each instance's Transform (node+0x10..0x40)
+through `ghpcSceneSubmit`; `GHPC_SCENE_MULTIMESH=0` is the control. The old
+theory was wrong: the cap, mesh 0x008aa400, is a specular glint (texture
+0x00890d50, black with a highlight), and VU1's own output for its UV program
+0x139 matched the offline maths to float precision, so there was nothing to
+fix in it. Second song: the host mesh cache never evicted, and Sync only
+stores for a non-mutable owner with verts, so a reused address served its
+previous occupant (the kick drum missing, a smoke card drawn on the EXIT
+sign's quad, 2,500+ stale entries over one route). Evicted at the PsMesh
+constructor, 0x1c3428; `GHPC_MESH_EVICT=0` is the control. `GHPC_TEX_LOG=1`
+logs every texture decode with the guest memory it read.
 
 **2026-09-21, the round that fixed the picture.** `route.sh` is the harness
 (one line per arm from `routesum.py`). Scene frames close in a
@@ -339,11 +378,38 @@ Never load a state that has not passed item 6.
 
 ## Later
 
-- **What the 128x256 offscreen target is for.** 87 draws render into it
-  through the venue's second camera and are skipped. If a screen draw samples
-  it (`renderTarget=` in `[ghpc/scene/tex]`, 0 on game_screen) it needs an
-  offscreen Vulkan target; if nothing does, the GS path composites it outside
-  the seam.
+- **Settings overlay.** Emulator-style menu in the SDL/Vulkan window, Dear
+  ImGui on the Vulkan backend (ImGui is already fetched, but only the raylib
+  path uses it). Pauses the game; live settings for resolution, fullscreen,
+  aspect, widescreen, frame cap, audio and bindings, written back to
+  ghpc.ini. Proposed key: Esc opens it and the pad's Circle/back moves from
+  Esc to Backspace. Not started.
+- **Cheats menu.** A page of the settings overlay, not typed on the main menu.
+  Unlock all is `TheCampaign` (*0x440c24) +0x80 (`mAllAccess`), which is what
+  `{campaign set_all_access 1}` stores; `[cheats] unlock_all = 1` in
+  ghpc.ini sets it (6792670; quick play then lists every tier and the
+  bonus songs). The rest live in
+  `config/gen/long_cheats.dtb` as DTA `set`s on data variables (air guitar,
+  performance, hyper speed, horse head, flaming head, eyeball-head and
+  monkey-head crowd), so they need either a way to run a DTA expression from
+  the host or each variable's address. Typing a sequence through the pad
+  driver did not trigger unlock all (2026-09-24), cause unknown. The in-game
+  cheat also sets `disable_save` and `disable_career`; the ini one does not.
+- **Full 3D crowd, a mod.** Replace the impostor cards with real characters,
+  since the native path has the polygon budget. The game already has a 3D
+  crowd path: `WorldCrowd` "show_3d_only" (+0x90), `Set3DCharList` 0x2ad850,
+  `CamShot::Set3DCrowd` 0x2a4658. Try flipping that before writing anything.
+- **Save-state runs die under host load.** `EE invocation stack space
+  exhausted` (`EeScheduler::invocationStackTop`) at the unhandled IOP RPC
+  right after audio comes up. A state restores `m_invocationStackTops` but
+  not the pool cursor in `reserveAsyncCallbackStack`, and whether the next
+  reservation fits depends on timing. 2026-09-24: every arm failed at load
+  average 115-140 and passed at 5, on both sides of an unrelated change.
+  Until fixed, an arm that took 0 shots is this, not the change under test.
+- **Hidden, silent test runs: done for the scripts (f5377f5).** vkarms,
+  vkscreens and route default to `GHPC_HIDE_WINDOW=1 GHPC_AUDIO=0`; the
+  window exists but is never on screen, audio produces 0 frames, and shots
+  still work. Hand-driven `play.sh` runs still need both set by hand.
 - **The remaining gameplay picture error**, 13-15 per channel: fog (XYZF2,
   never implemented), the point light's unclamped dot, ZB_ONLY depth writes,
   the depth default, and the unreproduced material programs (8 sphere-map
