@@ -584,11 +584,14 @@ void ghpcSceneSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uin
     // what VU1 draws and it is decoded first. The live vectors drawn as a
     // strip, 0-1-2, 1-2-3, drew the sustains as a zigzag; they are the
     // fallback, and GHPC_SCENE_MUTABLE=live forces them for a control arm.
+    // A cache hit does not override this: the entry is another mesh's, left at
+    // a reused address. The crowd's billboards hit 20- and 76-vertex
+    // character parts that way and drew them with the impostor sheet on.
     static const bool s_mutableLive = []() {
         const char* e = std::getenv("GHPC_SCENE_MUTABLE");
         return e != nullptr && std::strcmp(e, "live") == 0;
     }();
-    if (!cached && (READ32(self + 0x140u) & 0x1fu) != 0u) {
+    if ((READ32(self + 0x140u) & 0x1fu) != 0u) {
         uint32_t batches = 0u;
         if (s_packet && !s_mutableLive && ghpcDecodeFacePacket(rdram, self, s_verts, s_indices, &batches)) {
             ghpc::scene::submitDynamicMesh(self, s_verts.data(), (uint32_t)s_verts.size(),
