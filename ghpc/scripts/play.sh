@@ -135,6 +135,19 @@ fi
 
 [ -n "$COUNTIN" ] && export GHPC_COUNTIN="$COUNTIN"
 
+# Only hand play writes work/mc0. A scripted run (a save state, the pad
+# driver, an unfocusable test window) autosaves whatever profile it has, which
+# overwrote the player's progress. It gets a copy of the card instead, thrown
+# away on exit. GHPC_MC_ROOT set by the caller wins.
+if [ -z "${GHPC_MC_ROOT:-}" ] && [ "$SCRIPTED" = 1 ]; then
+  GHPC_MC_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ghpc-mc.XXXXXX")"
+  export GHPC_MC_ROOT
+  # The runtime puts slot 1 beside it, at <root>_slot1.
+  trap 'rm -rf "$GHPC_MC_ROOT" "$GHPC_MC_ROOT"_slot*' EXIT
+  [ -d "$WORK/mc0" ] && cp -Rp "$WORK/mc0/." "$GHPC_MC_ROOT/"
+  echo "scripted run: memory card is a throwaway copy at $GHPC_MC_ROOT"
+fi
+
 cat <<EOF
 ghpc  $(basename "$ELF")  [$BUILD_DIR]  boot skip $WANT${COUNTIN:+  countin $COUNTIN}
 

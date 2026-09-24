@@ -1356,6 +1356,12 @@ void PS2Runtime::configureIoPathsFromElf(const std::string &elfPath)
         paths.cdRoot = paths.elfDirectory;
         paths.mcRoot = paths.elfDirectory / "mc0";
     }
+    // GHPC_MC_ROOT puts the memory card elsewhere, so a scripted run's
+    // autosaves cannot overwrite the player's profile.
+    if (const char *mc = std::getenv("GHPC_MC_ROOT"); mc && *mc)
+    {
+        paths.mcRoot = std::filesystem::path(mc);
+    }
 
     setIoPaths(paths);
 }
