@@ -3808,7 +3808,19 @@ void PS2Runtime::run()
                 const GSDebugSnapshot snap = m_gs.getDebugSnapshot();
                 ghpc::scene::setGsOffset((float)snap.ctx[0].xyoffset.ofx / 16.0f,
                                          (float)snap.ctx[0].xyoffset.ofy / 16.0f);
-                ghpc::scene::setGsTexa(snap.texa.ta0, snap.texa.ta1, snap.texa.aem);
+                // TEXA as PsRnd last sent it, from its register shadow at
+                // ThePsRnd (0x4f2780) + 0xF0 + 0x3B * 8. Under VU1 off the
+                // packets that carry it never reach the GS, whose own TEXA
+                // then reads zero and turns every 16-bit texel transparent.
+                uint64_t texa = 0;
+                std::memcpy(&texa, m_memory.getRDRAM() + (0x4f2a48u & PS2_RAM_MASK), 8);
+                // Held back while both read zero: a 16-bit texture is decoded
+                // once, and one decoded under an unset TEXA stays transparent.
+                if (texa != 0)
+                    ghpc::scene::setGsTexa((uint32_t)(texa & 0xFFu), (uint32_t)((texa >> 32) & 0xFFu),
+                                           ((texa >> 15) & 1u) != 0);
+                else if (snap.texa.ta0 != 0 || snap.texa.ta1 != 0 || snap.texa.aem)
+                    ghpc::scene::setGsTexa(snap.texa.ta0, snap.texa.ta1, snap.texa.aem);
             }
 
             uint32_t vkWidth = FB_WIDTH;
