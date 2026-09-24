@@ -1,7 +1,9 @@
 #include "Common.h"
 #include "Pad.h"
 #include "ghpc_drive.h"
+#include "ghpc_config.h"
 #include "ghpc_host_renderer.h"
+#include "ghpc_input.h"
 #include "runtime/ghpc_state.h"
 
 namespace ps2_stubs
@@ -204,6 +206,85 @@ namespace
             setButton(state, kPadBtnStart, IsGamepadButtonDown(gamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT));
         }
 
+        // Fret 0-4, green to orange, as the button the game reads for the
+        // controller it sees (beatmatch_controller.dtb):
+        //   joypad  L2 L1 R1 R2 Cross
+        //   guitar  R2 Circle Triangle Cross Square   (GHPC_PAD_GUITAR)
+        uint16_t fretButton(int fret)
+        {
+            static const uint16_t kJoypadFrets[5] = {kPadBtnL2, kPadBtnL1, kPadBtnR1, kPadBtnR2, kPadBtnCross};
+            static const uint16_t kGuitarFrets[5] = {kPadBtnR2, kPadBtnCircle, kPadBtnTriangle, kPadBtnCross, kPadBtnSquare};
+            return (ghpcGuitarMode() ? kGuitarFrets : kJoypadFrets)[fret];
+        }
+
+        // A controller with bindings from ghpc.ini, i.e. a guitar. Laid out
+        // as the RedOctane PS2 guitar reports itself (PCSX2's PadGuitar):
+        // strum on D-pad up/down, star power button on Select, the tilt
+        // switch on L2, and the whammy on the left stick's Y byte, 0x7f at
+        // rest down to 0 fully pressed. GH2 reads that byte as
+        // JoypadData::mSticks[0][1] and counts only its negative half as
+        // whammy travel (JoypadController::GetWhammyBar, 0x274858).
+        void applyBoundJoystick(PadInputState &state, const ghpc::input::Bindings &b,
+                                const ghpc::input::JoySnapshot &s)
+        {
+            using namespace ghpc::input;
+            for (int i = 0; i < 5; ++i)
+                setButton(state, fretButton(i), held(b.digital[kGreen + i], s));
+            setButton(state, kPadBtnUp, held(b.digital[kStrumUp], s));
+            setButton(state, kPadBtnDown, held(b.digital[kStrumDown], s));
+            setButton(state, kPadBtnStart, held(b.digital[kStart], s));
+            setButton(state, kPadBtnSelect, held(b.digital[kSelect], s));
+            // A joypad has no tilt switch; its star power is Select alone
+            // (force_mercury), and L2 is its green fret.
+            setButton(state, ghpcGuitarMode() ? kPadBtnL2 : kPadBtnSelect, held(b.digital[kTilt], s));
+
+            if (b.whammy.index >= 0)
+                state.ly = static_cast<uint8_t>(std::lround(kPadAnalogCenter * (1.0f - amount(b.whammy, s))));
+        }
+
+        // A controller SDL knows the layout of, with none bound: the same
+        // mapping the raylib path gives a gamepad.
+        void applyHostGamepad(PadInputState &state, const ghpc::input::JoySnapshot &s)
+        {
+            using namespace ghpc::input;
+            auto down = [&](int b) { return ((s.gpButtons >> b) & 1u) != 0; };
+            setButton(state, kPadBtnUp, down(kGpDpadUp));
+            setButton(state, kPadBtnDown, down(kGpDpadDown));
+            setButton(state, kPadBtnLeft, down(kGpDpadLeft));
+            setButton(state, kPadBtnRight, down(kGpDpadRight));
+            setButton(state, kPadBtnCross, down(kGpSouth));
+            setButton(state, kPadBtnCircle, down(kGpEast));
+            setButton(state, kPadBtnSquare, down(kGpWest));
+            setButton(state, kPadBtnTriangle, down(kGpNorth));
+            setButton(state, kPadBtnL1, down(kGpLeftShoulder));
+            setButton(state, kPadBtnR1, down(kGpRightShoulder));
+            setButton(state, kPadBtnL2, s.gpAxes[kGpLeftTrigger] > 0.5f);
+            setButton(state, kPadBtnR2, s.gpAxes[kGpRightTrigger] > 0.5f);
+            setButton(state, kPadBtnL3, down(kGpLeftStick));
+            setButton(state, kPadBtnR3, down(kGpRightStick));
+            setButton(state, kPadBtnSelect, down(kGpBack));
+            setButton(state, kPadBtnStart, down(kGpStart));
+            state.lx = axisToByte(s.gpAxes[kGpLeftX]);
+            state.ly = axisToByte(s.gpAxes[kGpLeftY]);
+            state.rx = axisToByte(s.gpAxes[kGpRightX]);
+            state.ry = axisToByte(s.gpAxes[kGpRightY]);
+        }
+
+        // The Vulkan backend's controller. raylib reads its own, above.
+        void applyHostJoystick(PadInputState &state)
+        {
+            if (IsWindowReady())
+                return;
+            ghpc::input::JoySnapshot s;
+            if (!ghpc::hostJoystick(s))
+                return;
+            static const ghpc::input::Bindings bindings = ghpc::input::loadBindings(ghpc::settings());
+            if (bindings.any)
+                applyBoundJoystick(state, bindings, s);
+            else if (s.isGamepad)
+                applyHostGamepad(state, s);
+        }
+
         // raylib's window when it owns one, else the Vulkan backend's SDL one.
         bool keyDown(int key)
         {
@@ -233,13 +314,10 @@ namespace
             setButton(state, kPadBtnL1, keyDown(KEY_Q));
             setButton(state, kPadBtnR1, keyDown(KEY_E));
 
-            static const uint16_t kJoypadFrets[5] = {kPadBtnL2, kPadBtnL1, kPadBtnR1, kPadBtnR2, kPadBtnCross};
-            static const uint16_t kGuitarFrets[5] = {kPadBtnR2, kPadBtnCircle, kPadBtnTriangle, kPadBtnCross, kPadBtnSquare};
-            const uint16_t *frets = ghpcGuitarMode() ? kGuitarFrets : kJoypadFrets;
             for (int i = 0; i < 5; ++i)
             {
                 if (keyDown(KEY_ONE + i))
-                    setButton(state, frets[i], true);
+                    setButton(state, fretButton(i), true);
             }
 
             setButton(state, kPadBtnStart, keyDown(KEY_ENTER));
@@ -384,6 +462,7 @@ namespace
                 // every open port, a keypress reached both, and a menu
                 // that takes input from either moved twice per press.
                 applyGamepadState(state);
+                applyHostJoystick(state);
                 applyKeyboardState(state, portState.analogMode);
 
                 // F5 saves the screen on show as slot menu_<screen>, by hand,

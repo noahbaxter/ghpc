@@ -56,6 +56,7 @@ namespace ghpc
 
 #else
 
+#include "ghpc_input.h"
 #include "ghpc_scene.h"
 // For the screen name a shot is tagged with. Every speed reporter in this
 // project carries one, because a number or a picture off the loading screen
@@ -2992,6 +2993,7 @@ namespace ghpc
                 std::cerr << "[ghpc/vk] SDL_CreateWindow: " << SDL_GetError() << std::endl;
                 return false;
             }
+            hostInputOpen();
 
             if (!createInstance())
             {
@@ -3131,6 +3133,7 @@ namespace ghpc
                 SDL_DestroyWindow(m_window);
                 m_window = nullptr;
             }
+            hostInputClose();
             if (m_ownsSdlVideo)
             {
                 SDL_QuitSubSystem(SDL_INIT_VIDEO);
@@ -3213,6 +3216,7 @@ namespace ghpc
             // the first point it is known to be.
             s_keysLive.store(true, std::memory_order_release);
             SDL_Event event;
+            bool devicesChanged = false;
             while (SDL_PollEvent(&event))
             {
                 switch (event.type)
@@ -3224,10 +3228,15 @@ namespace ghpc
                 case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                     m_swapchainDirty = true;
                     break;
+                case SDL_EVENT_JOYSTICK_ADDED:
+                case SDL_EVENT_JOYSTICK_REMOVED:
+                    devicesChanged = true;
+                    break;
                 default:
                     break;
                 }
             }
+            hostInputPoll(devicesChanged);
         }
 
         void VulkanRenderer::present()
