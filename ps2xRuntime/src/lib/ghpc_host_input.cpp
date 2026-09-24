@@ -107,6 +107,9 @@ namespace ghpc
 
     void hostInputOpen()
     {
+        // The controller keeps playing when the window loses focus, e.g. to a
+        // second monitor or the terminal that launched it.
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
         if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD))
         {
             std::fprintf(stderr, "[ghpc/input] SDL_InitSubSystem(GAMEPAD): %s\n", SDL_GetError());
