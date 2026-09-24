@@ -574,6 +574,14 @@ namespace ghpc
             {
                 d.material.lightProgram = lightProgram;
             }
+            // PsParticleSys::DrawShowing, after PsMat::Select, sets TEX0_1's
+            // TFX field (mask bits 35-36) to 0 when the material's TFX is
+            // highlight (0x1c871c..0x1c8760). Highlight would add the vertex
+            // alpha to every texel, which drew smoke as solid squares.
+            if (lightProgram == 0x5CCu && d.material.tfx == 2u)
+            {
+                d.material.tfx = 0u;
+            }
             d.dynVertOffset = (uint32_t)s.building.dynVerts.size();
             d.dynIndexOffset = (uint32_t)s.building.dynIndices.size();
             s.building.dynVerts.insert(s.building.dynVerts.end(), verts, verts + vertCount);
