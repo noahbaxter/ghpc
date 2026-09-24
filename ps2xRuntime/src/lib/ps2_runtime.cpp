@@ -421,7 +421,7 @@ std::atomic<bool> g_ghpcGameStarted{false};
 // Options::SetWideScreen sets through Rnd::SetAspect: 2 is 16:9 and the
 // projection is squeezed for it (RndCam::UpdateLocal, Rnd::YRatio). Read each
 // frame rather than hooked, so a save state or a memcard load needs nothing.
-static float displayAspect(const uint8_t *rdram)
+static float displayAspect(uint8_t *rdram)
 {
     static const std::string mode = ghpc::settings().get("display", "aspect", "auto");
     if (mode == "square")
@@ -439,8 +439,31 @@ static float displayAspect(const uint8_t *rdram)
     }
     uint32_t rnd = 0;
     std::memcpy(&rnd, rdram + (0x4f2cb0u & PS2_RAM_MASK), 4);
+    const bool rndLive = rnd != 0 && (rnd & PS2_RAM_MASK) + 0xd8u <= PS2_RAM_SIZE;
+
+    // Widescreen on by default, as Options::SetWideScreen(true) would leave
+    // it: Rnd's aspect (+0xd4) and TheOptions' (*0x440bf0) mWideScreen
+    // (+0x38). A camera takes the aspect when it builds its projection, so
+    // it goes in from the moment TheRnd exists, before the first menu camera,
+    // and is held until TheOptions exists to take the flag. After that a save
+    // load or the options menu goes through the game's own path (and
+    // SyncVideoOptions keeps it on for a load).
+    static bool s_defaulted = !ghpc::settings().getBool("display", "widescreen", true);
+    if (!s_defaulted && rndLive)
+    {
+        const uint32_t on = 1u, wide = 2u;
+        std::memcpy(rdram + (rnd & PS2_RAM_MASK) + 0xd4u, &wide, 4);
+        uint32_t options = 0;
+        std::memcpy(&options, rdram + (0x440bf0u & PS2_RAM_MASK), 4);
+        if (options != 0 && (options & PS2_RAM_MASK) + 0x3cu <= PS2_RAM_SIZE)
+        {
+            std::memcpy(rdram + (options & PS2_RAM_MASK) + 0x38u, &on, 4);
+            s_defaulted = true;
+        }
+    }
+
     uint32_t aspect = 0;
-    if (rnd != 0 && (rnd & PS2_RAM_MASK) + 0xd8u <= PS2_RAM_SIZE)
+    if (rndLive)
         std::memcpy(&aspect, rdram + (rnd & PS2_RAM_MASK) + 0xd4u, 4);
     const bool wide = aspect == 2;
     static int shown = -1;
