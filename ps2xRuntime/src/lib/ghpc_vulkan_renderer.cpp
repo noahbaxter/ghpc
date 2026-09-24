@@ -2830,7 +2830,8 @@ namespace ghpc
                 if (FILE *t = std::fopen(tablePath.c_str(), "w"))
                 {
                     std::fprintf(t, "# id index meshKey matrices verts indices ztst zwrite blend "
-                                    "texKey tfx ate atst afail tx ty tz cam fbp fbw ofx ofy scissor uvp lp\n");
+                                    "texKey tfx ate atst afail tx ty tz cam fbp fbw ofx ofy scissor uvp lp "
+                                    "prelit env colA scaleA alphaEq\n");
                     // Cameras numbered by first appearance, and listed after
                     // the draws, so a draw's camera is one lookup.
                     std::vector<scene::Camera> cams;
@@ -2849,14 +2850,15 @@ namespace ghpc
                         }
                         const scene::Target &g = r.target;
                         std::fprintf(t, "%u %u 0x%08x %u %u %u %u %d %d 0x%08x %u %d %u %u %.2f %.2f %.2f %zu "
-                                        "%u %u %.0f %.0f %u..%u,%u..%u 0x%x 0x%x\n",
+                                        "%u %u %.0f %.0f %u..%u,%u..%u 0x%x 0x%x %d %d %.3f %.3f 0x%02x\n",
                                      r.index + 1u, r.index, r.meshKey, r.matrixCount, r.vertCount,
                                      r.indexCount, m.ztst, m.depthWrite ? 1 : 0, m.blend ? 1 : 0,
                                      m.texKey, m.tfx, m.alphaTest ? 1 : 0, m.atst, m.afail,
                                      r.translation[0], r.translation[1], r.translation[2], cam,
                                      g.fbp, g.fbw, g.ofx, g.ofy,
                                      g.scissor[0], g.scissor[1], g.scissor[2], g.scissor[3],
-                                     m.uvProgram, m.lightProgram);
+                                     m.uvProgram, m.lightProgram, m.prelit ? 1 : 0, m.useEnviron ? 1 : 0,
+                                     m.color[3], m.rgbaScale[3], m.alphaEq);
                     }
                     for (size_t c = 0u; c < cams.size(); ++c)
                     {

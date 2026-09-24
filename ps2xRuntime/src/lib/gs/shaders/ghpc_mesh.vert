@@ -80,7 +80,9 @@ layout(push_constant) uniform Push
 // row i: the object normal goes to world as n.x*lm[0] + n.y*lm[1] + n.z*lm[2].
 vec4 vuLitColour(DrawData d)
 {
-    bool prelit = (d.lightFlags & 1u) != 0u;
+    // A skinned vertex's colour field holds its four bone weights, so a
+    // skinned draw has no vertex colour to be prelit with.
+    bool prelit = (d.lightFlags & 1u) != 0u && d.matrixCount == 1u;
     bool env = (d.lightFlags & 2u) != 0u;
     vec4 ambient = d.lights[0];
 
