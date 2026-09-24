@@ -473,7 +473,15 @@ add_library(ps2_runtime STATIC
     src/lib/gs/ghpc_mesh_cache.cpp
     src/lib/ghpc_state.cpp
     src/lib/ghpc_synth_bridge.cpp
-    src/lib/ghpc_vulkan_renderer.cpp
+    src/lib/vk/vk_renderer.cpp
+    src/lib/vk/vk_device.cpp
+    src/lib/vk/vk_pipeline.cpp
+    src/lib/vk/vk_mesh_stubs.cpp
+    src/lib/vk/vk_buffers.cpp
+    src/lib/vk/vk_textures.cpp
+    src/lib/vk/vk_render_targets.cpp
+    src/lib/vk/vk_draw_scene.cpp
+    src/lib/vk/vk_capture.cpp
     src/lib/ghpc_overlay.cpp
     src/lib/ghpc_config.cpp
     src/lib/ghpc_input.cpp

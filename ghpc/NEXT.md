@@ -157,7 +157,8 @@ Pro, a 3-image B8G8R8A8_UNORM swapchain, 771 frames presented over a 15s hold,
 and the raylib arm still reaching the main menu.
 
 The seam is `ghpc::HostRenderer` in `include/ghpc_host_renderer.h`, implemented
-by `src/lib/ghpc_vulkan_renderer.cpp`. `PS2Runtime::m_hostRenderer` is null on
+by `src/lib/vk/` (one file per part; `vk_renderer.h` declares the class).
+`PS2Runtime::m_hostRenderer` is null on
 the raylib path and non-null when SDL3 owns the window, in which case there is
 no raylib window at all: no audio device, no debug panel, and no pad input,
 which the pad stubs already gate on `IsWindowReady()`.

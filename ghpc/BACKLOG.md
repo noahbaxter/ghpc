@@ -142,7 +142,7 @@ What arrives per frame on `game_screen`, and what the GPU does with it:
 contract is `ps2xRuntime/include/ghpc_scene.h`. The collector is
 `src/lib/gs/ghpc_scene.cpp`, the submit is `ghpcSceneSubmit` in the DrawFaces
 override, the frame boundary is vblank in `EeScheduler`, and the backend is
-`src/lib/ghpc_vulkan_renderer.cpp`.
+`src/lib/vk/`.
 
 The sequence, with what is left:
 
