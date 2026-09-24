@@ -474,6 +474,7 @@ add_library(ps2_runtime STATIC
     src/lib/ghpc_state.cpp
     src/lib/ghpc_synth_bridge.cpp
     src/lib/ghpc_vulkan_renderer.cpp
+    src/lib/ghpc_overlay.cpp
     src/lib/ghpc_config.cpp
     src/lib/ghpc_input.cpp
     src/lib/ghpc_host_input.cpp
@@ -616,6 +617,18 @@ target_include_directories(ps2_runtime PUBLIC
 )
 
 target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ps2_vulkan_backend ffmpeg ps2_iop)
+
+# The in-window menu (ghpc_overlay.cpp) draws with ImGui's Vulkan backend. It
+# rides on the debug UI's ImGui checkout; without one the menu compiles out.
+if(PS2X_ENABLE_VULKAN AND TARGET imgui)
+    add_library(ghpc_overlay_imgui STATIC
+        "${PS2X_IMGUI_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
+    )
+    target_include_directories(ghpc_overlay_imgui PUBLIC "${PS2X_IMGUI_SOURCE_DIR}/backends")
+    target_link_libraries(ghpc_overlay_imgui PUBLIC imgui Vulkan::Vulkan)
+    target_link_libraries(ps2_runtime PUBLIC ghpc_overlay_imgui)
+    target_compile_definitions(ps2_runtime PRIVATE GHPC_ENABLE_OVERLAY=1)
+endif()
 
 # The generated SPIR-V is #included, so it has to exist before the renderer
 # compiles. An INTERFACE library cannot carry a target dependency, which is why

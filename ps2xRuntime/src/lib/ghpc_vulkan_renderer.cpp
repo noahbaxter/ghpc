@@ -57,6 +57,7 @@ namespace ghpc
 #else
 
 #include "ghpc_input.h"
+#include "ghpc_overlay.h"
 #include "ghpc_scene.h"
 // For the screen name a shot is tagged with. Every speed reporter in this
 // project carries one, because a number or a picture off the loading screen
@@ -298,6 +299,7 @@ namespace ghpc
             void reportMesh();
 
             SDL_Window *m_window = nullptr;
+            Overlay m_overlay;
             std::string m_baseTitle;
             std::string m_shownTitle;
             VkInstance m_instance = VK_NULL_HANDLE;
@@ -394,6 +396,8 @@ namespace ghpc
             std::string m_shotScreen;
             int m_shots = 0;
             bool m_shotThisFrame = false;
+            // GHPC_VK_SHOT_OVERLAY=1: shots include the menu, to test it.
+            bool m_shotOverlay = false;
             VkBuffer m_shotBuffer = VK_NULL_HANDLE;
             VkDeviceMemory m_shotMemory = VK_NULL_HANDLE;
             void *m_shotMapped = nullptr;
@@ -870,6 +874,7 @@ namespace ghpc
 
         void VulkanRenderer::destroySwapchain()
         {
+            m_overlay.releaseSwapchain();
             for (VkSemaphore &semaphore : m_renderSemaphores)
             {
                 if (semaphore != VK_NULL_HANDLE)
@@ -3416,6 +3421,7 @@ namespace ghpc
                 m_rtEnabled = std::atoi(rt) != 0;
             }
             m_rtDump = std::getenv("GHPC_VK_RT_DUMP") != nullptr;
+            m_shotOverlay = std::getenv("GHPC_VK_SHOT_OVERLAY") != nullptr;
             if (const char *light = std::getenv("GHPC_VK_LIGHT"); light != nullptr)
             {
                 m_lighting = std::atoi(light) != 0;
@@ -3479,6 +3485,9 @@ namespace ghpc
             {
                 return false;
             }
+            // The format is the swapchain's and does not change with a resize.
+            m_overlay.init(m_instance, m_physicalDevice, m_device, m_queueFamily, m_queue, m_swapchainFormat,
+                           static_cast<uint32_t>(m_swapchainImages.size()));
 
             // R2. Asked for after the swapchain because the render pass needs
             // its format, and before any present so the first frame already
@@ -3543,6 +3552,7 @@ namespace ghpc
             if (m_device != VK_NULL_HANDLE)
             {
                 vkDeviceWaitIdle(m_device);
+                m_overlay.shutdown();
                 if (m_shotMapped != nullptr)
                 {
                     vkUnmapMemory(m_device, m_shotMemory);
@@ -3685,6 +3695,42 @@ namespace ghpc
             // SDL's key array is only safe to read once SDL is up, and this is
             // the first point it is known to be.
             s_keysLive.store(true, std::memory_order_release);
+
+            // GHPC_OVERLAY_KEYS=esc,down,enter: presses those keys, one every
+            // 30 presents from present 240, through the same event path a
+            // real key takes. For testing the menu without a keyboard.
+            {
+                static const std::vector<SDL_Keycode> s_keys = []() {
+                    std::vector<SDL_Keycode> keys;
+                    const char *e = std::getenv("GHPC_OVERLAY_KEYS");
+                    std::string spec = e ? e : "";
+                    size_t at = 0;
+                    while (at < spec.size())
+                    {
+                        const size_t comma = spec.find(',', at);
+                        const std::string k = spec.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+                        if (k == "esc") keys.push_back(SDLK_ESCAPE);
+                        else if (k == "up") keys.push_back(SDLK_UP);
+                        else if (k == "down") keys.push_back(SDLK_DOWN);
+                        else if (k == "left") keys.push_back(SDLK_LEFT);
+                        else if (k == "right") keys.push_back(SDLK_RIGHT);
+                        else if (k == "enter") keys.push_back(SDLK_RETURN);
+                        if (comma == std::string::npos) break;
+                        at = comma + 1;
+                    }
+                    return keys;
+                }();
+                static size_t s_next = 0;
+                if (s_next < s_keys.size() && m_frame >= 240u + 30u * s_next)
+                {
+                    SDL_Event key{};
+                    key.type = SDL_EVENT_KEY_DOWN;
+                    key.key.key = s_keys[s_next++];
+                    key.key.down = true;
+                    SDL_PushEvent(&key);
+                }
+            }
+
             SDL_Event event;
             bool devicesChanged = false;
             while (SDL_PollEvent(&event))
@@ -3703,6 +3749,24 @@ namespace ghpc
                     devicesChanged = true;
                     break;
                 case SDL_EVENT_KEY_DOWN:
+                {
+                    // The menu first: Esc opens it, and while it is open it
+                    // takes every key.
+                    Overlay::Action action = Overlay::Action::None;
+                    if (m_overlay.onKey(event.key.key, event.key.repeat, action))
+                    {
+                        if (action == Overlay::Action::ToggleFullscreen)
+                        {
+                            const bool full = (SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0;
+                            SDL_SetWindowFullscreen(m_window, !full);
+                        }
+                        else if (action == Overlay::Action::Quit)
+                        {
+                            m_shouldClose = true;
+                        }
+                        break;
+                    }
+                }
                     // F11, cmd+F, or ctrl+cmd+F as on any Mac app. Not
                     // alt/cmd+enter: enter is the pad's start button.
                     // Fullscreen is borderless at the desktop's size, and the
@@ -3981,20 +4045,34 @@ namespace ghpc
             {
                 m_shotBeatBucket = candidateBucket;
             }
+            // The menu goes on after every capture, so no shot or parity check
+            // sees it, except under GHPC_VK_SHOT_OVERLAY, which shoots it to
+            // test it. Its pass leaves the image ready to present.
+            VkImageLayout layout = m_parityThisFrame ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                                     : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            m_overlay.setFullscreen((SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0);
+            const bool overlay = m_overlay.visible();
+            if (overlay && m_shotOverlay)
+            {
+                m_overlay.record(cmd, m_swapchainImages[imageIndex], layout, m_swapchainExtent);
+                layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            }
             if (m_shotThisFrame)
             {
+                const bool afterOverlay = layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
                 VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-                toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toRead.srcAccessMask = afterOverlay ? VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
                 toRead.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                toRead.oldLayout = m_parityThisFrame ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                                                     : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toRead.oldLayout = layout;
                 toRead.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
                 toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                 toRead.image = m_swapchainImages[imageIndex];
                 toRead.subresourceRange = range;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     0u, 0u, nullptr, 0u, nullptr, 1u, &toRead);
+                vkCmdPipelineBarrier(cmd,
+                                     afterOverlay ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
+                                                  : VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u, nullptr, 0u, nullptr, 1u, &toRead);
 
                 VkBufferImageCopy shot{};
                 shot.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -4002,17 +4080,23 @@ namespace ghpc
                 shot.imageExtent = VkExtent3D{m_swapchainExtent.width, m_swapchainExtent.height, 1u};
                 vkCmdCopyImageToBuffer(cmd, m_swapchainImages[imageIndex],
                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_shotBuffer, 1u, &shot);
+                layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             }
-
-            VkImageMemoryBarrier toPresent = toTransfer;
-            toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            toPresent.dstAccessMask = 0u;
-            toPresent.oldLayout = (m_parityThisFrame || m_shotThisFrame)
-                                      ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                                      : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                                 0u, 0u, nullptr, 0u, nullptr, 1u, &toPresent);
+            if (overlay && !m_shotOverlay)
+            {
+                m_overlay.record(cmd, m_swapchainImages[imageIndex], layout, m_swapchainExtent);
+                layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            }
+            if (layout != VK_IMAGE_LAYOUT_PRESENT_SRC_KHR)
+            {
+                VkImageMemoryBarrier toPresent = toTransfer;
+                toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toPresent.dstAccessMask = 0u;
+                toPresent.oldLayout = layout;
+                toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                                     0u, 0u, nullptr, 0u, nullptr, 1u, &toPresent);
+            }
 
             vkEndCommandBuffer(cmd);
 
@@ -4069,6 +4153,8 @@ namespace ghpc
     bool hostKeyDown(int raylibKey)
     {
         if (!s_keysLive.load(std::memory_order_acquire)) return false;
+        // The open menu has the keyboard; the game sees every key up.
+        if (ghpc::overlayOwnsKeyboard()) return false;
         // raylib's codes are GLFW's: ASCII for letters and digits, 256 and up
         // for the rest. Only the keys the pad reads are mapped.
         SDL_Scancode sc = SDL_SCANCODE_UNKNOWN;
