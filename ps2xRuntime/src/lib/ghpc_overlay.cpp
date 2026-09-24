@@ -33,6 +33,8 @@ namespace ghpc
         {
             kFullscreen,
             kWidescreen,
+            kResolution,
+            kMsaa,
             kVolume,
             kFps,
             kUnlockAll,
@@ -41,6 +43,23 @@ namespace ghpc
         };
 
         const char *onOff(bool v) { return v ? "ON" : "OFF"; }
+
+        std::string resolutionName(int scale)
+        {
+            if (scale <= 0)
+                return "WINDOW";
+            if (scale == 1)
+                return "NATIVE";
+            return std::to_string(scale) + "X";
+        }
+
+        // Left/Right step, Enter goes up and wraps.
+        int stepWrap(int v, int dir, int lo, int hi)
+        {
+            if (dir == 0)
+                return v >= hi ? lo : v + 1;
+            return std::max(lo, std::min(hi, v + dir));
+        }
 
         void checkVk(VkResult r)
         {
@@ -188,6 +207,20 @@ namespace ghpc
             l.widescreen = !l.widescreen;
             saveSetting("display", "widescreen", l.widescreen ? "1" : "0");
             break;
+        case kResolution:
+            l.renderScale = stepWrap(l.renderScale, dir, 0, 4);
+            saveSetting("display", "render_scale", std::to_string(l.renderScale.load()));
+            break;
+        case kMsaa:
+        {
+            // 1, 2, 4, 8 as steps 0..3, capped at what the GPU does.
+            int step = l.msaa >= 8 ? 3 : l.msaa >= 4 ? 2 : l.msaa >= 2 ? 1 : 0;
+            const int max = l.msaaMax >= 8 ? 3 : l.msaaMax >= 4 ? 2 : l.msaaMax >= 2 ? 1 : 0;
+            step = stepWrap(step, dir, 0, max);
+            l.msaa = 1 << step;
+            saveSetting("display", "msaa", std::to_string(l.msaa.load()));
+            break;
+        }
         case kVolume:
         {
             static int s_beforeMute = 100;
@@ -305,6 +338,8 @@ namespace ghpc
         const Line lines[kRows] = {
             {"Fullscreen", onOff(m_fullscreen)},
             {"Widescreen", onOff(l.widescreen)},
+            {"Resolution", resolutionName(l.renderScale)},
+            {"Anti-aliasing", l.msaa <= 1 ? std::string("OFF") : std::to_string(l.msaa.load()) + "X MSAA"},
             {"Volume", l.volume == 0 ? std::string("MUTED") : std::to_string(l.volume.load()) + "%"},
             {"FPS counter", onOff(l.showFps)},
             {"Unlock all songs", onOff(l.unlockAll)},

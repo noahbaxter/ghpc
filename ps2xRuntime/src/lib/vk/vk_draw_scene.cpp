@@ -545,6 +545,18 @@ namespace ghpc
             passBegin.renderArea.extent = m_swapchainExtent;
             passBegin.clearValueCount = 2u;
             passBegin.pClearValues = clears;
+            if (m_sceneActive)
+            {
+                // Offscreen at the scene target's own size and sample count,
+                // filling it: present() scales it into the letterbox.
+                clears[0].color = VkClearColorValue{{0.0f, 0.0f, 0.0f, 1.0f}};
+                passBegin.renderPass = scenePassFor(m_scene.samples);
+                passBegin.framebuffer = m_scene.framebuffer;
+                passBegin.renderArea.extent = {m_scene.width, m_scene.height};
+                viewportRect = VkRect2D{{0, 0}, {m_scene.width, m_scene.height}};
+                m_drawSamples = m_scene.samples;
+                m_sceneDrawn = true;
+            }
             vkCmdBeginRenderPass(cmd, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
 
             // The same letterboxed rect the software picture is blitted into,
@@ -576,6 +588,7 @@ namespace ghpc
             }
 
             vkCmdEndRenderPass(cmd);
+            m_drawSamples = VK_SAMPLE_COUNT_1_BIT;
 
             m_meshDraws += drawn;
             m_meshTris += tris;

@@ -480,6 +480,7 @@ add_library(ps2_runtime STATIC
     src/lib/vk/vk_buffers.cpp
     src/lib/vk/vk_textures.cpp
     src/lib/vk/vk_render_targets.cpp
+    src/lib/vk/vk_scene_target.cpp
     src/lib/vk/vk_draw_scene.cpp
     src/lib/vk/vk_capture.cpp
     src/lib/ghpc_overlay.cpp

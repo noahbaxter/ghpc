@@ -35,6 +35,12 @@ namespace ghpc
         void VulkanRenderer::collectGarbage(uint32_t) {}
         void VulkanRenderer::drawScene(VkCommandBuffer, uint32_t, VkRect2D) {}
         void VulkanRenderer::reportMesh() {}
+        VkRenderPass VulkanRenderer::scenePassFor(VkSampleCountFlagBits) { return VK_NULL_HANDLE; }
+        bool VulkanRenderer::ensureSceneTarget(uint32_t, uint32_t, VkSampleCountFlagBits) { return false; }
+        void VulkanRenderer::destroySceneTarget() {}
+        void VulkanRenderer::destroyScenePasses() {}
+        bool VulkanRenderer::sceneWanted(VkRect2D, uint32_t &, uint32_t &, VkSampleCountFlagBits &) { return false; }
+        void VulkanRenderer::blitScene(VkCommandBuffer, VkImage, VkRect2D) {}
 
     }
 }

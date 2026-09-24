@@ -65,6 +65,9 @@ namespace ghpc
         std::atomic<bool> unlockAll{false}; // [cheats] unlock_all
         std::atomic<int> volume{100};       // [audio] volume, percent
         std::atomic<bool> showFps{false};   // [display] show_fps
+        std::atomic<int> msaa{1};           // [display] msaa: 1, 2, 4 or 8 samples
+        std::atomic<int> renderScale{0};    // [display] render_scale: 0 the window, else the guest's 448 lines times it
+        std::atomic<int> msaaMax{8};        // what the GPU allows, set by the renderer
     };
     LiveSettings &live();
 

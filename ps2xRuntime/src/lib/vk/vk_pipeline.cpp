@@ -244,7 +244,8 @@ namespace ghpc
 
         VkPipeline VulkanRenderer::pipelineFor(PipelineKey key)
         {
-            const uint32_t word = key.word();
+            // The sample count is part of the pipeline, above the key's 13 bits.
+            const uint32_t word = key.word() | (static_cast<uint32_t>(m_drawSamples) << 13);
             auto it = m_pipelines.find(word);
             if (it != m_pipelines.end())
             {
@@ -299,7 +300,7 @@ namespace ghpc
             raster.lineWidth = 1.0f;
 
             VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-            multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+            multisample.rasterizationSamples = m_drawSamples;
 
             // The GS test, mapped through the shader's sense of depth: GS z is
             // 29490.8 * (1 - clip.z/w), so it counts up towards the viewer and
@@ -463,7 +464,11 @@ namespace ghpc
             pipelineInfo.pColorBlendState = &blend;
             pipelineInfo.pDynamicState = &dynamic;
             pipelineInfo.layout = m_meshLayout;
-            pipelineInfo.renderPass = m_meshPass;
+            // A single-sample scene pass has m_meshPass's formats, so one set
+            // of pipelines serves it, the window and the offscreen targets; a
+            // multisampled one needs its own.
+            pipelineInfo.renderPass =
+                m_drawSamples == VK_SAMPLE_COUNT_1_BIT ? m_meshPass : scenePassFor(m_drawSamples);
             pipelineInfo.subpass = 0u;
 
             VkPipeline pipeline = VK_NULL_HANDLE;
@@ -484,6 +489,7 @@ namespace ghpc
         void VulkanRenderer::destroyMeshPipeline()
         {
             destroyMeshTargets();
+            destroySceneTarget();
 
             for (uint32_t i = 0u; i < kFramesInFlight; ++i)
             {
@@ -593,6 +599,7 @@ namespace ghpc
                 vkDestroyRenderPass(m_device, m_meshPass, nullptr);
                 m_meshPass = VK_NULL_HANDLE;
             }
+            destroyScenePasses();
             if (m_rtPass != VK_NULL_HANDLE)
             {
                 vkDestroyRenderPass(m_device, m_rtPass, nullptr);

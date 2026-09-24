@@ -635,7 +635,31 @@ namespace ghpc
             // seam and does not depend on the software path at all.
             if (m_hasFrame && m_meshMode != 0)
             {
+                // Offscreen when anti-aliasing or a render scale asks for it,
+                // then scaled into the letterbox.
+                uint32_t sceneW = 0u, sceneH = 0u;
+                VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+                m_sceneActive = sceneWanted(dstRect, sceneW, sceneH, samples) &&
+                                ensureSceneTarget(sceneW, sceneH, samples);
+                m_sceneDrawn = false;
                 drawScene(cmd, imageIndex, dstRect);
+                if (m_sceneActive && m_sceneDrawn)
+                {
+                    // The clear and the blit both write the letterbox.
+                    VkImageMemoryBarrier clearToBlit{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                    clearToBlit.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    clearToBlit.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    clearToBlit.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    clearToBlit.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    clearToBlit.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    clearToBlit.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    clearToBlit.image = m_swapchainImages[imageIndex];
+                    clearToBlit.subresourceRange = range;
+                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u,
+                                         nullptr, 0u, nullptr, 1u, &clearToBlit);
+                    blitScene(cmd, m_swapchainImages[imageIndex], dstRect);
+                }
+                m_sceneActive = false;
             }
 
             // The mesh path writes over the blit, so R1's gate would report a

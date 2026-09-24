@@ -230,6 +230,13 @@ namespace ghpc
             void releaseTexture(uint32_t frameIndex, GpuTexture &t);
             void collectGarbage(uint32_t frameIndex);
             void drawScene(VkCommandBuffer cmd, uint32_t imageIndex, VkRect2D viewportRect);
+            // The offscreen scene target, vk_scene_target.cpp.
+            VkRenderPass scenePassFor(VkSampleCountFlagBits samples);
+            bool ensureSceneTarget(uint32_t width, uint32_t height, VkSampleCountFlagBits samples);
+            void destroySceneTarget();
+            void destroyScenePasses();
+            bool sceneWanted(VkRect2D dstRect, uint32_t &width, uint32_t &height, VkSampleCountFlagBits &samples);
+            void blitScene(VkCommandBuffer cmd, VkImage swapchainImage, VkRect2D dstRect);
             void reportMesh();
 
             SDL_Window *m_window = nullptr;
@@ -460,6 +467,36 @@ namespace ghpc
             VkImage m_depthImage = VK_NULL_HANDLE;
             VkDeviceMemory m_depthMemory = VK_NULL_HANDLE;
             VkImageView m_depthView = VK_NULL_HANDLE;
+
+            // The scene drawn offscreen instead of straight into the window,
+            // for anti-aliasing and a render resolution of its own: the
+            // overlay's [display] msaa and render_scale. Drawn at `samples`,
+            // resolved if multisampled, and blitted into the letterbox. Off,
+            // at window size and one sample, drawScene writes the swapchain
+            // image directly as it always has.
+            struct SceneTarget
+            {
+                uint32_t width = 0u;
+                uint32_t height = 0u;
+                VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+                VkImage color = VK_NULL_HANDLE;   // `samples` samples
+                VkDeviceMemory colorMemory = VK_NULL_HANDLE;
+                VkImageView colorView = VK_NULL_HANDLE;
+                VkImage resolve = VK_NULL_HANDLE; // one sample; multisampled only
+                VkDeviceMemory resolveMemory = VK_NULL_HANDLE;
+                VkImageView resolveView = VK_NULL_HANDLE;
+                VkImage depth = VK_NULL_HANDLE;
+                VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+                VkImageView depthView = VK_NULL_HANDLE;
+                VkFramebuffer framebuffer = VK_NULL_HANDLE;
+            };
+            SceneTarget m_scene;
+            bool m_sceneActive = false; // this present draws into m_scene
+            bool m_sceneDrawn = false;  // and drawScene got as far as its pass
+            std::unordered_map<uint32_t, VkRenderPass> m_scenePasses; // by sample count
+            // What pipelineFor builds for: the pass being recorded. Offscreen
+            // GS targets are always single-sampled.
+            VkSampleCountFlagBits m_drawSamples = VK_SAMPLE_COUNT_1_BIT;
 
             // Per-draw storage, one buffer per frame in flight so a frame
             // being recorded does not overwrite one the GPU is still reading.
