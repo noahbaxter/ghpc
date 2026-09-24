@@ -35,7 +35,10 @@
 #   ./ghpc/scripts/play.sh --debug         diagnostics build, 2.5-4x slower
 #   ./ghpc/scripts/play.sh --build         rebuild before launching
 #   ./ghpc/scripts/play.sh --countin 0.5   clamp the song count-in
-#   ./ghpc/scripts/play.sh --log run.log   tee everything to a file
+#   ./ghpc/scripts/play.sh --log run.log   also copy the full log to a file
+#   ./ghpc/scripts/play.sh --verbose       full output on the console. Without
+#                                          it the console is a summary and the
+#                                          full log is work/logs/latest.log
 #   ./ghpc/scripts/play.sh GH1             or GH80s
 set -euo pipefail
 
@@ -145,10 +148,10 @@ fi
 if [ -z "${GHPC_MC_ROOT:-}" ] && [ "$SCRIPTED" = 1 ]; then
   GHPC_MC_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ghpc-mc.XXXXXX")"
   export GHPC_MC_ROOT
-  # The runtime puts slot 1 beside it, at <root>_slot1.
-  trap 'rm -rf "$GHPC_MC_ROOT" "$GHPC_MC_ROOT"_slot*' EXIT
+  # The runtime puts slot 1 beside it, at <root>_slot1. Removed on exit.
+  MC_TMP="$GHPC_MC_ROOT"
   [ -d "$WORK/mc0" ] && cp -Rp "$WORK/mc0/." "$GHPC_MC_ROOT/"
-  echo "scripted run: memory card is a throwaway copy at $GHPC_MC_ROOT"
+  echo "  memcard    throwaway copy at $GHPC_MC_ROOT"
 fi
 
 cat <<EOF
@@ -164,14 +167,28 @@ Expect the main menu in about $([ "$WANT" = off ] && echo 39 || { [ "$WANT" = fa
 
 EOF
 
+# The whole output goes to work/logs/<time>.log (latest.log points at it,
+# ten are kept), and --log copies it to a path of the caller's. The console
+# gets playfeed.awk's summary: what came up, screen changes, frame rate
+# dips, failures. --verbose puts everything on the console instead.
+LOGDIR="$WORK/logs"
+mkdir -p "$LOGDIR"
+RUNLOG="$LOGDIR/$(date +%Y%m%d-%H%M%S).log"
+ln -sf "$(basename "$RUNLOG")" "$LOGDIR/latest.log"
+{ ls -t "$LOGDIR"/2*.log 2>/dev/null || true; } | tail -n +11 | while read -r old; do rm -f "$old"; done
+# One [fps] line a second, which the feed reads the screen from.
+export GHPC_FPS="${GHPC_FPS:-60}"
+
 # --line-buffered matters: without it grep holds output in a 4K block and a
 # tailed log sits empty for minutes while the game is plainly running.
 cd "$WORK"
-filter() {
-  if [ "$VERBOSE" = 1 ]; then cat; else grep --line-buffered -vE '^INFO:'; fi
+console() {
+  if [ "$VERBOSE" = 1 ]; then cat; else awk -f "$ROOT/ghpc/scripts/playfeed.awk"; fi
 }
-if [ -n "$LOGFILE" ]; then
-  "$BIN" "$ELF" 2>&1 | filter | tee "$LOGFILE"
-else
-  "$BIN" "$ELF" 2>&1 | filter
-fi
+on_exit() {
+  [ -n "${MC_TMP:-}" ] && rm -rf "$MC_TMP" "$MC_TMP"_slot*
+  echo "  log        $RUNLOG"
+}
+trap on_exit EXIT
+"$BIN" "$ELF" 2>&1 | grep --line-buffered -vE '^INFO:' |
+  tee "$RUNLOG" ${LOGFILE:+"$LOGFILE"} | console || true
