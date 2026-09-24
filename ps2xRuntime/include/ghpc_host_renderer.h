@@ -26,6 +26,7 @@ namespace ghpc
             const char *title = "ghpc";
             bool hidden = false;
             bool unfocused = false;
+            bool fullscreen = false;
         };
 
         virtual ~HostRenderer() = default;

@@ -474,6 +474,7 @@ add_library(ps2_runtime STATIC
     src/lib/ghpc_state.cpp
     src/lib/ghpc_synth_bridge.cpp
     src/lib/ghpc_vulkan_renderer.cpp
+    src/lib/ghpc_config.cpp
     src/lib/gs/ghpc_fixture.cpp
     src/lib/ps2_iop_host.cpp
     src/lib/ps2_memory.cpp

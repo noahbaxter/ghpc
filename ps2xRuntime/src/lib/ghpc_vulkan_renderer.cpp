@@ -2981,6 +2981,10 @@ namespace ghpc
             {
                 windowFlags |= SDL_WINDOW_NOT_FOCUSABLE;
             }
+            if (config.fullscreen)
+            {
+                windowFlags |= SDL_WINDOW_FULLSCREEN;
+            }
 
             m_window = SDL_CreateWindow(config.title, config.width, config.height, windowFlags);
             if (m_window == nullptr)

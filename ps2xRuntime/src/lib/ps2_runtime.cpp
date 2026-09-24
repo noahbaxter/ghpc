@@ -13,6 +13,7 @@
 #include "Kernel/Stubs/GS.h"
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
+#include "ghpc_config.h"
 #include "ghpc_host_renderer.h"
 #include "ghpc_scene.h"
 #include "runtime/ghpc_state.h"
@@ -951,6 +952,14 @@ bool PS2Runtime::initialize(const char *title)
             ghpc::HostRenderer::Config rendererConfig;
             rendererConfig.width = HOST_WINDOW_WIDTH;
             rendererConfig.height = HOST_WINDOW_HEIGHT;
+            if (const std::string res = ghpc::settings().get("display", "resolution"); !res.empty() &&
+                std::sscanf(res.c_str(), "%dx%d", &rendererConfig.width, &rendererConfig.height) != 2)
+            {
+                std::cerr << "[ghpc/config] resolution = " << res << ": want WIDTHxHEIGHT" << std::endl;
+                rendererConfig.width = HOST_WINDOW_WIDTH;
+                rendererConfig.height = HOST_WINDOW_HEIGHT;
+            }
+            rendererConfig.fullscreen = ghpc::settings().getBool("display", "fullscreen", false);
             rendererConfig.title = title;
             rendererConfig.hidden = std::getenv("GHPC_HIDE_WINDOW") != nullptr;
             rendererConfig.unfocused = std::getenv("GHPC_NO_FOCUS") != nullptr;
