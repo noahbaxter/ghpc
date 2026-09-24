@@ -215,7 +215,32 @@ button icons) are decoded from it and draw natively since 2026-09-21. The
 window title names the renderer path that came up, e.g.
 `[Vulkan: native, VU1 off]` or `[raylib: software GS]`.
 
-**Do this next:** `BACKLOG.md` `Now`, item 1c (`DrawRect`).
+**Do this next, in order** (from Noah's play-test, 2026-09-24):
+
+1. **16x anti-aliasing is written but was never built or run.** The overlay
+   now offers Off/2x/4x/8x/16x; past the GPU's 4x MSAA the rest is a 2x2
+   supersample (`sceneWanted`, `vk/vk_scene_target.cpp`). Build, run an
+   arm with `[display] msaa = 16`, check `[ghpc/vk/scene] target` reports
+   twice the window at msaa=4, and crop an edge against the 4x arm.
+2. **The crowd looks sparse.** Noah remembers denser audiences. Count
+   placements per venue against what is drawn: `WorldCrowd` instance lists
+   (`+0x5c` CharData list, multimesh instances at `+0x50`) against the
+   billboard draws per frame, and check whether some character types or
+   their 3D members never submit.
+3. **Impostor cards look low-res, some with missing necks.** The sheet is a
+   128x256 CT16 target rendered 1:1. Check the per-type UV crop against the
+   bbox 0x2aea24..0x2aec30 computes (clamps 0.25/0.75, 0.4/0.6, pad 0.05)
+   before blaming resolution; the native path could also render the sheet
+   larger, since it is a host-side target.
+4. **Shadows and baked lighting look blurry on faces**, "darker pixels".
+   Compare a face crop against the software path at the same beat; suspects
+   are prelit vertex colour interpolation and the lighting overlays in
+   `ghpc_mesh.vert`.
+5. **`display` flipped 4:3/16:9 five times on `endgame_screen`** in Noah's
+   log. Ask whether the menu was being toggled; if not, something writes
+   Rnd's aspect there.
+
+Then `BACKLOG.md` `Now`, item 1c (`DrawRect`).
 
 Geometry goes through a real Vulkan pipeline: per-mesh GPU buffers, the
 measured transform in a vertex shader, a depth buffer, a render pass, one
