@@ -193,7 +193,8 @@ namespace ghpc
     }
 
     // dir is -1 or +1 from Left/Right, 0 from Enter. A switch flips on any of
-    // them; the volume steps by 10 and Enter mutes or restores it.
+    // them; the volume and anti-aliasing step, and Enter turns them off or
+    // restores them.
     void Overlay::change(int row, int dir, Action &action)
     {
         LiveSettings &l = live();
@@ -215,9 +216,24 @@ namespace ghpc
         {
             // 1, 2, 4, 8, 16 as steps 0..4. Past the GPU's MSAA the renderer
             // makes up the rest by supersampling, so every step is offered.
-            int step = l.msaa >= 16 ? 4 : l.msaa >= 8 ? 3 : l.msaa >= 4 ? 2 : l.msaa >= 2 ? 1 : 0;
-            step = stepWrap(step, dir, 0, 4);
-            l.msaa = 1 << step;
+            // Enter turns it off or back to what it was.
+            static int s_beforeOff = 4;
+            if (dir == 0)
+            {
+                if (l.msaa > 1)
+                {
+                    s_beforeOff = l.msaa;
+                    l.msaa = 1;
+                }
+                else
+                    l.msaa = s_beforeOff;
+            }
+            else
+            {
+                int step = l.msaa >= 16 ? 4 : l.msaa >= 8 ? 3 : l.msaa >= 4 ? 2 : l.msaa >= 2 ? 1 : 0;
+                step = std::max(0, std::min(4, step + dir));
+                l.msaa = 1 << step;
+            }
             saveSetting("display", "msaa", std::to_string(l.msaa.load()));
             break;
         }
