@@ -2860,8 +2860,11 @@ namespace ghpc
                 key.ztst = mat.ztst & 3u;
                 key.depthTest = mat.depthTest ? 1u : 0u;
                 key.depthWrite = mat.depthWrite ? 1u : 0u;
-                key.blend = mat.blend ? 1u : 0u;
-                key.alphaEq = mat.blend ? (mat.alphaEq & 0xFFu) : 0u;
+                // An ID is only readable unblended: an additive draw would sum
+                // its ID with whatever was behind it.
+                const bool blend = mat.blend && !m_idMode;
+                key.blend = blend ? 1u : 0u;
+                key.alphaEq = blend ? (mat.alphaEq & 0xFFu) : 0u;
                 // FIX / 128 is the GS's 1.0 at 0x80. Set whenever it moves;
                 // every pipeline declares the constant dynamic.
                 const float fix = std::min(1.0f, (float)mat.alphaFix / 128.0f);
