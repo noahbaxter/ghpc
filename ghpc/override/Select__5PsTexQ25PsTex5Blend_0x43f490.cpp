@@ -44,6 +44,7 @@
 
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
+#include "ghpc_scene.h"
 
 #ifdef PS2_FUNCTION_LOG_TRACKER
 #include "ps2_log.h"
@@ -348,6 +349,20 @@ label_43f51c:
     // selects. This instruction is the read that goes to the GS, so the image
     // here is the one the hardware sees. `this` is $s1.
     ghpcTexCensus(rdram, ctx, runtime, GPR_U32(ctx, 17));
+    // A render target's TBP0 is its frame's FBP << 5 by now, which is what
+    // lets a native backend sample the offscreen target the GS drew into.
+    {
+        const uint32_t self = GPR_U32(ctx, 17);
+        // Type 8 borrows PsRnd's buffer (the branch above); type 2 is a
+        // texture with VRAM of its own that the game renders into, the
+        // crowd's impostor sheet (128x256 CT16, TBP0 0x1600 = FBP 0xb0).
+        if (READ32(self + 0x48u) & 0xau) {
+            const uint64_t tex0 = READ64(self + 0x70u);
+            ghpc::scene::setRenderTargetTexture(self, (uint32_t)(tex0 & 0x3fffu) >> 5, READ32(self + 0x4cu),
+                                                READ32(self + 0x50u), (uint32_t)((tex0 >> 26) & 0xfu),
+                                                (uint32_t)((tex0 >> 30) & 0xfu), (uint32_t)((tex0 >> 20) & 0x3fu));
+        }
+    }
     // 0x43f520: 0xde260070  ld          $a2, 0x70($s1)
     ctx->pc = 0x43f520u;
     SET_GPR_U64(ctx, 6, READ64(ADD32(GPR_U32(ctx, 17), 112)));

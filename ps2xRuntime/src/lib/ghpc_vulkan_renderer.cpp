@@ -182,7 +182,7 @@ namespace ghpc
             uint32_t lightMode; // see ghpc_mesh.vert
             uint32_t lightFlags;
             uint32_t uvMode;    // 1: material program 0x17c's texture transform
-            uint32_t pad;
+            uint32_t texa;      // 16-bit target: ta0 | ta1 << 8 | aem << 16 | 1 << 24
             float uvRows[4];    // xy row 0, zw row 1 of +0x170
             float uvOffset[4];  // xy row 3
         };
@@ -202,6 +202,8 @@ namespace ghpc
             VkDescriptorSet set = VK_NULL_HANDLE;
             uint64_t version = 0ull;
             float uvScale[2] = {1.0f, 1.0f};
+            bool renderTarget = false; // an offscreen target, alpha 1.0 = GS 0x80
+            uint32_t psm = 0u;         // a target's PSM as its texture reads it
         };
 
         // What a frame in flight may still be reading when it is replaced.
@@ -284,7 +286,12 @@ namespace ghpc
             const MeshBuffers *meshBuffers(uint32_t meshKey, uint32_t generation, uint32_t frameIndex);
             bool uploadTexture(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t width, uint32_t height,
                                const uint8_t *rgba, uint32_t texKey, uint64_t version, GpuTexture &out);
-            const GpuTexture *textureFor(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t texKey);
+            struct TargetState;
+            const GpuTexture *textureFor(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t texKey,
+                                         std::unordered_map<uint32_t, TargetState> *targets);
+            struct RenderTarget;
+            RenderTarget *renderTargetFor(VkCommandBuffer cmd, uint32_t fbp, uint32_t width, uint32_t height);
+            void destroyRenderTargets();
             void releaseTexture(uint32_t frameIndex, GpuTexture &t);
             void collectGarbage(uint32_t frameIndex);
             void drawScene(VkCommandBuffer cmd, uint32_t imageIndex, VkRect2D viewportRect);
@@ -457,6 +464,47 @@ namespace ghpc
             std::vector<DrawRecord> m_drawRecords;
             bool m_meshReady = false;
             VkRenderPass m_meshPass = VK_NULL_HANDLE;
+
+            // Offscreen GS targets, keyed by FRAME's FBP: the crowd's
+            // impostors are drawn into one and sampled by its billboards.
+            // Each pass clears it, and it sits in SHADER_READ_ONLY between
+            // passes. m_rtPass matches m_meshPass's formats, so the same
+            // pipelines draw into both.
+            struct RenderTarget
+            {
+                uint32_t width = 0u;
+                uint32_t height = 0u;
+                VkImage image = VK_NULL_HANDLE;
+                VkDeviceMemory memory = VK_NULL_HANDLE;
+                VkImageView view = VK_NULL_HANDLE;
+                VkImage depth = VK_NULL_HANDLE;
+                VkDeviceMemory depthMemory = VK_NULL_HANDLE;
+                VkImageView depthView = VK_NULL_HANDLE;
+                VkFramebuffer framebuffer = VK_NULL_HANDLE;
+                GpuTexture texture;
+            };
+            // Per FBP within one frame; see drawScene.
+            struct TargetState
+            {
+                uint32_t generation = 0u;
+                bool sampled = false;
+            };
+            VkRenderPass m_rtPass = VK_NULL_HANDLE;
+            // Keyed by FBP | generation << 16.
+            std::unordered_map<uint32_t, RenderTarget> m_renderTargets;
+            std::vector<uint32_t> m_drawTargetKey;
+            uint64_t m_rtDraws = 0ull;
+            // GHPC_VK_RT=0 skips offscreen draws and samples no target: the
+            // control arm, and the behaviour before targets existed.
+            bool m_rtEnabled = true;
+            // GHPC_VK_RT_DUMP=1: every shot also writes the first target drawn
+            // that frame, colour and alpha side by side, as <shot>_rt.ppm.
+            bool m_rtDump = false;
+            VkBuffer m_rtDumpBuffer = VK_NULL_HANDLE;
+            VkDeviceMemory m_rtDumpMemory = VK_NULL_HANDLE;
+            void *m_rtDumpMapped = nullptr;
+            uint32_t m_rtDumpWidth = 0u;
+            uint32_t m_rtDumpHeight = 0u;
             VkPipelineLayout m_meshLayout = VK_NULL_HANDLE;
             // One pipeline per distinct material depth and blend state. The
             // key is five bits, so the cache is bounded at 32 whatever the
@@ -1048,8 +1096,15 @@ namespace ghpc
         const MeshBuffers *VulkanRenderer::meshBuffers(uint32_t, uint32_t, uint32_t) { return nullptr; }
         bool VulkanRenderer::uploadTexture(VkCommandBuffer, uint32_t, uint32_t, uint32_t,
                                            const uint8_t *, uint32_t, uint64_t, GpuTexture &) { return false; }
-        const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer, uint32_t, uint32_t) { return nullptr; }
+        const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer, uint32_t, uint32_t,
+                                                     std::unordered_map<uint32_t, TargetState> *)
+        {
+            return nullptr;
+        }
         void VulkanRenderer::releaseTexture(uint32_t, GpuTexture &) {}
+        VulkanRenderer::RenderTarget *VulkanRenderer::renderTargetFor(VkCommandBuffer, uint32_t, uint32_t,
+                                                                      uint32_t) { return nullptr; }
+        void VulkanRenderer::destroyRenderTargets() {}
         bool VulkanRenderer::ensureDynamicBuffer(DynamicBuffer &, VkDeviceSize, VkBufferUsageFlags) { return false; }
         void VulkanRenderer::destroyDynamicBuffer(DynamicBuffer &) {}
         void VulkanRenderer::collectGarbage(uint32_t) {}
@@ -1242,6 +1297,24 @@ namespace ghpc
             passInfo.dependencyCount = (uint32_t)dependencies.size();
             passInfo.pDependencies = dependencies.data();
             if (!check(vkCreateRenderPass(m_device, &passInfo, nullptr, &m_meshPass), "vkCreateRenderPass"))
+            {
+                return false;
+            }
+
+            // The offscreen pass: same formats, so compatible with every mesh
+            // pipeline, but the colour is a sampled image that stores through
+            // SHADER_READ_ONLY, read by fragment shaders on either side of it.
+            // It clears to transparent black: the game clears its targets
+            // through a path the seam does not see yet, and without it the
+            // crowd sheet kept every past frame's pose as an opaque smear.
+            attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            attachments[0].initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            if (!check(vkCreateRenderPass(m_device, &passInfo, nullptr, &m_rtPass), "vkCreateRenderPass(rt)"))
             {
                 return false;
             }
@@ -1564,6 +1637,7 @@ namespace ghpc
             m_texCache.clear();
             releaseTexture(0u, m_whiteTexture);
             m_whiteReady = false;
+            destroyRenderTargets();
             for (uint32_t i = 0u; i < kFramesInFlight; ++i)
             {
                 collectGarbage(i);
@@ -1613,6 +1687,11 @@ namespace ghpc
             {
                 vkDestroyRenderPass(m_device, m_meshPass, nullptr);
                 m_meshPass = VK_NULL_HANDLE;
+            }
+            if (m_rtPass != VK_NULL_HANDLE)
+            {
+                vkDestroyRenderPass(m_device, m_rtPass, nullptr);
+                m_rtPass = VK_NULL_HANDLE;
             }
             if (m_meshDescriptorPool != VK_NULL_HANDLE)
             {
@@ -2025,6 +2104,165 @@ namespace ghpc
             t = GpuTexture{};
         }
 
+        // The offscreen target at `fbp`, made on first use at width x height
+        // and cleared to transparent black, as unwritten GS memory reads to a
+        // sampler that alpha-tests it away. Kept for the run: a target is a
+        // piece of GS memory and the game draws into it again every frame.
+        VulkanRenderer::RenderTarget *VulkanRenderer::renderTargetFor(VkCommandBuffer cmd, uint32_t fbp,
+                                                                      uint32_t width, uint32_t height)
+        {
+            auto it = m_renderTargets.find(fbp);
+            if (it != m_renderTargets.end())
+            {
+                return it->second.framebuffer != VK_NULL_HANDLE ? &it->second : nullptr;
+            }
+            RenderTarget &rt = m_renderTargets[fbp]; // a failure stays, so it is tried once
+            if (width == 0u || height == 0u || width > 4096u || height > 4096u)
+            {
+                return nullptr;
+            }
+
+            auto makeImage = [&](VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect,
+                                 VkImage &image, VkDeviceMemory &memory, VkImageView &view) -> bool {
+                VkImageCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+                info.imageType = VK_IMAGE_TYPE_2D;
+                info.format = format;
+                info.extent = {width, height, 1u};
+                info.mipLevels = 1u;
+                info.arrayLayers = 1u;
+                info.samples = VK_SAMPLE_COUNT_1_BIT;
+                info.tiling = VK_IMAGE_TILING_OPTIMAL;
+                info.usage = usage;
+                info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                if (!check(vkCreateImage(m_device, &info, nullptr, &image), "vkCreateImage(rt)"))
+                {
+                    return false;
+                }
+                VkMemoryRequirements req{};
+                vkGetImageMemoryRequirements(m_device, image, &req);
+                uint32_t type = 0u;
+                VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                alloc.allocationSize = req.size;
+                if (!findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
+                {
+                    return false;
+                }
+                alloc.memoryTypeIndex = type;
+                if (!check(vkAllocateMemory(m_device, &alloc, nullptr, &memory), "vkAllocateMemory(rt)"))
+                {
+                    return false;
+                }
+                vkBindImageMemory(m_device, image, memory, 0u);
+                VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                viewInfo.image = image;
+                viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                viewInfo.format = format;
+                viewInfo.subresourceRange.aspectMask = aspect;
+                viewInfo.subresourceRange.levelCount = 1u;
+                viewInfo.subresourceRange.layerCount = 1u;
+                return check(vkCreateImageView(m_device, &viewInfo, nullptr, &view), "vkCreateImageView(rt)");
+            };
+
+            if (!makeImage(m_swapchainFormat,
+                           VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                               VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                           VK_IMAGE_ASPECT_COLOR_BIT, rt.image, rt.memory, rt.view) ||
+                !makeImage(VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                           VK_IMAGE_ASPECT_DEPTH_BIT, rt.depth, rt.depthMemory, rt.depthView))
+            {
+                return nullptr;
+            }
+
+            const std::array<VkImageView, 2> views{rt.view, rt.depthView};
+            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fbInfo.renderPass = m_rtPass;
+            fbInfo.attachmentCount = (uint32_t)views.size();
+            fbInfo.pAttachments = views.data();
+            fbInfo.width = width;
+            fbInfo.height = height;
+            fbInfo.layers = 1u;
+            VkFramebuffer framebuffer = VK_NULL_HANDLE;
+            if (!check(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &framebuffer), "vkCreateFramebuffer(rt)"))
+            {
+                return nullptr;
+            }
+
+            VkDescriptorSetAllocateInfo setAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            setAlloc.descriptorPool = m_texPool;
+            setAlloc.descriptorSetCount = 1u;
+            setAlloc.pSetLayouts = &m_texSetLayout;
+            if (!check(vkAllocateDescriptorSets(m_device, &setAlloc, &rt.texture.set), "vkAllocateDescriptorSets(rt)"))
+            {
+                vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+                return nullptr;
+            }
+            VkDescriptorImageInfo imageDesc{};
+            imageDesc.sampler = m_sampler;
+            imageDesc.imageView = rt.view;
+            imageDesc.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = rt.texture.set;
+            write.dstBinding = 0u;
+            write.descriptorCount = 1u;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &imageDesc;
+            vkUpdateDescriptorSets(m_device, 1u, &write, 0u, nullptr);
+
+            VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            barrier.srcAccessMask = 0u;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = rt.image;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u,
+                                 nullptr, 0u, nullptr, 1u, &barrier);
+            const VkClearColorValue clear{{0.0f, 0.0f, 0.0f, 0.0f}};
+            vkCmdClearColorImage(cmd, rt.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1u,
+                                 &barrier.subresourceRange);
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 0u, 0u, nullptr, 0u, nullptr, 1u, &barrier);
+
+            rt.width = width;
+            rt.height = height;
+            rt.framebuffer = framebuffer;
+            rt.texture.image = rt.image;
+            rt.texture.memory = rt.memory;
+            rt.texture.view = rt.view;
+            rt.texture.renderTarget = true;
+            std::fprintf(stderr, "[ghpc/vk/rt] target fbp=0x%x %ux%u\n", fbp, width, height);
+            return &rt;
+        }
+
+        void VulkanRenderer::destroyRenderTargets()
+        {
+            for (auto &entry : m_renderTargets)
+            {
+                RenderTarget &rt = entry.second;
+                if (rt.framebuffer != VK_NULL_HANDLE)
+                    vkDestroyFramebuffer(m_device, rt.framebuffer, nullptr);
+                if (rt.depthView != VK_NULL_HANDLE)
+                    vkDestroyImageView(m_device, rt.depthView, nullptr);
+                if (rt.depth != VK_NULL_HANDLE)
+                    vkDestroyImage(m_device, rt.depth, nullptr);
+                if (rt.depthMemory != VK_NULL_HANDLE)
+                    vkFreeMemory(m_device, rt.depthMemory, nullptr);
+                // The colour image, its view and set go the way a texture does.
+                rt.texture.image = rt.image;
+                rt.texture.memory = rt.memory;
+                rt.texture.view = rt.view;
+                releaseTexture(0u, rt.texture);
+            }
+            m_renderTargets.clear();
+        }
+
         void VulkanRenderer::collectGarbage(uint32_t frameIndex)
         {
             Garbage &g = m_garbage[frameIndex % kFramesInFlight];
@@ -2206,12 +2444,41 @@ namespace ghpc
         // The GPU texture for a texKey, uploading it on first sight or when
         // the collector's version has moved. Null when the collector has no
         // decoded image, which the caller draws untextured and counts.
-        const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t texKey)
+        const GpuTexture *VulkanRenderer::textureFor(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t texKey,
+                                                     std::unordered_map<uint32_t, TargetState> *targets)
         {
             uint32_t width = 0u;
             uint32_t height = 0u;
             uint64_t version = 0ull;
             float uvScale[2] = {1.0f, 1.0f};
+            uint32_t fbp = 0u;
+            uint32_t psm = 0u;
+            if (m_rtEnabled && scene::renderTargetTexture(texKey, fbp, width, height, uvScale, psm))
+            {
+                uint32_t generation = 0u;
+                if (targets != nullptr)
+                {
+                    TargetState &s = (*targets)[fbp];
+                    s.sampled = true;
+                    generation = s.generation;
+                }
+                RenderTarget *rt = renderTargetFor(cmd, fbp | (generation << 16), width, height);
+                static uint32_t s_logged = 0u;
+                if (s_logged < 8u && ++s_logged)
+                {
+                    std::fprintf(stderr, "[ghpc/vk/rt] tex 0x%08x samples fbp=0x%x (%ux%u) psm=0x%x texa=0x%05x%s\n",
+                                 texKey, fbp, width, height, psm, scene::gsTexa(), rt ? "" : " unavailable");
+                }
+                if (rt == nullptr)
+                {
+                    return nullptr;
+                }
+                // The target's own size, which the texture's may not match.
+                rt->texture.uvScale[0] = uvScale[0] * (float)width / (float)rt->width;
+                rt->texture.uvScale[1] = uvScale[1] * (float)height / (float)rt->height;
+                rt->texture.psm = psm;
+                return &rt->texture;
+            }
             if (!scene::textureInfo(texKey, width, height, version, uvScale))
             {
                 return nullptr;
@@ -2320,6 +2587,23 @@ namespace ghpc
             m_drawSets.clear();
             m_drawSets.reserve(drawCount);
 
+            // On screen means the draw's scissor is the displayed frame. The
+            // FRAME base pointer is not the test, since a double buffered
+            // frame alternates it; the extent does not move.
+            auto onScreen = [&](uint32_t i) {
+                const scene::Target &t = draws[i].target;
+                return t.scissor[1] + 1u == m_sourceWidth && t.scissor[3] + 1u == m_sourceHeight;
+            };
+
+            // A target drawn, sampled, then drawn again within one frame is
+            // two images: the crowd renders each character type into the
+            // same sheet in turn and draws that type's billboards between.
+            // A draw into an FBP that was sampled since its last draw opens
+            // a new generation, and a sampler reads the one current at its
+            // own place in draw order.
+            std::unordered_map<uint32_t, TargetState> targetState;
+            m_drawTargetKey.assign(drawCount, 0u);
+
             m_drawStaging.clear();
             m_drawStaging.reserve(drawCount);
             for (uint32_t i = 0u; i < drawCount; ++i)
@@ -2328,9 +2612,19 @@ namespace ghpc
                 GpuDrawData entry{};
                 const scene::Material &mat = d.material;
                 const GpuTexture *tex = nullptr;
+                if (m_rtEnabled && !onScreen(i))
+                {
+                    TargetState &s = targetState[d.target.fbp];
+                    if (s.sampled)
+                    {
+                        ++s.generation;
+                        s.sampled = false;
+                    }
+                    m_drawTargetKey[i] = d.target.fbp | (s.generation << 16);
+                }
                 if (m_textures && mat.texKey != 0u)
                 {
-                    tex = textureFor(cmd, frameIndex, mat.texKey);
+                    tex = textureFor(cmd, frameIndex, mat.texKey, &targetState);
                     ++m_texDraws;
                     m_texMissingDraws += (tex == nullptr) ? 1u : 0u;
                 }
@@ -2362,7 +2656,13 @@ namespace ghpc
                                  ((mat.afail & 3u) << 15) |
                                  ((mat.wrapS == 1u ? 1u : 0u) << 17) |
                                  ((mat.wrapT == 1u ? 1u : 0u) << 18) |
-                                 ((mat.blend ? 1u : 0u) << 19);
+                                 ((mat.blend ? 1u : 0u) << 19) |
+                                 ((tex && tex->renderTarget ? 1u : 0u) << 22);
+                    // PSMCT16 and CT16S keep one alpha bit.
+                    if (tex && tex->renderTarget && (tex->psm == 0x02u || tex->psm == 0x0Au))
+                    {
+                        entry.texa = scene::gsTexa() | (1u << 24);
+                    }
                 }
                 const uint32_t count = std::min<uint32_t>(d.matrixCount, 4u);
                 for (uint32_t m = 0u; m < count; ++m)
@@ -2493,31 +2793,12 @@ namespace ghpc
             VkClearValue depthClear{};
             depthClear.depthStencil.depth = (m_depthMode == 2) ? 1.0f : 0.0f;
 
-            VkRenderPassBeginInfo passBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-            passBegin.renderPass = m_meshPass;
-            passBegin.framebuffer = m_meshFramebuffers[imageIndex];
-            passBegin.renderArea.extent = m_swapchainExtent;
-            // Attachment 0 is LOAD, so only the depth attachment needs a
-            // clear value; it still has to be the second entry.
+            // Attachment 0 is LOAD in both passes, so only the depth
+            // attachment needs a clear value; it still has to be the second.
             VkClearValue clears[2]{};
             clears[1] = depthClear;
-            passBegin.clearValueCount = 2u;
-            passBegin.pClearValues = clears;
-            vkCmdBeginRenderPass(cmd, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
 
-            // The same letterboxed rect the software picture is blitted into,
-            // so the two land on top of each other and can be compared by
-            // looking at them.
-            VkViewport viewport{};
-            viewport.x = (float)viewportRect.offset.x;
-            viewport.y = (float)viewportRect.offset.y;
-            viewport.width = (float)viewportRect.extent.width;
-            viewport.height = (float)viewportRect.extent.height;
-            viewport.minDepth = 0.0f;
-            viewport.maxDepth = 1.0f;
-            vkCmdSetViewport(cmd, 0u, 1u, &viewport);
-            vkCmdSetScissor(cmd, 0u, 1u, &viewportRect);
-
+            // Bound state outlives a render pass, so set 0 is bound once.
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_meshLayout, 0u, 1u,
                                     &m_meshDescriptorSets[frameIndex], 0u, nullptr);
 
@@ -2548,8 +2829,10 @@ namespace ghpc
             VkPipeline bound = VK_NULL_HANDLE;
             VkDescriptorSet boundSet = VK_NULL_HANDLE;
             float boundFix = -1.0f;
-            for (uint32_t i = firstDraw; i < lastDraw; ++i)
-            {
+
+            // One draw into whichever pass is open. push.viewport's first half
+            // is the pass's, set by the caller.
+            auto drawOne = [&](uint32_t i) {
                 // A dynamic draw's geometry is in this frame's buffers, and
                 // looking its key up in the mesh cache would cache it forever.
                 const bool dynamic = draws[i].dynamicVerts != nullptr &&
@@ -2558,29 +2841,20 @@ namespace ghpc
                     dynamic ? nullptr : meshBuffers(draws[i].meshKey, draws[i].generation, frameIndex);
                 if (!dynamic && buffers == nullptr)
                 {
-                    continue;
+                    return;
                 }
-
-                // On screen means the draw's scissor is the displayed frame.
-                // The FRAME base pointer is not the test, since a double
-                // buffered frame alternates it; the extent does not move.
                 const scene::Target &target = draws[i].target;
-                if (target.scissor[1] + 1u != m_sourceWidth || target.scissor[3] + 1u != m_sourceHeight)
-                {
-                    ++m_meshOffscreen;
-                    continue;
-                }
                 if (!m_hiddenMeshes.empty() &&
                     std::find(m_hiddenMeshes.begin(), m_hiddenMeshes.end(), draws[i].meshKey) !=
                         m_hiddenMeshes.end())
                 {
-                    continue;
+                    return;
                 }
                 const scene::Material &mat = draws[i].material;
                 if (m_skipAlphaTested && mat.alphaTest)
                 {
                     ++m_meshSkippedAte;
-                    continue;
+                    return;
                 }
                 PipelineKey key{};
                 key.ztst = mat.ztst & 3u;
@@ -2600,7 +2874,7 @@ namespace ghpc
                 VkPipeline pipeline = pipelineFor(key);
                 if (pipeline == VK_NULL_HANDLE)
                 {
-                    continue;
+                    return;
                 }
                 if (pipeline != bound)
                 {
@@ -2646,6 +2920,164 @@ namespace ghpc
                     tris += buffers->indexCount / 3u;
                 }
                 ++drawn;
+            };
+
+            // Offscreen targets first, so a draw that samples one this frame
+            // reads what this frame drew, as it would from GS memory. Grouped
+            // by FBP and generation in order of first appearance, draw order
+            // kept within.
+            std::vector<std::pair<uint32_t, std::vector<uint32_t>>> offscreen;
+            for (uint32_t i = firstDraw; i < lastDraw; ++i)
+            {
+                if (onScreen(i))
+                {
+                    continue;
+                }
+                if (!m_rtEnabled)
+                {
+                    ++m_meshOffscreen;
+                    continue;
+                }
+                const uint32_t key = m_drawTargetKey[i];
+                auto it = std::find_if(offscreen.begin(), offscreen.end(),
+                                       [key](const auto &g) { return g.first == key; });
+                if (it == offscreen.end())
+                {
+                    offscreen.push_back({key, {}});
+                    it = offscreen.end() - 1;
+                }
+                it->second.push_back(i);
+            }
+            for (const auto &group : offscreen)
+            {
+                // Sized by the texture that samples it when one has been
+                // bound, which textureFor did above; otherwise by the scissor.
+                const scene::Target &first = draws[group.second.front()].target;
+                RenderTarget *rt = renderTargetFor(cmd, group.first, first.scissor[1] + 1u, first.scissor[3] + 1u);
+                if (rt == nullptr)
+                {
+                    m_meshOffscreen += group.second.size();
+                    continue;
+                }
+                VkRenderPassBeginInfo rtBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+                rtBegin.renderPass = m_rtPass;
+                rtBegin.framebuffer = rt->framebuffer;
+                rtBegin.renderArea.extent = {rt->width, rt->height};
+                rtBegin.clearValueCount = 2u;
+                rtBegin.pClearValues = clears;
+                vkCmdBeginRenderPass(cmd, &rtBegin, VK_SUBPASS_CONTENTS_INLINE);
+                // GS pixels one to one: the target is the guest's buffer.
+                const VkViewport rtViewport{0.0f, 0.0f, (float)rt->width, (float)rt->height, 0.0f, 1.0f};
+                vkCmdSetViewport(cmd, 0u, 1u, &rtViewport);
+                push.viewport[0] = (float)rt->width * 0.5f;
+                push.viewport[1] = (float)rt->height * 0.5f;
+                bound = VK_NULL_HANDLE;
+                boundSet = VK_NULL_HANDLE;
+                boundFix = -1.0f;
+                for (uint32_t i : group.second)
+                {
+                    // The GS clips to SCISSOR_1, which in a target can be a
+                    // sub-rect of it.
+                    const scene::Target &t = draws[i].target;
+                    const uint32_t x0 = std::min(t.scissor[0], rt->width);
+                    const uint32_t y0 = std::min(t.scissor[2], rt->height);
+                    const uint32_t x1 = std::min(t.scissor[1] + 1u, rt->width);
+                    const uint32_t y1 = std::min(t.scissor[3] + 1u, rt->height);
+                    const VkRect2D clip{{(int32_t)x0, (int32_t)y0}, {x1 > x0 ? x1 - x0 : 0u, y1 > y0 ? y1 - y0 : 0u}};
+                    vkCmdSetScissor(cmd, 0u, 1u, &clip);
+                    drawOne(i);
+                    ++m_rtDraws;
+                }
+                vkCmdEndRenderPass(cmd);
+
+                if (m_rtDump && &group == &offscreen.front())
+                {
+                    const VkDeviceSize bytes = (VkDeviceSize)rt->width * rt->height * 4u;
+                    if (m_rtDumpBuffer == VK_NULL_HANDLE)
+                    {
+                        VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+                        info.size = 4096u * 4096u * 4u;
+                        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                        VkMemoryRequirements req{};
+                        uint32_t type = 0u;
+                        if (vkCreateBuffer(m_device, &info, nullptr, &m_rtDumpBuffer) == VK_SUCCESS &&
+                            (vkGetBufferMemoryRequirements(m_device, m_rtDumpBuffer, &req), true) &&
+                            findMemoryType(req.memoryTypeBits,
+                                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                           type))
+                        {
+                            VkMemoryAllocateInfo alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                            alloc.allocationSize = req.size;
+                            alloc.memoryTypeIndex = type;
+                            vkAllocateMemory(m_device, &alloc, nullptr, &m_rtDumpMemory);
+                            vkBindBufferMemory(m_device, m_rtDumpBuffer, m_rtDumpMemory, 0u);
+                            vkMapMemory(m_device, m_rtDumpMemory, 0u, req.size, 0u, &m_rtDumpMapped);
+                        }
+                    }
+                    if (m_rtDumpMapped != nullptr && bytes <= 4096u * 4096u * 4u)
+                    {
+                        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                        b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                        b.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                        b.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                        b.image = rt->image;
+                        b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 1u, 0u, 1u};
+                        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                             0u, 0u, nullptr, 0u, nullptr, 1u, &b);
+                        VkBufferImageCopy region{};
+                        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0u, 0u, 1u};
+                        region.imageExtent = {rt->width, rt->height, 1u};
+                        vkCmdCopyImageToBuffer(cmd, rt->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m_rtDumpBuffer, 1u,
+                                               &region);
+                        b.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                        b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                        b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                        b.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                             0u, 0u, nullptr, 0u, nullptr, 1u, &b);
+                        m_rtDumpWidth = rt->width;
+                        m_rtDumpHeight = rt->height;
+                    }
+                }
+            }
+
+            VkRenderPassBeginInfo passBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+            passBegin.renderPass = m_meshPass;
+            passBegin.framebuffer = m_meshFramebuffers[imageIndex];
+            passBegin.renderArea.extent = m_swapchainExtent;
+            passBegin.clearValueCount = 2u;
+            passBegin.pClearValues = clears;
+            vkCmdBeginRenderPass(cmd, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+            // The same letterboxed rect the software picture is blitted into,
+            // so the two land on top of each other and can be compared by
+            // looking at them.
+            VkViewport viewport{};
+            viewport.x = (float)viewportRect.offset.x;
+            viewport.y = (float)viewportRect.offset.y;
+            viewport.width = (float)viewportRect.extent.width;
+            viewport.height = (float)viewportRect.extent.height;
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0u, 1u, &viewport);
+            vkCmdSetScissor(cmd, 0u, 1u, &viewportRect);
+            // Half the source picture, not half the window: the transform
+            // lands in the guest's framebuffer and the viewport scales that
+            // to the letterbox.
+            push.viewport[0] = (float)m_sourceWidth * 0.5f;
+            push.viewport[1] = (float)m_sourceHeight * 0.5f;
+            bound = VK_NULL_HANDLE;
+            boundSet = VK_NULL_HANDLE;
+            boundFix = -1.0f;
+            for (uint32_t i = firstDraw; i < lastDraw; ++i)
+            {
+                if (onScreen(i))
+                {
+                    drawOne(i);
+                }
             }
 
             vkCmdEndRenderPass(cmd);
@@ -2823,6 +3255,30 @@ namespace ghpc
             std::fclose(f);
             ++m_shots;
 
+            if (m_rtDump && m_rtDumpMapped != nullptr && m_rtDumpWidth != 0u)
+            {
+                std::string rtPath(path);
+                rtPath.replace(rtPath.size() - 4u, 4u, "_rt.ppm");
+                if (FILE *r = std::fopen(rtPath.c_str(), "wb"))
+                {
+                    // Colour on the left, alpha as grey on the right.
+                    std::fprintf(r, "P6\n%u %u\n255\n", m_rtDumpWidth * 2u, m_rtDumpHeight);
+                    const uint8_t *s = static_cast<const uint8_t *>(m_rtDumpMapped);
+                    for (uint32_t y = 0u; y < m_rtDumpHeight; ++y)
+                    {
+                        for (uint32_t x = 0u; x < m_rtDumpWidth * 2u; ++x)
+                        {
+                            const size_t i = ((size_t)y * m_rtDumpWidth + (x % m_rtDumpWidth)) * 4u;
+                            uint8_t rgb[3] = {s[i + 2], s[i + 1], s[i + 0]};
+                            if (x >= m_rtDumpWidth)
+                                rgb[0] = rgb[1] = rgb[2] = s[i + 3];
+                            std::fwrite(rgb, 1, 3, r);
+                        }
+                    }
+                    std::fclose(r);
+                }
+            }
+
             if (m_idMode)
             {
                 std::string tablePath(path);
@@ -2951,6 +3407,11 @@ namespace ghpc
             {
                 m_textures = std::atoi(tex) != 0;
             }
+            if (const char *rt = std::getenv("GHPC_VK_RT"); rt != nullptr)
+            {
+                m_rtEnabled = std::atoi(rt) != 0;
+            }
+            m_rtDump = std::getenv("GHPC_VK_RT_DUMP") != nullptr;
             if (const char *light = std::getenv("GHPC_VK_LIGHT"); light != nullptr)
             {
                 m_lighting = std::atoi(light) != 0;

@@ -231,6 +231,18 @@ namespace ghpc
         // is 1.0. False when the version moved on since textureInfo.
         bool copyTexture(uint32_t texKey, uint64_t version, void *dst, uint64_t bytes);
 
+        // A PsTex the GS draws into (+0x48 & 8), which has no bitmap.
+        // PsTex::Select points its TBP0 at the render target's frame, (FBP &
+        // 0x1ff) << 5, so `fbp` names the offscreen target a backend renders
+        // that frame's draws into. width and height are PsTex +0x4c/+0x50,
+        // tw and th its TEX0's, which the UVs are normalised to.
+        void setRenderTargetTexture(uint32_t texKey, uint32_t fbp, uint32_t width, uint32_t height,
+                                    uint32_t tw, uint32_t th, uint32_t psm);
+        bool renderTargetTexture(uint32_t texKey, uint32_t &fbp, uint32_t &width, uint32_t &height,
+                                 float uvScale[2], uint32_t &psm);
+        // TEXA as setGsTexa last stored it: ta0 | ta1 << 8 | aem << 16.
+        uint32_t gsTexa();
+
         // GS TEXA, which is what a 16-bit texel's alpha bit selects between.
         void setGsTexa(uint32_t ta0, uint32_t ta1, bool aem);
 

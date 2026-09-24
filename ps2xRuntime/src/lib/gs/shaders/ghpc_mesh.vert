@@ -47,7 +47,7 @@ struct DrawData
     uint lightMode; // 0 unlit (mColor), 1 passthrough, 2 ambient, 3 directional, 4 point
     uint lightFlags;// bit 0 prelit, bit 1 mUseEnviron
     uint uvMode;    // 1: material program 0x17c's texture transform
-    uint pad0;
+    uint texa;      // 16-bit target: ta0 | ta1 << 8 | aem << 16 | 1 << 24
     vec4 uvRows;    // xy row 0, zw row 1 of the transform at PsMat+0x170
     vec4 uvOffset;  // xy row 3
 };
@@ -143,6 +143,7 @@ layout(location = 0) out vec3 vNorm;
 layout(location = 1) out vec2 vUv;
 layout(location = 2) out vec4 vColor;
 layout(location = 3) flat out uint vMode;
+layout(location = 4) flat out uint vTexa;
 
 void main()
 {
@@ -221,4 +222,5 @@ void main()
         vColor = d.color;
     }
     vMode = d.mode;
+    vTexa = d.texa;
 }

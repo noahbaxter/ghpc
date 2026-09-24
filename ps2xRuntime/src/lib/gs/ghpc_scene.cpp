@@ -961,6 +961,11 @@ namespace ghpc
             s.texaSeen.store(true, std::memory_order_relaxed);
         }
 
+        uint32_t gsTexa()
+        {
+            return state().texa.load(std::memory_order_relaxed);
+        }
+
         namespace
         {
             // 32 bytes spread over the pixels and 8 over the palette. Two
@@ -985,6 +990,42 @@ namespace ghpc
                 mix(source.palette, palette, 8u);
                 return h;
             }
+        }
+
+        namespace
+        {
+            struct RenderTargetTexture
+            {
+                uint32_t fbp, width, height, tw, th, psm;
+            };
+            std::mutex s_rtMutex;
+            std::unordered_map<uint32_t, RenderTargetTexture> s_rtTextures;
+        }
+
+        void setRenderTargetTexture(uint32_t texKey, uint32_t fbp, uint32_t width, uint32_t height,
+                                    uint32_t tw, uint32_t th, uint32_t psm)
+        {
+            std::lock_guard<std::mutex> lock(s_rtMutex);
+            s_rtTextures[texKey] = RenderTargetTexture{fbp, width, height, tw, th, psm};
+        }
+
+        bool renderTargetTexture(uint32_t texKey, uint32_t &fbp, uint32_t &width, uint32_t &height,
+                                 float uvScale[2], uint32_t &psm)
+        {
+            std::lock_guard<std::mutex> lock(s_rtMutex);
+            auto it = s_rtTextures.find(texKey);
+            if (it == s_rtTextures.end() || it->second.width == 0u || it->second.height == 0u)
+            {
+                return false;
+            }
+            const RenderTargetTexture &t = it->second;
+            fbp = t.fbp;
+            psm = t.psm;
+            width = t.width;
+            height = t.height;
+            uvScale[0] = t.tw ? (float)(1u << t.tw) / (float)t.width : 1.0f;
+            uvScale[1] = t.th ? (float)(1u << t.th) / (float)t.height : 1.0f;
+            return true;
         }
 
         void setTexture(uint32_t texKey, const TextureSource &source)

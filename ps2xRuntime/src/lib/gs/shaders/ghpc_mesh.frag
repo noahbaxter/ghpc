@@ -16,6 +16,8 @@ layout(location = 0) in vec3 vNorm;
 layout(location = 1) in vec2 vUv;
 layout(location = 2) in vec4 vColor;
 layout(location = 3) flat in uint vMode;
+// A 16-bit target's TEXA: ta0 | ta1 << 8 | aem << 16, and bit 24 set.
+layout(location = 4) flat in uint vTexa;
 
 layout(set = 1, binding = 0) uniform sampler2D uTex;
 
@@ -34,6 +36,8 @@ layout(location = 0) out vec4 outColor;
 //   bit  19     blended
 //   bit  20     draw-ID output, GHPC_VK_MESH_ID
 //   bit  21     vertex colour is VU1's lit colour, not mColor
+//   bit  22     the texture is an offscreen target this pass drew, which
+//               stores alpha the way outColor does, 1.0 at the GS's 0x80
 bool alphaPasses(uint atst, float a, float aref)
 {
     switch (atst)
@@ -74,6 +78,24 @@ void main()
             uv.y = clamp(uv.y, lo.y, 1.0 - lo.y);
         }
         vec4 t = texture(uTex, uv) * 255.0;
+        if ((vMode & (1u << 22)) != 0u)
+        {
+            t.a *= 128.0 / 255.0;
+            // A 16-bit frame keeps one alpha bit, the top one of what was
+            // drawn, and a read expands it through TEXA as the decoder does
+            // for a 16-bit bitmap. So anything drawn under 0x80 reads as
+            // TA0, which is what makes the crowd sheet's background clear.
+            if ((vTexa & (1u << 24)) != 0u)
+            {
+                bool bit = t.a >= 127.5;
+                bool aem = (vTexa & (1u << 16)) != 0u;
+                if (bit)
+                    t.a = float((vTexa >> 8) & 0xFFu);
+                else
+                    // AEM's black is five zero bits per channel.
+                    t.a = (aem && all(lessThan(t.rgb, vec3(8.0)))) ? 0.0 : float(vTexa & 0xFFu);
+            }
+        }
 
         switch ((vMode >> 1) & 3u)
         {
