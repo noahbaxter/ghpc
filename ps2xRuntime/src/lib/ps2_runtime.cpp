@@ -473,6 +473,24 @@ static float displayAspect(uint8_t *rdram)
     return wide ? 16.0f / 9.0f : 4.0f / 3.0f;
 }
 
+// ghpc.ini [cheats]. unlock_all does what the main menu's unlock-all cheat
+// does to the game (config/gen/long_cheats.dtb: {campaign set_all_access 1}),
+// which Campaign::Handle (0x135610) stores as TheCampaign (*0x440c24)
+// mAllAccess, +0x80. Campaign::Save does not write it, so it lasts a session.
+// The cheat also sets disable_save and disable_career; this leaves saving on.
+static void applyCheats(uint8_t *rdram)
+{
+    static const bool unlockAll = ghpc::settings().getBool("cheats", "unlock_all", false);
+    if (!unlockAll)
+        return;
+    uint32_t campaign = 0;
+    std::memcpy(&campaign, rdram + (0x440c24u & PS2_RAM_MASK), 4);
+    if (campaign == 0 || (campaign & PS2_RAM_MASK) + 0x84u > PS2_RAM_SIZE)
+        return;
+    const uint32_t on = 1u;
+    std::memcpy(rdram + (campaign & PS2_RAM_MASK) + 0x80u, &on, 4);
+}
+
 // Produces the RGBA8 frame both renderers present: the whole FB_WIDTH x
 // FB_HEIGHT buffer, of which outWidth x outHeight is the live picture. Returns
 // null when this vsync tick has already been presented and there is nothing
@@ -3834,6 +3852,7 @@ void PS2Runtime::run()
                 frame.sourceWidth = vkWidth;
                 frame.sourceHeight = vkHeight;
                 frame.displayAspect = displayAspect(m_memory.getRDRAM());
+                applyCheats(m_memory.getRDRAM());
                 m_hostRenderer->uploadFrame(frame);
             }
             m_hostRenderer->present();
