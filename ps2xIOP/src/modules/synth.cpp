@@ -73,6 +73,12 @@ namespace ps2x::iop::detail
         constexpr uint32_t kCmdStreamDataInfo = 0x198u;
         constexpr uint32_t kCmdStreamData = 0x199u;
         constexpr uint32_t kCmdStreamDataEnd = 0x19au;
+        // StreamEE's slip calls, the whammy's pitch bend on the guitar
+        // channels: SetSlipOffset {id, short ch, int samples}, StopSlip
+        // {id, int ch}, SetSlipSpeed {id, int ch, int speed * 1000}.
+        constexpr uint32_t kCmdStreamSlipOffset = 0x19bu;
+        constexpr uint32_t kCmdStreamSlipStop = 0x19cu;
+        constexpr uint32_t kCmdStreamSlipSpeed = 0x19du;
 
         // SampleInstEE's, the same way:
         //   0x2bc ctor 0x269fe0      CreateSampleArg {handle, spuAddr, rate}
@@ -413,6 +419,18 @@ namespace ps2x::iop::detail
                         std::memcpy(&id, raw, 4);
                         std::memcpy(&ch, raw + 4, 2);
                         synth::streamDataTarget(id, static_cast<uint16_t>(ch));
+                    }
+                    else if (cmd == kCmdStreamSlipOffset || cmd == kCmdStreamSlipStop ||
+                             cmd == kCmdStreamSlipSpeed)
+                    {
+                        uint32_t w[3]{};
+                        m_host.readGuest(payload, w, std::min<size_t>(len, sizeof(w)));
+                        if (cmd == kCmdStreamSlipOffset)
+                            synth::streamSlipOffset(w[0], w[1] & 0xffffu, static_cast<int32_t>(w[2]));
+                        else if (cmd == kCmdStreamSlipStop)
+                            synth::streamSlipStop(w[0], w[1]);
+                        else
+                            synth::streamSlipSpeed(w[0], w[1], static_cast<int32_t>(w[2]));
                     }
                     else if (cmd == kCmdStreamData)
                     {

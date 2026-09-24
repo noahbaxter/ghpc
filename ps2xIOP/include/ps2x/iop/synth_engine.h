@@ -33,6 +33,12 @@ namespace ps2x::iop::synth
     void streamDestroy(uint32_t id);
     void streamVolumePan(uint32_t id, uint32_t channel, int16_t volume, int16_t pan);
     void streamSpeed(uint32_t id, int16_t speedMilli);
+    // Whammy: SlipTrack bends a channel by playing it at its own speed
+    // (0x19d), puts it back in time (0x19b, samples from the song) and ends
+    // the slip (0x19c).
+    void streamSlipSpeed(uint32_t id, uint32_t channel, int32_t speedMilli);
+    void streamSlipOffset(uint32_t id, uint32_t channel, int32_t samples);
+    void streamSlipStop(uint32_t id, uint32_t channel);
     void streamDataTarget(uint32_t id, uint32_t channel);
     void streamData(const uint8_t *bytes, uint32_t len);
     void streamDataBatchEnd(uint32_t id);

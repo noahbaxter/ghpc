@@ -24,8 +24,13 @@ namespace ps2x::iop::synth
         //   3 -> StreamEE::Dispatch(id, 3, pos): Poll converts pos * 28 samples
         //        to ms against channel 0's rate, adds the start offset and
         //        snaps the stream's timer if it is more than 100 ms out.
+        //   4 -> StreamEE::DispatchSlipOffset({id, short channel, int samples})
+        //        stores a slip channel's offset from the song, which
+        //        GetSlipOffset reads for ChannelData::SetSlipTrackSpeed's
+        //        max_slip clamp.
         constexpr uint32_t kReplyStreamData = 0u;
         constexpr uint32_t kReplyStreamPos = 3u;
+        constexpr uint32_t kReplySlipOffset = 4u;
 
         const auto kProcessStart = std::chrono::steady_clock::now();
 
@@ -60,6 +65,15 @@ namespace ps2x::iop::synth
             float pan = 0.0f;
             int fxCore = -1;
             bool fx = false;
+            // Whammy. A slip channel plays at its own speed on top of the
+            // stream's, which bends its pitch and lets it fall behind the
+            // song; `pos` is its own count of source samples consumed, so
+            // pos - Stream::consumed is its offset. It does not stall the
+            // stream when short, it only goes quiet.
+            bool slipping = false;
+            float slip = 1.0f;
+            int64_t pos = 0;
+            int64_t reportedOffset = 0;
 
             size_t bufferedBytes() const { return pcm.size() / kAdpcmSamples * kAdpcmBlock; }
         };
@@ -537,6 +551,63 @@ namespace ps2x::iop::synth
         }
     }
 
+    void streamSlipSpeed(uint32_t id, uint32_t channel, int32_t speedMilli)
+    {
+        Engine &e = engine();
+        std::lock_guard<std::mutex> lock(e.mutex);
+        Stream *s = find(e, id);
+        if (s && channel < s->channels.size())
+        {
+            Channel &ch = s->channels[channel];
+            ch.slipping = true;
+            ch.slip = std::max(0.0f, speedMilli / 1000.0f);
+        }
+    }
+
+    void streamSlipOffset(uint32_t id, uint32_t channel, int32_t samples)
+    {
+        Engine &e = engine();
+        std::lock_guard<std::mutex> lock(e.mutex);
+        Stream *s = find(e, id);
+        if (!s || channel >= s->channels.size())
+        {
+            return;
+        }
+        // Moves the channel to `samples` from the song. Forward drops what it
+        // has buffered ahead, which a lagging channel always holds; backward
+        // would need what it already played, so it is held in silence
+        // instead, which keeps it in time.
+        Channel &ch = s->channels[channel];
+        const int64_t delta = samples - (ch.pos - static_cast<int64_t>(s->consumed));
+        if (delta > 0)
+        {
+            const size_t drop = std::min<size_t>(static_cast<size_t>(delta), ch.pcm.size());
+            ch.pcm.erase(ch.pcm.begin(), ch.pcm.begin() + static_cast<std::ptrdiff_t>(drop));
+            ch.pos += static_cast<int64_t>(drop);
+        }
+        else if (delta < 0)
+        {
+            ch.pcm.insert(ch.pcm.begin(), static_cast<size_t>(-delta), int16_t{0});
+            ch.pos += delta;
+        }
+    }
+
+    void streamSlipStop(uint32_t id, uint32_t channel)
+    {
+        Engine &e = engine();
+        {
+            std::lock_guard<std::mutex> lock(e.mutex);
+            Stream *s = find(e, id);
+            if (!s || channel >= s->channels.size())
+            {
+                return;
+            }
+            s->channels[channel].slipping = false;
+            s->channels[channel].slip = 1.0f;
+        }
+        streamSlipOffset(id, channel, 0);
+    }
+
     void streamDataTarget(uint32_t id, uint32_t channel)
     {
         Engine &e = engine();
@@ -810,6 +881,24 @@ namespace ps2x::iop::synth
                 r.data[1] = static_cast<uint32_t>(s.consumed / kAdpcmSamples);
                 out.push_back(r);
             }
+
+            for (uint32_t c = 0; c < s.channels.size(); ++c)
+            {
+                Channel &ch = s.channels[c];
+                const int64_t offset = ch.pos - static_cast<int64_t>(s.consumed);
+                if (!ch.slipping || offset == ch.reportedOffset)
+                {
+                    continue;
+                }
+                ch.reportedOffset = offset;
+                Reply r;
+                r.cmd = kReplySlipOffset;
+                r.len = 12u;
+                r.data[0] = s.id;
+                r.data[1] = c; // a short at +4, low half of the word
+                r.data[2] = static_cast<uint32_t>(static_cast<int32_t>(offset));
+                out.push_back(r);
+            }
         }
         return out.size() - before;
     }
@@ -872,7 +961,7 @@ namespace ps2x::iop::synth
                 bool starved = false;
                 for (Channel &ch : s.channels)
                 {
-                    if (ch.dead || !ch.gotData)
+                    if (ch.dead || !ch.gotData || ch.slipping)
                     {
                         continue;
                     }
@@ -897,6 +986,11 @@ namespace ps2x::iop::synth
                     {
                         continue;
                     }
+                    const double step = ch.freq * static_cast<double>(s.speed * ch.slip) / rate;
+                    if (ch.slipping && ch.pcm.size() < static_cast<size_t>(ch.phase + step) + 2u)
+                    {
+                        continue;
+                    }
                     const double frac = ch.phase;
                     const float a = ch.pcm[0];
                     const float b = ch.pcm[1];
@@ -911,11 +1005,12 @@ namespace ps2x::iop::synth
                         e.send[core][f * 2u] += vl;
                         e.send[core][f * 2u + 1u] += vr;
                     }
-                    ch.phase += ch.freq * static_cast<double>(s.speed) / rate;
+                    ch.phase += step;
                     const size_t whole = static_cast<size_t>(ch.phase);
                     ch.phase -= static_cast<double>(whole);
                     ch.pcm.erase(ch.pcm.begin(), ch.pcm.begin() + static_cast<std::ptrdiff_t>(whole));
-                    if (first)
+                    ch.pos += static_cast<int64_t>(whole);
+                    if (first && !ch.slipping)
                     {
                         s.consumed += whole;
                         first = false;
@@ -965,9 +1060,10 @@ namespace ps2x::iop::synth
             {
                 const Channel &ch = s.channels[c];
                 std::snprintf(line, sizeof(line),
-                              "    ch%zu freq=%u vol=%.3f pan=%.2f buf=%zu got=%d dead=%d fx=%d/%d\n", c,
-                              ch.freq, ch.volume, ch.pan, ch.pcm.size(), ch.gotData, ch.dead,
-                              ch.fx, ch.fxCore);
+                              "    ch%zu freq=%u vol=%.3f pan=%.2f buf=%zu got=%d dead=%d fx=%d/%d slip=%d/%.3f/%lld\n",
+                              c, ch.freq, ch.volume, ch.pan, ch.pcm.size(), ch.gotData, ch.dead,
+                              ch.fx, ch.fxCore, ch.slipping, ch.slip,
+                              (long long)(ch.pos - static_cast<int64_t>(s.consumed)));
                 out += line;
             }
         }
