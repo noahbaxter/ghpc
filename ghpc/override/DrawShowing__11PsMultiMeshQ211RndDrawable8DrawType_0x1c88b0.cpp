@@ -38,6 +38,32 @@ void ghpcSceneSubmitInstance(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runt
 
 namespace {
 
+uint32_t s_pendingBillboard = 0u;
+
+// Walks the instance list and submits each Transform. `rows`, when set, is a
+// Transform whose rows 0-2 replace every instance's own: the billboard case.
+uint32_t submitInstances(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self,
+                         uint32_t key, uint32_t rows) {
+    const uint32_t sentinel = self + 0x50u;
+    uint32_t node = READ32(sentinel);
+    uint32_t instances = 0u;
+    while (node != sentinel && node != 0u && instances < 4096u) {
+        float m[16];
+        for (uint32_t r = 0; r < 4u; ++r) {
+            const uint32_t src = (rows != 0u && r < 3u) ? rows + r * 0x10u : node + 0x10u + r * 0x10u;
+            for (uint32_t c = 0; c < 3u; ++c) {
+                const uint32_t bits = READ32(src + c * 4u);
+                std::memcpy(&m[r * 4u + c], &bits, sizeof(float));
+            }
+            m[r * 4u + 3u] = (r == 3u) ? 1.0f : 0.0f;
+        }
+        ghpcSceneSubmitInstance(rdram, ctx, runtime, key, m);
+        ++instances;
+        node = READ32(node);
+    }
+    return instances;
+}
+
 void ghpcMultiMeshSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t self) {
     // GHPC_SCENE_MULTIMESH=0 drops these draws again, the control arm.
     static const bool s_on = []() {
@@ -53,34 +79,36 @@ void ghpcMultiMeshSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
     const bool billboard = READ32(mesh + 0xe4u) == 8u;
 
     static const bool s_log = std::getenv("GHPC_MULTIMESH_LOG") != nullptr;
-    static uint64_t s_calls = 0, s_billboards = 0;
+    static uint64_t s_calls = 0;
     ++s_calls;
     if (billboard) {
-        ++s_billboards;
-        if (s_log && (s_billboards <= 4u || (s_billboards % 5000u) == 0u))
-            std::fprintf(stderr, "[ghpc/multimesh] billboard mesh=0x%08x not drawn (%llu of %llu)\n",
-                         mesh, (unsigned long long)s_billboards, (unsigned long long)s_calls);
+        // Its rows come from WorldXfm, which the body calls later in this
+        // pass; ghpcBillboardSubmit picks it up there.
+        s_pendingBillboard = self;
         return;
     }
-
-    const uint32_t sentinel = self + 0x50u;
-    uint32_t node = READ32(sentinel);
-    uint32_t instances = 0u;
-    while (node != sentinel && node != 0u && instances < 4096u) {
-        float m[16];
-        for (uint32_t r = 0; r < 4u; ++r) {
-            for (uint32_t c = 0; c < 3u; ++c) {
-                const uint32_t bits = READ32(node + 0x10u + r * 0x10u + c * 4u);
-                std::memcpy(&m[r * 4u + c], &bits, sizeof(float));
-            }
-            m[r * 4u + 3u] = (r == 3u) ? 1.0f : 0.0f;
-        }
-        ghpcSceneSubmitInstance(rdram, ctx, runtime, key, m);
-        ++instances;
-        node = READ32(node);
-    }
+    const uint32_t instances = submitInstances(rdram, ctx, runtime, self, key, 0u);
     if (s_log && s_calls <= 8u)
         std::fprintf(stderr, "[ghpc/multimesh] mesh=0x%08x key=0x%08x instances=%u\n", mesh, key, instances);
+}
+
+// The billboard pass, at 0x1c8ca8, where WorldXfm(*0x444c60) has just come
+// back into $s1. Each instance uploads that transform's rows 0-2 and only its
+// own position (0x1c8dfc..0x1c8e3c), so every card faces the camera.
+void ghpcBillboardSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, uint32_t xfm) {
+    const uint32_t self = s_pendingBillboard;
+    s_pendingBillboard = 0u;
+    if (self == 0u || xfm == 0u || !ghpc::scene::active()) return;
+    const uint32_t mesh = READ32(self + 0x48u);
+    if (mesh == 0u) return;
+    const uint32_t owner = READ32(mesh + 0x138u);
+    const uint32_t instances = submitInstances(rdram, ctx, runtime, self, owner ? owner : mesh, xfm);
+
+    static const bool s_log = std::getenv("GHPC_MULTIMESH_LOG") != nullptr;
+    static uint64_t s_billboards = 0;
+    if (s_log && (++s_billboards <= 4u || (s_billboards % 5000u) == 0u))
+        std::fprintf(stderr, "[ghpc/multimesh] billboard mesh=0x%08x instances=%u (%llu)\n", mesh, instances,
+                     (unsigned long long)s_billboards);
 }
 
 } // namespace
@@ -2176,6 +2204,7 @@ label_1c8ca8:
     // 0x1c8ca8: 0x40882d  daddu       $s1, $v0, $zero
     ctx->pc = 0x1c8ca8u;
     SET_GPR_U64(ctx, 17, (uint64_t)GPR_U64(ctx, 2) + (uint64_t)GPR_U64(ctx, 0));
+    ghpcBillboardSubmit(rdram, ctx, runtime, GPR_U32(ctx, 17));
 label_1c8cac:
     // 0x1c8cac: 0x24030149  addiu       $v1, $zero, 0x149
     ctx->pc = 0x1c8cacu;
