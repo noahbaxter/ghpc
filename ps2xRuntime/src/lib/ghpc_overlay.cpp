@@ -213,10 +213,10 @@ namespace ghpc
             break;
         case kMsaa:
         {
-            // 1, 2, 4, 8 as steps 0..3, capped at what the GPU does.
-            int step = l.msaa >= 8 ? 3 : l.msaa >= 4 ? 2 : l.msaa >= 2 ? 1 : 0;
-            const int max = l.msaaMax >= 8 ? 3 : l.msaaMax >= 4 ? 2 : l.msaaMax >= 2 ? 1 : 0;
-            step = stepWrap(step, dir, 0, max);
+            // 1, 2, 4, 8, 16 as steps 0..4. Past the GPU's MSAA the renderer
+            // makes up the rest by supersampling, so every step is offered.
+            int step = l.msaa >= 16 ? 4 : l.msaa >= 8 ? 3 : l.msaa >= 4 ? 2 : l.msaa >= 2 ? 1 : 0;
+            step = stepWrap(step, dir, 0, 4);
             l.msaa = 1 << step;
             saveSetting("display", "msaa", std::to_string(l.msaa.load()));
             break;
@@ -339,7 +339,7 @@ namespace ghpc
             {"Fullscreen", onOff(m_fullscreen)},
             {"Widescreen", onOff(l.widescreen)},
             {"Resolution", resolutionName(l.renderScale)},
-            {"Anti-aliasing", l.msaa <= 1 ? std::string("OFF") : std::to_string(l.msaa.load()) + "X MSAA"},
+            {"Anti-aliasing", l.msaa <= 1 ? std::string("OFF") : std::to_string(l.msaa.load()) + "X"},
             {"Volume", l.volume == 0 ? std::string("MUTED") : std::to_string(l.volume.load()) + "%"},
             {"FPS counter", onOff(l.showFps)},
             {"Unlock all songs", onOff(l.unlockAll)},

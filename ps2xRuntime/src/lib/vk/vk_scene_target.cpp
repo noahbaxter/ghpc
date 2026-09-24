@@ -125,9 +125,14 @@ namespace ghpc
                 return best;
             }();
             l.msaaMax = s_max;
-            const int msaa = std::min(std::max(1, l.msaa.load(std::memory_order_relaxed)), s_max);
+            // Past the GPU's own sample count the rest is supersampling:
+            // twice the width and height, filtered down by the blit, so 16x
+            // on a 4x GPU is 4x MSAA over a 2x2 supersample.
+            const int want = std::max(1, l.msaa.load(std::memory_order_relaxed));
+            const int msaa = want <= s_max ? want : std::max(1, std::min(s_max, want / 4));
+            const uint32_t ss = want > s_max ? 2u : 1u;
             const int scale = l.renderScale.load(std::memory_order_relaxed);
-            if (m_meshMode != 2 || (msaa <= 1 && scale <= 0))
+            if (m_meshMode != 2 || (want <= 1 && scale <= 0))
             {
                 return false;
             }
@@ -146,8 +151,8 @@ namespace ghpc
                                                   static_cast<float>(std::max(1u, dstRect.extent.height)) +
                                               0.5f);
             }
-            width = std::min(std::max(width, 1u), 8192u);
-            height = std::min(std::max(height, 1u), 8192u);
+            width = std::min(std::max(width * ss, 1u), 8192u);
+            height = std::min(std::max(height * ss, 1u), 8192u);
             return true;
         }
 

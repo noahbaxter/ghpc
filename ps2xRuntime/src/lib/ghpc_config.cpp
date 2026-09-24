@@ -184,7 +184,7 @@ namespace ghpc
             l->volume = std::max(0, std::min(100, f.getInt("audio", "volume", 100)));
             l->showFps = f.getBool("display", "show_fps", false);
             const int msaa = f.getInt("display", "msaa", 1);
-            l->msaa = msaa >= 8 ? 8 : msaa >= 4 ? 4 : msaa >= 2 ? 2 : 1;
+            l->msaa = msaa >= 16 ? 16 : msaa >= 8 ? 8 : msaa >= 4 ? 4 : msaa >= 2 ? 2 : 1;
             l->renderScale = std::max(0, std::min(4, f.getInt("display", "render_scale", 0)));
             return l;
         }();

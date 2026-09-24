@@ -217,11 +217,12 @@ window title names the renderer path that came up, e.g.
 
 **Do this next, in order** (from Noah's play-test, 2026-09-24):
 
-1. **16x anti-aliasing is written but was never built or run.** The overlay
-   now offers Off/2x/4x/8x/16x; past the GPU's 4x MSAA the rest is a 2x2
-   supersample (`sceneWanted`, `vk/vk_scene_target.cpp`). Build, run an
-   arm with `[display] msaa = 16`, check `[ghpc/vk/scene] target` reports
-   twice the window at msaa=4, and crop an edge against the 4x arm.
+1. **16x anti-aliasing works, 2026-09-24.** The overlay offers
+   Off/2x/4x/8x/16x; past the GPU's 4x MSAA the rest is a 2x2 supersample
+   (`sceneWanted`, `vk/vk_scene_target.cpp`). At `msaa = 16` the target is
+   2560x1440 msaa=4 against 1280x720 for 4x, edges are visibly smoother on
+   a crop, and both hold 60 fps at rate 1.000 from `songmesh`. A 4x repeat
+   arm was pixel-identical, so the difference clears the noise floor.
 2. **The crowd looks sparse.** Noah remembers denser audiences. Count
    placements per venue against what is drawn: `WorldCrowd` instance lists
    (`+0x5c` CharData list, multimesh instances at `+0x50`) against the
