@@ -707,6 +707,17 @@ if(PS2X_IS_ANDROID)
     target_sources(ps2EntryRunner PRIVATE src/lib/ps2_android_runtime.cpp)
 endif()
 
+# ghpcbind records a controller's layout into ghpc.ini. SDL3 only, no runtime.
+if(TARGET SDL3::SDL3)
+    add_executable(ghpcbind
+        src/tools/ghpcbind.cpp
+        src/lib/ghpc_config.cpp
+        src/lib/ghpc_input.cpp
+    )
+    target_include_directories(ghpcbind PRIVATE include)
+    target_link_libraries(ghpcbind PRIVATE SDL3::SDL3)
+endif()
+
 install(TARGETS ps2_runtime ps2EntryRunner
     RUNTIME DESTINATION bin
     LIBRARY DESTINATION lib

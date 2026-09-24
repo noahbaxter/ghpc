@@ -21,6 +21,14 @@
 # Keys: 1-5 frets, arrows D-pad (up/down strum), X/C/Z/V cross/circle/
 # square/triangle, Enter start. F5 saves the screen on show as
 # work/states/menu_<screen>, confirmed in the window title; not under --native.
+#   ./ghpc/scripts/play.sh --bind          record a controller's layout into
+#                                          work/ghpc.ini, then play. Controllers
+#                                          are read under --native only, so:
+#                                          --native --guitar --bind
+#   ./ghpc/scripts/play.sh --probe         print a controller's raw state live
+#
+# work/ghpc.ini also sets the window under --native:
+#   [display]  resolution = 1280x960  fullscreen = 1
 #   ./ghpc/scripts/play.sh --state song    resume a save state from work/states
 #   ./ghpc/scripts/play.sh --intro         boot the whole way through the intro
 #   ./ghpc/scripts/play.sh --debug         diagnostics build, 2.5-4x slower
@@ -40,12 +48,15 @@ DO_BUILD=0
 LOGFILE=""
 COUNTIN=""
 VERBOSE=0
+BIND=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --ingame)   INGAME=1 ;;
     --native)   export GHPC_RENDERER=vulkan GHPC_VK_MESH=2 GHPC_VU1_OFF=1 GHPC_WALL_PACE="${GHPC_WALL_PACE:-1}" ;;
     --guitar)   export GHPC_PAD_GUITAR=1 ;;
+    --bind)     BIND=bind ;;
+    --probe)    BIND=--probe ;;
     --state)    shift; export GHPC_STATE_LOAD="${1:?--state needs a slot}" ;;
     --intro)    WANT_SKIP=0 ;;
     --debug)    BUILD_DIR="build-debug" ;;
@@ -76,6 +87,15 @@ if [ "$DO_BUILD" = 1 ]; then
     build-calls) "$ROOT/ghpc/scripts/build.sh" --from=build --calls ;;
     *)           "$ROOT/ghpc/scripts/build.sh" --from=build ;;
   esac
+fi
+
+if [ -n "$BIND" ]; then
+  cmake --build "$ROOT/$BUILD_DIR" --target ghpcbind > /dev/null
+  BINDER="$ROOT/$BUILD_DIR/ps2xRuntime/ghpcbind"
+  if [ "$BIND" = --probe ]; then
+    exec "$BINDER" --probe "$WORK/ghpc.ini"
+  fi
+  "$BINDER" "$WORK/ghpc.ini"
 fi
 
 BIN="$ROOT/$BUILD_DIR/ps2xRuntime/ps2EntryRunner"
