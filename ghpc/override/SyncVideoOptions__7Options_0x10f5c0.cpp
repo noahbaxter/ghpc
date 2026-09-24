@@ -1,11 +1,11 @@
 // Override of work/output/SyncVideoOptions__7Options_0x10f5c0.cpp
 // (Options::SyncVideoOptions, 0x10f5c0 - 0x10f600).
 //
-// Why: widescreen on by default. The body passes mWideScreen (+0x38) to
-// Options::SetWideScreen, which sets Rnd's aspect and squeezes every camera
-// for 16:9. This runs whenever options are applied, including from a save,
-// so a profile saved with it off still starts widescreen. ghpc.ini
-// [display] widescreen = 0 leaves the game's own value alone.
+// Why: widescreen is ghpc's setting (ghpc::live(), ghpc.ini [display]
+// widescreen, on by default), not the profile's. The body passes mWideScreen
+// (+0x38) to Options::SetWideScreen, which sets Rnd's aspect and squeezes
+// every camera for 16:9. This runs whenever options are applied, including
+// from a save, so the flag is put in first and a profile cannot override it.
 #include <stdexcept>
 #include "ghpc_config.h"
 #include "ps2_runtime_macros.h"
@@ -34,9 +34,7 @@ void SyncVideoOptions__7Options_0x10f5c0(uint8_t* rdram, R5900Context* ctx, PS2R
     }
 
     // Fresh entry only. $a0 is `this`.
-    if (ghpc::settings().getBool("display", "widescreen", true)) {
-        WRITE32(GPR_U32(ctx, 4) + 0x38u, 1u);
-    }
+    WRITE32(GPR_U32(ctx, 4) + 0x38u, ghpc::live().widescreen.load() ? 1u : 0u);
 
     ctx->pc = 0x10f5c0u;
 

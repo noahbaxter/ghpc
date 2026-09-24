@@ -1,4 +1,5 @@
 #include "ghpc_synth_bridge.h"
+#include "ghpc_config.h"
 
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -106,6 +107,14 @@ namespace ghpc::synth
             buffer.resize(frames * 2u);
             ps2x::iop::synth::render(buffer.data(), frames, kOutputRate);
             g_wav.write(buffer.data(), buffer.size());
+            // The overlay's volume, after the WAV tap so a capture is the mix.
+            const int volume = ghpc::live().volume.load(std::memory_order_relaxed);
+            if (volume < 100)
+            {
+                const float gain = static_cast<float>(volume) / 100.0f;
+                for (float &s : buffer)
+                    s *= gain;
+            }
             SDL_PutAudioStreamData(stream, buffer.data(), static_cast<int>(buffer.size() * sizeof(float)));
         }
 #endif

@@ -1,5 +1,6 @@
 #include "ghpc_config.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -171,5 +172,29 @@ namespace ghpc
             return f;
         }();
         return file;
+    }
+
+    LiveSettings &live()
+    {
+        static LiveSettings *s = []() {
+            auto *l = new LiveSettings();
+            const IniFile &f = settings();
+            l->widescreen = f.getBool("display", "widescreen", true);
+            l->unlockAll = f.getBool("cheats", "unlock_all", false);
+            l->volume = std::max(0, std::min(100, f.getInt("audio", "volume", 100)));
+            l->showFps = f.getBool("display", "show_fps", false);
+            return l;
+        }();
+        return *s;
+    }
+
+    void saveSetting(const std::string &section, const std::string &key, const std::string &value)
+    {
+        const std::string path = settingsPath();
+        IniFile f;
+        f.load(path);
+        f.set(section, key, value);
+        if (!f.save(path))
+            std::fprintf(stderr, "[ghpc/config] could not write %s\n", path.c_str());
     }
 }

@@ -441,24 +441,27 @@ static float displayAspect(uint8_t *rdram)
     std::memcpy(&rnd, rdram + (0x4f2cb0u & PS2_RAM_MASK), 4);
     const bool rndLive = rnd != 0 && (rnd & PS2_RAM_MASK) + 0xd8u <= PS2_RAM_SIZE;
 
-    // Widescreen on by default, as Options::SetWideScreen(true) would leave
-    // it: Rnd's aspect (+0xd4) and TheOptions' (*0x440bf0) mWideScreen
-    // (+0x38). A camera takes the aspect when it builds its projection, so
-    // it goes in from the moment TheRnd exists, before the first menu camera,
-    // and is held until TheOptions exists to take the flag. After that a save
-    // load or the options menu goes through the game's own path (and
-    // SyncVideoOptions keeps it on for a load).
-    static bool s_defaulted = !ghpc::settings().getBool("display", "widescreen", true);
-    if (!s_defaulted && rndLive)
+    // Widescreen follows ghpc::live(), on by default, as
+    // Options::SetWideScreen would leave it: Rnd's aspect (+0xd4, 2 for 16:9,
+    // 1 for 4:3) and TheOptions' (*0x440bf0) mWideScreen (+0x38). A camera
+    // takes the aspect when it builds its projection, so it goes in from the
+    // moment TheRnd exists, before the first menu camera, and is held until
+    // TheOptions exists to take the flag. A change from the overlay is written
+    // the same way; PsRnd::SetAspect would also rebuild every camera
+    // (0x1befec), so a raw write reaches each one at its next UpdateLocal.
+    // SyncVideoOptions holds the flag across a save load.
+    const bool wantWide = ghpc::live().widescreen.load(std::memory_order_relaxed);
+    static int s_applied = -1;
+    if (rndLive && s_applied != (int)wantWide)
     {
-        const uint32_t on = 1u, wide = 2u;
-        std::memcpy(rdram + (rnd & PS2_RAM_MASK) + 0xd4u, &wide, 4);
+        const uint32_t flag = wantWide ? 1u : 0u, value = wantWide ? 2u : 1u;
+        std::memcpy(rdram + (rnd & PS2_RAM_MASK) + 0xd4u, &value, 4);
         uint32_t options = 0;
         std::memcpy(&options, rdram + (0x440bf0u & PS2_RAM_MASK), 4);
         if (options != 0 && (options & PS2_RAM_MASK) + 0x3cu <= PS2_RAM_SIZE)
         {
-            std::memcpy(rdram + (options & PS2_RAM_MASK) + 0x38u, &on, 4);
-            s_defaulted = true;
+            std::memcpy(rdram + (options & PS2_RAM_MASK) + 0x38u, &flag, 4);
+            s_applied = wantWide;
         }
     }
 
@@ -478,17 +481,20 @@ static float displayAspect(uint8_t *rdram)
 // which Campaign::Handle (0x135610) stores as TheCampaign (*0x440c24)
 // mAllAccess, +0x80. Campaign::Save does not write it, so it lasts a session.
 // The cheat also sets disable_save and disable_career; this leaves saving on.
+// Held every frame while on; switched off from the overlay it is cleared once.
 static void applyCheats(uint8_t *rdram)
 {
-    static const bool unlockAll = ghpc::settings().getBool("cheats", "unlock_all", false);
-    if (!unlockAll)
+    const bool unlockAll = ghpc::live().unlockAll.load(std::memory_order_relaxed);
+    static bool s_wasOn = false;
+    if (!unlockAll && !s_wasOn)
         return;
     uint32_t campaign = 0;
     std::memcpy(&campaign, rdram + (0x440c24u & PS2_RAM_MASK), 4);
     if (campaign == 0 || (campaign & PS2_RAM_MASK) + 0x84u > PS2_RAM_SIZE)
         return;
-    const uint32_t on = 1u;
-    std::memcpy(rdram + (campaign & PS2_RAM_MASK) + 0x80u, &on, 4);
+    const uint32_t value = unlockAll ? 1u : 0u;
+    std::memcpy(rdram + (campaign & PS2_RAM_MASK) + 0x80u, &value, 4);
+    s_wasOn = unlockAll;
 }
 
 // Produces the RGBA8 frame both renderers present: the whole FB_WIDTH x

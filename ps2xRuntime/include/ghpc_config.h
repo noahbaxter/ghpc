@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -54,4 +55,19 @@ namespace ghpc
 
     // Loaded once on first use. An absent file is an empty one.
     const IniFile &settings();
+
+    // The settings the overlay changes while the game runs. Seeded from
+    // ghpc.ini on first use; after that these are the truth, and whoever
+    // applies one reads it here rather than from settings().
+    struct LiveSettings
+    {
+        std::atomic<bool> widescreen{true}; // [display] widescreen
+        std::atomic<bool> unlockAll{false}; // [cheats] unlock_all
+        std::atomic<int> volume{100};       // [audio] volume, percent
+        std::atomic<bool> showFps{false};   // [display] show_fps
+    };
+    LiveSettings &live();
+
+    // Writes one key back to the file, keeping everything else in it.
+    void saveSetting(const std::string &section, const std::string &key, const std::string &value);
 }
