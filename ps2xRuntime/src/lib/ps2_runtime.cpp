@@ -697,8 +697,11 @@ static const std::vector<uint8_t> *UploadFrame(PS2Runtime *rt, uint32_t &outWidt
             {
                 const auto now = std::chrono::steady_clock::now();
                 const double secs = std::chrono::duration<double>(now - last).count();
-                std::fprintf(stderr, "[fps] %.2f frames/sec  %.2f ms/frame  over %d frames  screen=%s\n",
+                extern std::atomic<uint64_t> g_ghpcGsFragments;
+                const uint64_t frags = g_ghpcGsFragments.exchange(0u, std::memory_order_relaxed);
+                std::fprintf(stderr, "[fps] %.2f frames/sec  %.2f ms/frame  over %d frames  swFrags/frame=%llu  screen=%s\n",
                              frames / secs, (secs * 1000.0) / frames, frames,
+                             (unsigned long long)(frags / (uint64_t)frames),
                              ghpc_drive::taggedScreen().c_str());
                 last = now;
                 frames = 0;

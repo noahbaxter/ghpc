@@ -10,7 +10,10 @@
 #   ./ghpc/scripts/play.sh --native        Vulkan at the Rnd seam with VU1 off:
 #                                          realtime gameplay, see NEXT.md. Game
 #                                          time follows the wall clock under
-#                                          host load (GHPC_WALL_PACE=0 to stop)
+#                                          host load (GHPC_WALL_PACE=0 to stop).
+#                                          The software GS rasterises nothing,
+#                                          since nothing shows its picture
+#                                          (GHPC_GS_RASTER=1 to put it back)
 #   ./ghpc/scripts/play.sh --guitar        present the pad as a PS2 guitar, so
 #                                          notes need a strum. Without it the
 #                                          game sees a joypad and frets alone
@@ -51,7 +54,7 @@ BIND=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --ingame)   INGAME=1 ;;
-    --native)   export GHPC_RENDERER=vulkan GHPC_VK_MESH=2 GHPC_VU1_OFF=1 GHPC_WALL_PACE="${GHPC_WALL_PACE:-1}" ;;
+    --native)   export GHPC_RENDERER=vulkan GHPC_VK_MESH=2 GHPC_VU1_OFF=1 GHPC_WALL_PACE="${GHPC_WALL_PACE:-1}" GHPC_GS_RASTER="${GHPC_GS_RASTER:-0}" ;;
     --guitar)   export GHPC_PAD_GUITAR=1 ;;
     --bind)     BIND=bind ;;
     --probe)    BIND=--probe ;;

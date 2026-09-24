@@ -15,6 +15,12 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+
+// Fragments the software rasteriser shaded, in every build. `[fps]` reports
+// it per frame: under --native it is the cost of whatever the native path
+// does not draw yet.
+std::atomic<uint64_t> g_ghpcGsFragments{0};
+
 #if GHPC_DIAG
 // GHPC_QUIET silences the periodic diagnostic censuses.
 static bool ghpcQuietLogs()
@@ -1449,7 +1455,60 @@ void GSCpuBackend::Submit(const GSPrimitiveBatch &batch)
 #endif
     if (!m_vram || batch.vertexCount == 0u)
         return;
+    // GHPC_GS_RASTER=0 drops every primitive here. Under GHPC_VK_MESH=2 the
+    // software picture is never presented, and what it cost was the frame
+    // rate: full-screen clears and copies of four buffers, 590k fragments a
+    // frame and 900k on some venue cameras. Transfers, registers and signals
+    // do not come through here and still run.
+    static const bool raster = []() {
+        const char *e = std::getenv("GHPC_GS_RASTER");
+        return e == nullptr || e[0] != '0';
+    }();
+    if (!raster)
+        return;
+    // GHPC_GS_FRAGLOG=N: which kinds of draw the software fragments go to,
+    // summed per key and printed every N-th million fragments. The key is
+    // framebuffer, primitive type, texture base and whether it blends.
+    static const uint64_t fragLogEvery = []() {
+        const char *e = std::getenv("GHPC_GS_FRAGLOG");
+        return e ? std::strtoull(e, nullptr, 0) * 1000000ull : 0ull;
+    }();
+    if (fragLogEvery == 0u)
+    {
+        DrawPrimitive(batch);
+        return;
+    }
+    const uint64_t before = g_ghpcGsFragments.load(std::memory_order_relaxed);
     DrawPrimitive(batch);
+    const uint64_t drawn = g_ghpcGsFragments.load(std::memory_order_relaxed) - before;
+    static std::map<uint64_t, uint64_t> byKey;
+    static uint64_t total = 0;
+    const GSDrawState &s = batch.state;
+    const uint64_t key = (static_cast<uint64_t>(s.context.frame.fbp & 0x1FFu) << 48) |
+                         (static_cast<uint64_t>(s.prim.type & 7u) << 44) |
+                         (static_cast<uint64_t>(s.prim.tme & 1u) << 43) |
+                         (static_cast<uint64_t>(s.prim.abe & 1u) << 42) |
+                         (static_cast<uint64_t>(s.context.tex0.tbp0 & 0x3FFFu) << 16) |
+                         static_cast<uint64_t>(s.context.frame.psm & 0x3Fu);
+    byKey[key] += drawn;
+    total += drawn;
+    if (total >= fragLogEvery)
+    {
+        std::vector<std::pair<uint64_t, uint64_t>> rows(byKey.begin(), byKey.end());
+        std::sort(rows.begin(), rows.end(), [](auto &a, auto &b) { return a.second > b.second; });
+        std::fprintf(stderr, "[gs/frags] %llu fragments by draw kind:\n", (unsigned long long)total);
+        for (size_t i = 0; i < rows.size() && i < 12u; ++i)
+        {
+            const uint64_t k = rows[i].first;
+            std::fprintf(stderr, "  %5.1f%%  fbp=0x%llx psm=0x%llx prim=%llu tme=%llu abe=%llu tbp0=0x%llx\n",
+                         100.0 * rows[i].second / total, (unsigned long long)(k >> 48),
+                         (unsigned long long)(k & 0x3Fu), (unsigned long long)((k >> 44) & 7u),
+                         (unsigned long long)((k >> 43) & 1u), (unsigned long long)((k >> 42) & 1u),
+                         (unsigned long long)((k >> 16) & 0x3FFFu));
+        }
+        byKey.clear();
+        total = 0;
+    }
 }
 
 void GSCpuBackend::Flush()
@@ -1745,6 +1804,7 @@ void GSCpuBackend::DrawPrimitive(const GSPrimitiveBatch &batch)
 
 void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint8_t fog)
 {
+    g_ghpcGsFragments.fetch_add(1u, std::memory_order_relaxed);
 #if GHPC_DIAG
     ++GhpcTexDiag::g_fragments;
     ++GhpcTexDiag::g_fragByFbp[((state.context.frame.fbp & 0xFFFFu) << 16) |
