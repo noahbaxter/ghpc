@@ -55,7 +55,8 @@ for spec in "$@"; do
     t0=$(date +%s)
     # shellcheck disable=SC2086
     ( env GHPC_STATE_LOAD="$slot" GHPC_RENDERER=vulkan GHPC_VK_SHOT_UI="$step" \
-          GHPC_VK_SHOT_LIMIT=$((shots + drop)) ${envs//,/ } \
+          GHPC_VK_SHOT_LIMIT=$((shots + drop)) \
+          GHPC_HIDE_WINDOW="${GHPC_HIDE_WINDOW:-1}" GHPC_AUDIO="${GHPC_AUDIO:-0}" ${envs//,/ } \
           "$here/play.sh" --log "$out/$name.$slot.log" >/dev/null 2>&1 & )
     while [ "$(ls /tmp/ghpc_vk_u*.ppm 2>/dev/null | wc -l)" -lt $((shots + drop)) ] &&
           [ $(( $(date +%s) - t0 )) -lt "$cap" ]; do

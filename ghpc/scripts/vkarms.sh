@@ -45,7 +45,8 @@ for spec in "$@"; do
   t0=$(date +%s)
   # shellcheck disable=SC2086
   ( env GHPC_STATE_LOAD="$slot" GHPC_RENDERER=vulkan GHPC_VK_SHOT_BEAT=1 \
-        GHPC_VK_SHOT_SCREEN=game_screen GHPC_VK_SHOT_LIMIT=$((shots + 1)) ${envs//,/ } \
+        GHPC_VK_SHOT_SCREEN=game_screen GHPC_VK_SHOT_LIMIT=$((shots + 1)) \
+        GHPC_HIDE_WINDOW="${GHPC_HIDE_WINDOW:-1}" GHPC_AUDIO="${GHPC_AUDIO:-0}" ${envs//,/ } \
         "$here/play.sh" --log "$out/$name.log" >/dev/null 2>&1 & )
   # One more shot than asked for: the first fires on the load frame, before
   # anything has presented, and is dropped below.

@@ -46,6 +46,7 @@ for spec in "$@"; do
   ( env GHPC_PAD_DRIVE="$drive" GHPC_PAD_DRIVE_SETTLE=1.5 GHPC_PAD_DRIVE_PERIOD=0.2 \
         GHPC_VK_SHOT="$shot" GHPC_VK_SHOT_LIMIT=100000 \
         GHPC_CLOCKTRACE="$dir/clock.csv" GHPC_PRESENTTRACE="$dir/present.csv" \
+        GHPC_HIDE_WINDOW="${GHPC_HIDE_WINDOW:-1}" GHPC_AUDIO="${GHPC_AUDIO:-0}" \
         ${envs//,/ } \
         "$here/play.sh" --native --guitar --log "$dir/run.log" >/dev/null 2>&1 & )
   sleep "$dur"
