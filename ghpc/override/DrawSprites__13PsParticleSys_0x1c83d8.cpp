@@ -16,7 +16,8 @@
 // +0x220, is the translation that puts each emitter where it stands. The w
 // column is not read by 0x5CC.
 // walking the list from this+0x110 by +0x6c (0x1c8514). A system with a
-// prebuilt packet at +0x2d0 REFs that instead and is not handled here.
+// prebuilt packet at +0x2d0 REFs that instead, and its particles are read
+// back out of the packet.
 //
 // What 0x5CC does with it (VU 0x2e60..0x30a0): each particle is one GS
 // SPRITE (DrawShowing asks PsMat::Select for PRIM 6, REGS 0x412412) whose
@@ -28,6 +29,7 @@
 // qw688.w is set, with no lighting program; the draw says so with 0x5CC.
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -66,11 +68,6 @@ void ghpcParticleSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, 
     static const bool s_log = std::getenv("GHPC_PARTICLE_LOG") != nullptr;
     static uint64_t s_calls = 0;
     ++s_calls;
-    if (READ32(self + 0x2d0u) != 0u) {
-        if (s_log && s_calls <= 16u)
-            std::fprintf(stderr, "[ghpc/particle] sys=0x%08x prebuilt packet, not drawn\n", self);
-        return;
-    }
     const uint32_t cam = READ32(0x444c60u);
     if (cam == 0u) return;
     float right[3], up[3];
@@ -88,18 +85,18 @@ void ghpcParticleSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, 
     static std::vector<uint16_t> s_indices;
     s_verts.clear();
     s_indices.clear();
-    uint32_t p = READ32(self + 0x110u);
     uint32_t count = 0u;
-    while (p != 0u && count < 16000u) {
+    // One particle as 0x5CC gets it: the colour quadword, the emitter-space
+    // position, and qw1.w, the half size.
+    auto addParticle = [&](uint32_t colour, uint32_t position, float half) {
         float local[3], pos[3], rgba[4];
-        for (int k = 0; k < 4; ++k) rgba[k] = readF(rdram, ctx, runtime, p + k * 4u);
-        for (int k = 0; k < 3; ++k) local[k] = readF(rdram, ctx, runtime, p + 0x20u + k * 4u);
+        for (int k = 0; k < 4; ++k) rgba[k] = readF(rdram, ctx, runtime, colour + k * 4u);
+        for (int k = 0; k < 3; ++k) local[k] = readF(rdram, ctx, runtime, position + k * 4u);
         for (int k = 0; k < 3; ++k)
             pos[k] = local[0] * xf[0][k] + local[1] * xf[1][k] + local[2] * xf[2][k] + xf[3][k];
-        const float half = readF(rdram, ctx, runtime, p + 0x60u) * 0.5f;
         if (s_log && s_calls <= 4u && count < 2u)
-            std::fprintf(stderr, "[ghpc/particle]   p=0x%08x rgba=(%.3f %.3f %.3f %.3f) pos=(%.2f %.2f %.2f) half=%.3f\n",
-                         p, rgba[0], rgba[1], rgba[2], rgba[3], pos[0], pos[1], pos[2], half);
+            std::fprintf(stderr, "[ghpc/particle]   rgba=(%.3f %.3f %.3f %.3f) pos=(%.2f %.2f %.2f) half=%.3f\n",
+                         rgba[0], rgba[1], rgba[2], rgba[3], pos[0], pos[1], pos[2], half);
         const uint16_t base = (uint16_t)s_verts.size();
         static const float kCorner[4][2] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
         for (int c = 0; c < 4; ++c) {
@@ -115,7 +112,71 @@ void ghpcParticleSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, 
         const uint16_t quad[6] = {0, 1, 2, 1, 3, 2};
         for (uint16_t q : quad) s_indices.push_back((uint16_t)(base + q));
         ++count;
-        p = READ32(p + 0x6cu);
+    };
+
+    const uint32_t handle = READ32(self + 0x2d0u);
+    if (handle == 0u) {
+        // The live list, as the body walks it; qw1.w is +0x60 * 0.5
+        // (0x1c84b4..0x1c84ec).
+        uint32_t p = READ32(self + 0x110u);
+        while (p != 0u && count < 16000u) {
+            addParticle(p, p + 0x20u, readF(rdram, ctx, runtime, p + 0x60u) * 0.5f);
+            p = READ32(p + 0x6cu);
+        }
+    } else {
+        // Prebuilt: DrawSprites REFs MemHandle::Lock's buffer (*handle +
+        // 0x10, +0x2d4 quadwords) instead of building one (0x1c8408..0x1c844c).
+        // It is walked as a VIF stream for the V4-32 UNPACKs the live path
+        // writes: NUM 2n+1, a quadword whose x is n, then n (qw0, qw1) pairs.
+        const uint32_t buf = READ32(handle) + 0x10u;
+        const uint32_t words = READ32(self + 0x2d4u) * 4u;
+        uint32_t w = 0u, batches = 0u;
+        while (w < words && count < 16000u) {
+            const uint32_t code = READ32(buf + w * 4u);
+            const uint32_t cmd = (code >> 24) & 0x7fu;
+            const uint32_t num = ((code >> 16) & 0xffu) ? ((code >> 16) & 0xffu) : 256u;
+            ++w;
+            if ((cmd & 0x60u) == 0x60u) {
+                const uint32_t vn = (cmd >> 2) & 3u, vl = cmd & 3u;
+                const uint32_t dataWords = ((32u >> vl) * (vn + 1u) * num + 31u) / 32u;
+                if (vn == 3u && vl == 0u) {
+                    const uint32_t base = buf + w * 4u;
+                    const uint32_t n = READ32(base);
+                    if (n * 2u + 1u == num) {
+                        for (uint32_t i = 0; i < n && count < 16000u; ++i) {
+                            const uint32_t qw1 = base + 0x20u + i * 0x20u;
+                            addParticle(qw1 - 0x10u, qw1, readF(rdram, ctx, runtime, qw1 + 12u));
+                        }
+                        ++batches;
+                    }
+                }
+                w += dataWords;
+                continue;
+            }
+            switch (cmd) {
+            case 0x20: w += 1u; break;
+            case 0x30: case 0x31: w += 4u; break;
+            case 0x4a: w += num * 2u; break;
+            case 0x50: case 0x51: w += ((code & 0xffffu) ? (code & 0xffffu) : 65536u) * 4u; break;
+            default: break;
+            }
+        }
+        static std::vector<uint32_t> s_prebuiltSeen;
+        if (s_log && std::find(s_prebuiltSeen.begin(), s_prebuiltSeen.end(), self) == s_prebuiltSeen.end()) {
+            s_prebuiltSeen.push_back(self);
+            std::fprintf(stderr, "[ghpc/particle] sys=0x%08x prebuilt qwc=%u batches=%u particles=%u", self,
+                         words / 4u, batches, count);
+            if (count != 0u) {
+                const ghpc::scene::Vertex& a = s_verts[0];
+                const ghpc::scene::Vertex& d = s_verts[3];
+                std::fprintf(stderr, " rgba0=(%.3f %.3f %.3f %.3f) width0=%.2f", a.weights[0], a.weights[1],
+                             a.weights[2], a.weights[3],
+                             std::sqrt((d.pos[0] - a.pos[0]) * (d.pos[0] - a.pos[0]) +
+                                       (d.pos[1] - a.pos[1]) * (d.pos[1] - a.pos[1]) +
+                                       (d.pos[2] - a.pos[2]) * (d.pos[2] - a.pos[2])));
+            }
+            std::fprintf(stderr, "\n");
+        }
     }
     if (s_log && count != 0u) {
         // Once per system, and again if it moves.
@@ -124,9 +185,10 @@ void ghpcParticleSubmit(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime, 
         const float key = xf[3][0] + xf[3][1] * 3.0f + xf[3][2] * 7.0f;
         if (it == s_seen.end() || it->second != key) {
             if (it == s_seen.end()) s_seen.push_back({self, key}); else it->second = key;
-            std::fprintf(stderr, "[ghpc/particle] sys=0x%08x particles=%u at (%.1f %.1f %.1f) first=(%.1f %.1f %.1f)\n",
+            std::fprintf(stderr, "[ghpc/particle] sys=0x%08x particles=%u at (%.1f %.1f %.1f) first=(%.1f %.1f %.1f) rgba0=(%.3f %.3f %.3f %.3f)\n",
                          self, count, xf[3][0], xf[3][1], xf[3][2], s_verts[0].pos[0], s_verts[0].pos[1],
-                         s_verts[0].pos[2]);
+                         s_verts[0].pos[2], s_verts[0].weights[0], s_verts[0].weights[1], s_verts[0].weights[2],
+                         s_verts[0].weights[3]);
         }
     }
     if (count == 0u) return;
