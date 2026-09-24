@@ -378,12 +378,15 @@ Never load a state that has not passed item 6.
 
 ## Later
 
-- **Settings overlay.** Emulator-style menu in the SDL/Vulkan window, Dear
-  ImGui on the Vulkan backend (ImGui is already fetched, but only the raylib
-  path uses it). Pauses the game; live settings for resolution, fullscreen,
-  aspect, widescreen, frame cap, audio and bindings, written back to
-  ghpc.ini. Proposed key: Esc opens it and the pad's Circle/back moves from
-  Esc to Backspace. Not started.
+- **Settings overlay: in (4aa573e, 4ff0f5d).** Esc opens a trainer-style
+  list over the running game (no pause), keyboard only; the game sees no keys
+  while it is open. Rows: fullscreen, widescreen, resolution (window, native,
+  2-4x), MSAA (capped at the GPU's 4x on the M4), volume, FPS counter, unlock
+  all, quit. Every change is live and saved to ghpc.ini. Left: frame cap and
+  bindings rows; a **Classic** mode (native resolution, forced 4:3, a CRT
+  shader over the scaled blit in `vk_scene_target.cpp`), a nice-to-have. The
+  MSAA path has not been run under the validation layer, which is not
+  installed here.
 - **Cheats menu.** A page of the settings overlay, not typed on the main menu.
   Unlock all is `TheCampaign` (*0x440c24) +0x80 (`mAllAccess`), which is what
   `{campaign set_all_access 1}` stores; `[cheats] unlock_all = 1` in
