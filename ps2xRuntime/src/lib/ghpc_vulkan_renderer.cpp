@@ -3238,12 +3238,12 @@ namespace ghpc
                     devicesChanged = true;
                     break;
                 case SDL_EVENT_KEY_DOWN:
-                    // F11, or ctrl+cmd+F as on any Mac app. Not alt/cmd+enter:
-                    // enter is the pad's start button. Fullscreen is borderless
-                    // at the desktop's size, and the swapchain follows it.
+                    // F11, cmd+F, or ctrl+cmd+F as on any Mac app. Not
+                    // alt/cmd+enter: enter is the pad's start button.
+                    // Fullscreen is borderless at the desktop's size, and the
+                    // swapchain follows it.
                     if (!event.key.repeat &&
-                        (event.key.key == SDLK_F11 ||
-                         (event.key.key == SDLK_F && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_GUI))))
+                        (event.key.key == SDLK_F11 || (event.key.key == SDLK_F && (event.key.mod & SDL_KMOD_GUI))))
                     {
                         const bool full = (SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0;
                         SDL_SetWindowFullscreen(m_window, !full);
