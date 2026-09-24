@@ -274,10 +274,13 @@ namespace ghpc
         // Geometry that changes every frame: a mutable mesh (+0x140 & 0x1f),
         // whose vectors Sync leaves live instead of freeing, so it is never
         // in the host mesh cache. Copied into the frame rather than cached,
-        // and handed to the backend as DrawView::dynamicVerts.
+        // and handed to the backend as DrawView::dynamicVerts. A nonzero
+        // `lightProgram` replaces the material's for this draw, for geometry
+        // VU1 would have run through its own program: 0x5CC, particles.
         void submitDynamicMesh(uint32_t meshKey,
                                const Vertex *verts, uint32_t vertCount,
-                               const uint16_t *indices, uint32_t indexCount);
+                               const uint16_t *indices, uint32_t indexCount,
+                               uint32_t lightProgram = 0u);
 
         void endFrame();
 

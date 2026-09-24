@@ -558,7 +558,7 @@ namespace ghpc
 
         void submitDynamicMesh(uint32_t meshKey,
                                const Vertex *verts, uint32_t vertCount,
-                               const uint16_t *indices, uint32_t indexCount)
+                               const uint16_t *indices, uint32_t indexCount, uint32_t lightProgram)
         {
             if (!active() || verts == nullptr || vertCount == 0u || indices == nullptr || indexCount == 0u)
             {
@@ -570,6 +570,10 @@ namespace ghpc
                 return;
             }
             PendingDraw &d = pushDraw(meshKey, vertCount, indexCount, true);
+            if (lightProgram != 0u)
+            {
+                d.material.lightProgram = lightProgram;
+            }
             d.dynVertOffset = (uint32_t)s.building.dynVerts.size();
             d.dynIndexOffset = (uint32_t)s.building.dynIndices.size();
             s.building.dynVerts.insert(s.building.dynVerts.end(), verts, verts + vertCount);

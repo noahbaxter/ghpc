@@ -44,7 +44,7 @@ struct DrawData
     vec4 lights[7]; // qw681..687, PsEnviron::Select's block
     vec4 rgbaScale; // qw695
     vec4 vuColor;   // qw690
-    uint lightMode; // 0 unlit (mColor), 1 passthrough, 2 ambient, 3 directional, 4 point
+    uint lightMode; // 0 unlit (mColor), 1 passthrough, 2 ambient, 3 directional, 4 point, 5 particle
     uint lightFlags;// bit 0 prelit, bit 1 mUseEnviron
     uint uvMode;    // 1: material program 0x17c's texture transform
     uint texa;      // 16-bit target: ta0 | ta1 << 8 | aem << 16 | 1 << 24
@@ -89,6 +89,12 @@ vec4 vuLitColour(DrawData d)
     if (d.lightMode == 1u)
     {
         return aWeights;
+    }
+    // 0x5CC, particles: the particle's colour, times the ambient qw681 when
+    // qw688.w says the material uses the environ (0x2ea8..0x2ef0).
+    if (d.lightMode == 5u)
+    {
+        return env ? aWeights * ambient : aWeights;
     }
 
     vec4 base;

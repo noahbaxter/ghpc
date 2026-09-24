@@ -2696,6 +2696,7 @@ namespace ghpc
                     case 0x614u: lightMode = 1u; break;
                     case 0x6ECu: lightMode = d.lights ? 3u : 2u; break;
                     case 0x436u: lightMode = d.lights ? 4u : 2u; break;
+                    case 0x5CCu: lightMode = 5u; break;
                     default: break;
                     }
                     entry.lightMode = lightMode;
