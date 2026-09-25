@@ -3,6 +3,7 @@
 #include "runtime/ghpc_state.h"
 #include "Stubs/ghpc_drive.h"
 #include "ghpc_scene.h"
+#include "ghpc_config.h"
 #include "ps2_log.h"
 #include "ps2_runtime_macros.h"
 
@@ -393,18 +394,30 @@ namespace
     // event handling. Fewer vblanks means fewer frames rasterised.
     //
     // Diagnostic only. Any value but 1 is a deliberately wrong machine.
+    //
+    // [display] framerate is the supported way to change the rate: the game
+    // times itself off TaskMgr's clocks, not frame counts, so at 120 Hz it
+    // draws 120 distinct frames at game rate 1.000 (2026-09-24, played a whole
+    // song by hand). Read per vblank, so the overlay switches it live.
+    inline double vblankScale()
+    {
+        static const double scale = []() {
+            const char *e = std::getenv("GHPC_VBLANK_SCALE");
+            const double s = e ? std::atof(e) : 1.0;
+            return s > 0.0 ? s : 1.0;
+        }();
+        const int hz = ghpc::live().framerate.load(std::memory_order_relaxed);
+        return hz > 60 ? scale * 60.0 / hz : scale;
+    }
+
     inline uint64_t vblankPeriodCycles()
     {
-        static const uint64_t period = []() -> uint64_t {
-            const char *e = std::getenv("GHPC_VBLANK_SCALE");
-            const double scale = e ? std::atof(e) : 1.0;
-            if (scale <= 0.0)
-            {
-                return kVBlankPeriodCyclesNominal;
-            }
-            return static_cast<uint64_t>((double)kVBlankPeriodCyclesNominal * scale);
-        }();
-        return period;
+        const double scale = vblankScale();
+        if (scale == 1.0)
+        {
+            return kVBlankPeriodCyclesNominal;
+        }
+        return static_cast<uint64_t>((double)kVBlankPeriodCyclesNominal * scale);
     }
 
     // The same scale on the host deadline. Both sites schedule a vblank with a
@@ -412,16 +425,12 @@ namespace
     // change two things at once and the experiment would prove nothing.
     inline std::chrono::microseconds vblankPeriodHost()
     {
-        static const std::chrono::microseconds period = []() -> std::chrono::microseconds {
-            const char *e = std::getenv("GHPC_VBLANK_SCALE");
-            const double scale = e ? std::atof(e) : 1.0;
-            if (scale <= 0.0)
-            {
-                return kVBlankPeriod;
-            }
-            return std::chrono::microseconds(static_cast<int64_t>(16667.0 * scale));
-        }();
-        return period;
+        const double scale = vblankScale();
+        if (scale == 1.0)
+        {
+            return kVBlankPeriod;
+        }
+        return std::chrono::microseconds(static_cast<int64_t>(16667.0 * scale));
     }
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);

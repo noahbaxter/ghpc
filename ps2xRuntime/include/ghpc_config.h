@@ -68,7 +68,9 @@ namespace ghpc
         std::atomic<int> msaa{1};           // [display] msaa: 1, 2, 4, 8 or 16, past the GPU's samples by supersampling
         std::atomic<int> renderScale{0};    // [display] render_scale: 0 the window, else the guest's 448 lines times it
         std::atomic<int> msaaMax{8};        // what the GPU allows, set by the renderer
-        std::atomic<int> crowd{0};          // [game] crowd, a CrowdMode    };
+        std::atomic<int> crowd{0};          // [game] crowd, a CrowdMode
+        std::atomic<int> framerate{60};     // [display] framerate: vblanks a second, 60 as on PS2
+    };
 
     // How full the venue crowd is. The game scales it by excitement through
     // world/gen/crowd.dtb's set_fullness, and caps widescreen at 0.7.

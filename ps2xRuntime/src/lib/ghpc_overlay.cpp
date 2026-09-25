@@ -37,6 +37,7 @@ namespace ghpc
             kMsaa,
             kVolume,
             kFps,
+            kFramerate,
             kCrowd,
             kUnlockAll,
             kQuit,
@@ -48,6 +49,11 @@ namespace ghpc
         // Display name and ghpc.ini value, in CrowdMode order.
         const char *const kCrowdNames[kCrowdModes] = {"CLASSIC", "FIXED", "100%", "200%"};
         const char *const kCrowdKeys[kCrowdModes] = {"classic", "fixed", "full", "double"};
+
+        // Frame rate steps, the game's vblank rate. 60 is the PS2's.
+        const int kFramerates[] = {60, 120, 144, 240};
+        constexpr int kFramerateSteps = sizeof(kFramerates) / sizeof(kFramerates[0]);
+
         std::string resolutionName(int scale)
         {
             if (scale <= 0)
@@ -265,6 +271,15 @@ namespace ghpc
             l.showFps = !l.showFps;
             saveSetting("display", "show_fps", l.showFps ? "1" : "0");
             break;
+        case kFramerate:
+        {
+            int step = 0;
+            while (step + 1 < kFramerateSteps && kFramerates[step] < l.framerate)
+                ++step;
+            l.framerate = kFramerates[stepWrap(step, dir, 0, kFramerateSteps - 1)];
+            saveSetting("display", "framerate", std::to_string(l.framerate.load()));
+            break;
+        }
         case kCrowd:
             l.crowd = stepWrap(l.crowd, dir, 0, kCrowdModes - 1);
             saveSetting("game", "crowd", kCrowdKeys[l.crowd.load()]);
@@ -366,6 +381,7 @@ namespace ghpc
             {"Anti-aliasing", l.msaa <= 1 ? std::string("OFF") : std::to_string(l.msaa.load()) + "X"},
             {"Volume", l.volume == 0 ? std::string("MUTED") : std::to_string(l.volume.load()) + "%"},
             {"FPS counter", onOff(l.showFps)},
+            {"Frame rate", l.framerate <= 60 ? std::string("60 (PS2)") : std::to_string(l.framerate.load())},
             {"Crowd", kCrowdNames[l.crowd.load()]},
             {"Unlock all songs", onOff(l.unlockAll)},
             {"Quit game", ""},

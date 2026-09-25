@@ -236,7 +236,33 @@ namespace ghpc
             info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.preTransform = caps.currentTransform;
             info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-            info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+            // MAILBOX when offered: the game ticks at [display] framerate,
+            // which can outrun the display, and MAILBOX shows the newest
+            // finished frame at each refresh without tearing or making the
+            // present wait. FIFO is the fallback every driver has.
+            {
+                uint32_t modeCount = 0u;
+                vkGetPhysicalDeviceSurfacePresentModesKHR(m_physicalDevice, m_surface, &modeCount, nullptr);
+                std::vector<VkPresentModeKHR> modes(modeCount);
+                vkGetPhysicalDeviceSurfacePresentModesKHR(m_physicalDevice, m_surface, &modeCount, modes.data());
+                info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+                std::string offered;
+                for (const VkPresentModeKHR mode : modes)
+                {
+                    offered += " " + std::to_string(static_cast<int>(mode));
+                    if (mode == VK_PRESENT_MODE_MAILBOX_KHR)
+                    {
+                        info.presentMode = mode;
+                    }
+                }
+                static bool s_logged = false;
+                if (!s_logged)
+                {
+                    s_logged = true;
+                    std::cerr << "[ghpc/vk] present modes offered:" << offered << " (0 immediate, 1 mailbox, 2 fifo), using "
+                              << static_cast<int>(info.presentMode) << std::endl;
+                }
+            }
             info.clipped = VK_TRUE;
             info.oldSwapchain = VK_NULL_HANDLE;
 
