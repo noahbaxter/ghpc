@@ -2641,6 +2641,27 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         }
     }
 
+    // [game] crowd. WorldCrowd::SetFullness (0x2af3f8) takes two fractions in
+    // $f12/$f13, sent by world/gen/crowd.dtb on every excitement change:
+    // 0.1, 0.25, 0.5, then peak_fullness, which is 1 or 0.7 in widescreen.
+    // It shows int(placements * $f12) and splices the difference out of the
+    // hidden pool without a bounds check (0x2af5b0), so nothing here may pass
+    // more than 1. 200% is the native path drawing extra cards on top.
+    if (isCall && targetPc == 0x002AF3F8u)
+    {
+        const int mode = ghpc::live().crowd.load(std::memory_order_relaxed);
+        const float asked = ctx->f[12];
+        for (int r = 12; r <= 13; ++r)
+        {
+            float &v = ctx->f[r];
+            if (mode == ghpc::kCrowdFixed && std::fabs(v - 0.7f) < 1e-3f)
+                v = 1.0f;
+            else if (mode == ghpc::kCrowdFull || mode == ghpc::kCrowdDouble)
+                v = 1.0f;
+        }
+        std::fprintf(stderr, "[ghpc/crowd] set_fullness %.2f -> %.2f\n", (double)asked, (double)ctx->f[12]);
+    }
+
     // Every inter-function transfer is also a deterministic EE safe point.
     // Backward edges inside generated functions use eeCheckpointDue(), while
     // this charge bounds straight-line call chains that have no local loop.

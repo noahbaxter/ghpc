@@ -27,6 +27,10 @@
 #include "ps2_syscalls.h"
 #include "ps2_stubs.h"
 #include "ghpc_scene.h"
+#include "ghpc_config.h"
+
+#include <array>
+#include <vector>
 
 #ifdef PS2_FUNCTION_LOG_TRACKER
 #include "ps2_log.h"
@@ -47,6 +51,12 @@ uint32_t submitInstances(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
     const uint32_t sentinel = self + 0x50u;
     uint32_t node = READ32(sentinel);
     uint32_t instances = 0u;
+    // [game] crowd = double: a crowd card list gets a second card per
+    // instance, a third of the way to its nearest neighbour, so the extras
+    // land inside the crowd's own footprint and a mutual pair stays apart.
+    const bool doubled = rows != 0u && ghpc::live().crowd.load(std::memory_order_relaxed) == ghpc::kCrowdDouble;
+    static std::vector<std::array<float, 16>> s_cards;
+    s_cards.clear();
     while (node != sentinel && node != 0u && instances < 4096u) {
         float m[16];
         for (uint32_t r = 0; r < 4u; ++r) {
@@ -58,8 +68,28 @@ uint32_t submitInstances(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime,
             m[r * 4u + 3u] = (r == 3u) ? 1.0f : 0.0f;
         }
         ghpcSceneSubmitInstance(rdram, ctx, runtime, key, m);
+        if (doubled) {
+            s_cards.emplace_back();
+            std::memcpy(s_cards.back().data(), m, sizeof(m));
+        }
         ++instances;
         node = READ32(node);
+    }
+    for (size_t i = 0; s_cards.size() > 1u && i < s_cards.size(); ++i) {
+        const float* a = s_cards[i].data();
+        size_t best = i;
+        float bestD = 0.0f;
+        for (size_t j = 0; j < s_cards.size(); ++j) {
+            if (j == i) continue;
+            const float* b = s_cards[j].data();
+            const float dx = b[12] - a[12], dy = b[13] - a[13], dz = b[14] - a[14];
+            const float d = dx * dx + dy * dy + dz * dz;
+            if (best == i || d < bestD) { best = j; bestD = d; }
+        }
+        float m[16];
+        std::memcpy(m, a, sizeof(m));
+        for (int c = 12; c < 15; ++c) m[c] += (s_cards[best][c] - a[c]) / 3.0f;
+        ghpcSceneSubmitInstance(rdram, ctx, runtime, key, m);
     }
     return instances;
 }

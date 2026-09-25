@@ -186,6 +186,9 @@ namespace ghpc
             const int msaa = f.getInt("display", "msaa", 1);
             l->msaa = msaa >= 16 ? 16 : msaa >= 8 ? 8 : msaa >= 4 ? 4 : msaa >= 2 ? 2 : 1;
             l->renderScale = std::max(0, std::min(4, f.getInt("display", "render_scale", 0)));
+            const std::string crowd = f.get("game", "crowd", "classic");
+            l->crowd = crowd == "fixed" ? kCrowdFixed : crowd == "full" ? kCrowdFull
+                     : crowd == "double" ? kCrowdDouble : kCrowdClassic;
             return l;
         }();
         return *s;
