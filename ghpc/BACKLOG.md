@@ -402,6 +402,10 @@ Never load a state that has not passed item 6.
   since the native path has the polygon budget. The game already has a 3D
   crowd path: `WorldCrowd` "show_3d_only" (+0x90), `Set3DCharList` 0x2ad850,
   `CamShot::Set3DCrowd` 0x2a4658. Try flipping that before writing anything.
+  Same area: crowd = double copies each card's own type next to it, so the
+  same animated person stands twice. Mixing types needs every type's
+  impostor image alive at once, where the game renders one type at a time
+  into the shared 128x256 sheet.
 - **Save-state runs die under host load.** `EE invocation stack space
   exhausted` (`EeScheduler::invocationStackTop`) at the unhandled IOP RPC
   right after audio comes up. A state restores `m_invocationStackTops` but
@@ -426,7 +430,29 @@ Never load a state that has not passed item 6.
 - **M8 input.** HID guitar, calibration, latency against a tuned PCSX2.
 - **GH1 and 80s.** Symbolized debug builds in `work/elf-debug/`. GH1 has 8,433
   symbols against GH2's 12,663, suggesting an earlier prototype. Verify before
-  assuming parity.
+  assuming parity. Direction (2026-09-24): everything GH1 has arrives as data
+  in GH2's packaging (menus, venues, characters, songs, guitars), except the
+  note engine. Noah wants feature completeness, anything GH1 does playable
+  in the merged game, so GH1's gameplay rules need to be selectable, not
+  just its content. Find what differs (hit window, HOPOs, star power,
+  sustains) before choosing between porting the rules and swapping engines.
+- **Frame rate above 60: works (2026-09-24).** `[display] framerate` 60, 120,
+  144, 240 sets the vblank rate, live from the overlay. The game times off
+  TaskMgr's clocks, so rate stays 1.000; Noah played a whole song at 120.
+  Game frames a second from the clock trace: 120 at 120, 231 at 240, 237 at
+  480, so the EE tops out near 240. MoltenVK offers only FIFO and
+  IMMEDIATE, so presents cap at the display (120 on the MacBook); MAILBOX
+  is taken where a driver offers it. Open: black frames Noah sees while
+  paused at high rate on the MacBook panel. Hidden runs paused at 60 and
+  120 show no zero-draw or no-camera present.
+- **Sync calibration.** Set the A/V offset by hand, no calibrator required,
+  and allow negative values, as other rhythm games do. Which direction the
+  game's offset moves the picture against the audio is not checked yet.
+- **Authentic and modern, for every feature.** Each option keeps an
+  accurate-to-PS2 setting (bugs and all) next to the fixed or improved one.
+  A "PS2 mode" preset that flips every option to its authentic value at
+  once. The crowd row is the first: CLASSIC, FIXED (widescreen cap lifted),
+  100%, 200% (extra native-only cards).
 - **Video seam.** Deprioritised. `scripts/bootskip.py --on` skips the intro
   entirely, so the IPU seam is not on the path to gameplay.
 - **SPU handshake stall.** Real and unfixed, but proven not to block the song
@@ -435,8 +461,14 @@ Never load a state that has not passed item 6.
 
 ## Deferred
 
-- **Retargeting the retail ELF.** Undecided, and it changes how every stage
-  works. See `ghpc/NORTHSTAR.md`.
+- **Retargeting the retail ELF: decided 2026-09-24, GH2 retail
+  (`work/disc/SLUS_214.47`) is the main target**, since nobody can supply the
+  debug build from a disc. Coupling, measured: 16 overrides bound by name and
+  address, about 30 guest addresses in the release runtime and IOP modules,
+  the IOP profile keyed on the debug entry 0x100D68 (retail is 0x100bf0), and
+  `GH2_debug.elf` hardcoded in every script. `../ghrecomp` already has a
+  retail symbol map (`config/gh2-retail.symbols`, 93% of code bytes) and
+  `tools/symbolize.py`; start there.
 - **Upstreaming.** Not until the port works. Patch 0003 (`isStubFunction`
   denylist) is the general fix covering all four name-collision mechanisms.
 - **Audit the remaining 247 stubs** for the same collision class.

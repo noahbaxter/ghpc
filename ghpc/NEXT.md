@@ -223,11 +223,22 @@ window title names the renderer path that came up, e.g.
    2560x1440 msaa=4 against 1280x720 for 4x, edges are visibly smoother on
    a crop, and both hold 60 fps at rate 1.000 from `songmesh`. A 4x repeat
    arm was pixel-identical, so the difference clears the noise floor.
-2. **The crowd looks sparse.** Noah remembers denser audiences. Count
-   placements per venue against what is drawn: `WorldCrowd` instance lists
-   (`+0x5c` CharData list, multimesh instances at `+0x50`) against the
-   billboard draws per frame, and check whether some character types or
-   their 3D members never submit.
+2. **The crowd looks sparse, and the game does it on purpose.**
+   `world/gen/crowd.dtb` `crowd_update` sends `set_fullness` by excitement:
+   Boot 0.1, Bad 0.25, Okay 0.5, Great and Peak `peak_fullness`, which is 1
+   but 0.7 when `{rnd aspect}` is widescreen. Deluxe keeps the same script.
+   The native path draws every instance the multimesh lists (no per-instance
+   cull on PS2 either), e.g. 2-6 per type in battle, 12 in big, 9-29 in
+   stone, at Okay. Now an overlay row, `[game] crowd`: classic, fixed (0.7
+   becomes 1), full (always 1), double (full plus a native-only second card
+   a third of the way to each card's nearest neighbour). The fraction is
+   rewritten at the SetFullness call in `dispatchGuestBranch`, never above 1,
+   since SetFullness splices from its hidden pool unchecked. From
+   `venue_big_native`, the game's 0.10 shows 2 cards a type under classic
+   and 25 under full. Fixed is unverified: no run reached Great, so no 0.70
+   was seen; `[ghpc/crowd]` logs every call. A mode change lands at the next
+   excitement change. Per-venue states: `ghpc/scripts/venuestates.sh`
+   (`NATIVE=1` for `venue_<name>_native`, about 60s each).
 3. **Impostor cards look low-res, some with missing necks.** The sheet is a
    128x256 CT16 target rendered 1:1. Check the per-type UV crop against the
    bbox 0x2aea24..0x2aec30 computes (clamps 0.25/0.75, 0.4/0.6, pad 0.05)
