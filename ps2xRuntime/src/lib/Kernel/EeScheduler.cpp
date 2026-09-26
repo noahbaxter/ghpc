@@ -434,6 +434,19 @@ namespace
     }
     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
+    constexpr uint32_t kInvocationStackSize = 0x4000u;
+
+    // GHPC_INVOC_NEST=1 puts back the old stack use, the control arm for the
+    // pool exhaustion fix: queued invocations nest on one still running, and
+    // each member of a sequence takes its own depth's stack.
+    bool legacyInvocationStacks()
+    {
+        static const bool legacy = []() {
+            const char *e = std::getenv("GHPC_INVOC_NEST");
+            return e && e[0] == '1';
+        }();
+        return legacy;
+    }
 
     template <typename Map>
     int allocatePositiveId(int &nextId, const Map &objects)
@@ -641,7 +654,12 @@ void EeScheduler::run()
             continue;
         }
 
-        if (!m_pendingInvocations.empty())
+        // Queued invocations are interrupts, alarms and GS callbacks, which the
+        // EE never nests: a handler runs with interrupts off. Starting one on
+        // top of another that has not returned took a fresh 16 KB stack per
+        // level, and a burst of late vblanks (a stall, a state save, host
+        // load under GHPC_WALL_PACE) nested them until the 1 MB pool ran out.
+        if (!m_pendingInvocations.empty() && (legacyInvocationStacks() || running->invocations.empty()))
         {
             GuestInvocation invocation = std::move(m_pendingInvocations.front());
             m_pendingInvocations.pop_front();
@@ -1294,6 +1312,7 @@ bool EeScheduler::deserializeForState(GhpcStateReader &r)
         return false;
     }
     m_invocationStackTops.clear();
+    uint32_t lowestStack = PS2_RAM_SIZE;
     for (uint64_t i = 0; i < stackTopCount; ++i)
     {
         uint64_t key = 0;
@@ -1303,7 +1322,11 @@ bool EeScheduler::deserializeForState(GhpcStateReader &r)
             return false;
         }
         m_invocationStackTops.emplace(key, value);
+        lowestStack = std::min(lowestStack, value + 0x10u - kInvocationStackSize);
     }
+    // The pool's allocator is not in the state, so without this the next new
+    // (thread, depth) is handed a stack a restored one already owns.
+    m_runtime.holdAsyncCallbackStacksAbove(lowestStack);
 
     // Guaranteed empty by the quiescence gate, cleared rather than assumed.
     // Nothing else here is second-guessed: m_rescheduleRequested and friends
@@ -2045,11 +2068,17 @@ void EeScheduler::queueInvocation(GuestInvocation invocation)
     GuestThread *owner = currentThread();
     assert(owner != nullptr);
     assert(!invocations.empty());
+    // The members run one after another, each starting once the one above it
+    // has returned, so they share one stack. Taking one per member reserved a
+    // stack per depth, and a single batch of synth replies (up to 256) holds
+    // more than the whole 64-stack pool. A call a member makes itself sits
+    // above the batch and gets its own depth's stack as usual.
+    const uint32_t sharedStack = invocationStackTop();
     for (auto it = invocations.rbegin(); it != invocations.rend(); ++it)
     {
         if (getRegU32(&it->context, 29) == 0u)
         {
-            SET_GPR_U32(&it->context, 29, invocationStackTop());
+            SET_GPR_U32(&it->context, 29, legacyInvocationStacks() ? invocationStackTop() : sharedStack);
         }
         it->sequence = ++m_invocationSequence;
         owner->invocations.push_back(std::move(*it));
@@ -2088,12 +2117,24 @@ uint32_t EeScheduler::invocationStackTop()
     {
         return existing->second;
     }
-    constexpr uint32_t kInvocationStackSize = 0x4000u;
     const uint32_t top = m_runtime.reserveAsyncCallbackStack(kInvocationStackSize, 16u);
     if (top == 0u)
     {
         throw std::runtime_error("EE invocation stack space exhausted");
     }
+    // At most 64 lines a run, since the pool holds 64 stacks. A depth past
+    // two or three means invocations are nesting.
+    std::string on;
+    for (const GuestInvocation &inv : owner->invocations)
+    {
+        char buf[48];
+        std::snprintf(buf, sizeof(buf), "%s%u:%llx", on.empty() ? "" : ",", (unsigned)inv.kind,
+                      (unsigned long long)inv.tag);
+        on += buf;
+    }
+    std::fprintf(stderr, "[ghpc/stack] reserve #%zu thread=%d depth=%zu top=0x%x pc=0x%x on=%s\n",
+                 m_invocationStackTops.size() + 1u, owner->id, depth, (unsigned)top,
+                 (unsigned)owner->activeContext().pc, on.c_str());
     m_invocationStackTops.emplace(key, top);
     return top;
 }

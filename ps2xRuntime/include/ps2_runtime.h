@@ -493,6 +493,9 @@ public:
     // configured and would hand the game a 4KB heap during boot.
     static uint32_t runtimeArenaBase();
     uint32_t reserveAsyncCallbackStack(uint32_t size, uint32_t alignment = 16u);
+    // Marks everything from `floor` up as taken, for stacks a save state
+    // restores, so the next reservation cannot hand one out again.
+    void holdAsyncCallbackStacksAbove(uint32_t floor);
 
     void drainCompletedDmacHandlers(uint8_t *rdram);
 
