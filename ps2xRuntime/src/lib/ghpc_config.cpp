@@ -191,6 +191,8 @@ namespace ghpc
             const std::string crowd = f.get("game", "crowd", "classic");
             l->crowd = crowd == "fixed" ? kCrowdFixed : crowd == "full" ? kCrowdFull
                      : crowd == "double" ? kCrowdDouble : kCrowdClassic;
+            const char *noFail = std::getenv("GHPC_NO_FAIL");
+            l->noFail = noFail && noFail[0] == '1';
             return l;
         }();
         return *s;

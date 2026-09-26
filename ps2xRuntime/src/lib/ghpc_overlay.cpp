@@ -42,6 +42,7 @@ namespace ghpc
             kCrowd,
             kUnlockAll,
             kAutoplay,
+            kNoFail,
             kQuit,
             kRows,
         };
@@ -293,6 +294,9 @@ namespace ghpc
         case kAutoplay:
             setAutoplay(!autoplay());
             break;
+        case kNoFail:
+            l.noFail = !l.noFail;
+            break;
         case kQuit:
             if (dir == 0)
                 action = Action::Quit;
@@ -390,6 +394,7 @@ namespace ghpc
             {"Crowd", kCrowdNames[l.crowd.load()]},
             {"Unlock all songs", onOff(l.unlockAll)},
             {"Autoplay", onOff(autoplay())},
+            {"No fail", onOff(l.noFail)},
             {"Quit game", ""},
         };
 

@@ -2663,6 +2663,23 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         std::fprintf(stderr, "[ghpc/crowd] set_fullness %.2f -> %.2f\n", (double)asked, (double)ctx->f[12]);
     }
 
+    // No fail. Performer::UpdateCrowdMeter (0x1119d8) calls LoseGame
+    // (0x111bf0) from 0x111af0 once CrowdRating::IsBelowLoseLevel holds
+    // outside versus. Skipping that one call lets the meter sit at the bottom
+    // and the song play on; the l cheat's own LoseGame still works.
+    if (isCall && targetPc == 0x00111BF0u && sourcePc == 0x00111AF0u &&
+        ghpc::live().noFail.load(std::memory_order_relaxed))
+    {
+        static bool s_logged = false;
+        if (!s_logged)
+        {
+            s_logged = true;
+            std::fprintf(stderr, "[ghpc/nofail] held off a loss\n");
+        }
+        ctx->pc = fallthroughPc;
+        return true;
+    }
+
     // The debug keyboard, ghpc_debug_keyboard.h. KeyboardPoll (0x2f4518)
     // becomes ProcessRead(true) while a host key is queued.
     if (isCall && targetPc == 0x002F4518u)

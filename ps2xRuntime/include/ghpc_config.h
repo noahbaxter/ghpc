@@ -70,6 +70,7 @@ namespace ghpc
         std::atomic<int> msaaMax{8};        // what the GPU allows, set by the renderer
         std::atomic<int> crowd{0};          // [game] crowd, a CrowdMode
         std::atomic<int> framerate{60};     // [display] framerate: vblanks a second, 60 as on PS2
+        std::atomic<bool> noFail{false};    // not saved, off at launch; GHPC_NO_FAIL=1 for scripted runs
     };
 
     // How full the venue crowd is. The game scales it by excitement through
