@@ -485,6 +485,7 @@ add_library(ps2_runtime STATIC
     src/lib/vk/vk_capture.cpp
     src/lib/ghpc_overlay.cpp
     src/lib/ghpc_config.cpp
+    src/lib/ghpc_debug_keyboard.cpp
     src/lib/ghpc_input.cpp
     src/lib/ghpc_host_input.cpp
     src/lib/gs/ghpc_fixture.cpp

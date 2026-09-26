@@ -14,6 +14,7 @@
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
 #include "ghpc_config.h"
+#include "ghpc_debug_keyboard.h"
 #include "ghpc_host_renderer.h"
 #include "ghpc_scene.h"
 #include "runtime/ghpc_state.h"
@@ -2660,6 +2661,18 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                 v = 1.0f;
         }
         std::fprintf(stderr, "[ghpc/crowd] set_fullness %.2f -> %.2f\n", (double)asked, (double)ctx->f[12]);
+    }
+
+    // The debug keyboard, ghpc_debug_keyboard.h. KeyboardPoll (0x2f4518)
+    // becomes ProcessRead(true) while a host key is queued.
+    if (isCall && targetPc == 0x002F4518u)
+    {
+        uint32_t a0 = 0u;
+        if (ghpc::debugKeyServe(rdram, targetPc, a0))
+        {
+            SET_GPR_U32(ctx, 4, a0);
+            ctx->pc = targetPc;
+        }
     }
 
     // Every inter-function transfer is also a deterministic EE safe point.

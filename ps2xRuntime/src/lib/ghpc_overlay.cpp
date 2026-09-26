@@ -2,6 +2,7 @@
 
 #include "ghpc_overlay.h"
 #include "ghpc_config.h"
+#include "ghpc_debug_keyboard.h"
 
 #include <algorithm>
 #include <atomic>
@@ -40,6 +41,7 @@ namespace ghpc
             kFramerate,
             kCrowd,
             kUnlockAll,
+            kAutoplay,
             kQuit,
             kRows,
         };
@@ -288,6 +290,9 @@ namespace ghpc
             l.unlockAll = !l.unlockAll;
             saveSetting("cheats", "unlock_all", l.unlockAll ? "1" : "0");
             break;
+        case kAutoplay:
+            setAutoplay(!autoplay());
+            break;
         case kQuit:
             if (dir == 0)
                 action = Action::Quit;
@@ -384,6 +389,7 @@ namespace ghpc
             {"Frame rate", l.framerate <= 60 ? std::string("60 (PS2)") : std::to_string(l.framerate.load())},
             {"Crowd", kCrowdNames[l.crowd.load()]},
             {"Unlock all songs", onOff(l.unlockAll)},
+            {"Autoplay", onOff(autoplay())},
             {"Quit game", ""},
         };
 
