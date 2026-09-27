@@ -2680,6 +2680,38 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
         return true;
     }
 
+    // Camera shake at 60 steps a second whatever the frame rate. CamShot::
+    // Shake (0x2a4ce8) is a fixed-step spring (velocity += offset * 0.02,
+    // velocity *= 0.9) kicked when RandomFloat() < noise_freq, all once per
+    // call, so at 120 Hz it wobbled twice as fast. Above 60 Hz a call only
+    // steps when a 60 Hz tick has passed for that shot; otherwise it hands
+    // back the offsets it holds at +0xa0 (position, out to $a2) and +0xb0
+    // (rotation, out to $a3), which is how the function itself returns them.
+    // GHPC_SHAKE_STEP=0 is the control.
+    if (isCall && targetPc == 0x002A4CE8u)
+    {
+        static const bool s_step = []() {
+            const char *e = std::getenv("GHPC_SHAKE_STEP");
+            return !(e && e[0] == '0');
+        }();
+        const int hz = ghpc::live().framerate.load(std::memory_order_relaxed);
+        if (s_step && hz > 60)
+        {
+            static std::unordered_map<uint32_t, uint64_t> s_lastTick;
+            const uint64_t tick = m_memory.gs().vsyncTick.load(std::memory_order_relaxed) * 60u / (uint64_t)hz;
+            const uint32_t shot = getRegU32(ctx, 4) & 0x01FFFFFFu;
+            auto it = s_lastTick.find(shot);
+            if (it != s_lastTick.end() && it->second == tick)
+            {
+                std::memcpy(rdram + (getRegU32(ctx, 6) & 0x01FFFFFFu), rdram + shot + 0xA0u, 16);
+                std::memcpy(rdram + (getRegU32(ctx, 7) & 0x01FFFFFFu), rdram + shot + 0xB0u, 16);
+                ctx->pc = fallthroughPc;
+                return true;
+            }
+            s_lastTick[shot] = tick;
+        }
+    }
+
     // The debug keyboard, ghpc_debug_keyboard.h. KeyboardPoll (0x2f4518)
     // becomes ProcessRead(true) while a host key is queued.
     if (isCall && targetPc == 0x002F4518u)
