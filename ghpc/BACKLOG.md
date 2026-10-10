@@ -8,15 +8,99 @@ once by being appended to until a stale "M4 in progress" header sat on top of
 
 No status claim here that a command cannot check. Where one can, cite it.
 
-## Ordering principle
+## Roadmap, set 2026-09-24
 
-Two tracks, worked in parallel, because neither blocks the other and both gate
-playability:
+Noah's aim: one GH2-based build that plays everything GH1, GH2 and 80s do,
+booted from a disc a player owns, with every option offered twice: authentic
+(as close to the PS2 as possible, bugs and all) and modern (fixed, improved).
+A "PS2 mode" preset flips every option to authentic at once.
 
-    rendering   Vulkan at the Rnd seam   speed
-    audio       SPU upload, then output  note timing
+In order, each stage unblocking the next:
 
-Rendering is sequenced in `NEXT.md` as R0 to R3. Audio is A1.
+1. **Stop the crashes and make testing cheap.** The stack exhaustion (bug 1)
+   is fixed. Autoplay is an Esc menu row (7024e37): from `venue_big_native`
+   the control fails at ~40s, the autoplay arm plays on, and turning it on
+   from the main menu carries into the song. `GHPC_DEBUG_KEYS=game_screen=p`
+   does the same for scripted runs. No fail is an Esc menu row too (5dff7ab),
+   skipping the one `Performer::LoseGame` call in `UpdateCrowdMeter`;
+   `GHPC_NO_FAIL=1` for scripted runs, and `[ghpc/nofail]` logs the first
+   loss it holds off. Stage 1 is done.
+2. **A host-to-game command bridge.** One way to run a DTA expression, or
+   call a handler, from the runtime. It unlocks most of what follows without
+   an address per feature: autoplay (`toggle_auto_play`, bound to `p` on the
+   debug keyboard in `config/gen/cheats.dtb`, drives `PlayerMatcher` and
+   `BeatMatcher::SetAutoplay`), the cheats menu (`long_cheats.dtb`), the sync
+   offset (`options set_sync_offset`, `ui/gen/options.dtb:845-870`), and any
+   screen of our own. Half of it exists since 7024e37:
+   `ghpc::debugKeyPush` types into the game's debug keyboard, so every
+   binding in `cheats.dtb`'s keyboard table is one call from the Esc menu.
+   Arbitrary DTA is still missing.
+3. **Native picture correctness.** Bugs 3 to 5 below, then `DrawRect`
+   (Now 1c), then the rest of Now.
+4. **Sync.** An overlay row setting the offset in ms directly, negative
+   allowed, no calibrator required. Which sign moves what is unchecked. Then
+   proper screens; read how GH2DX builds its menus first.
+5. **Retail GH2 as the target** (Deferred has the coupling survey). Start from
+   `../ghrecomp`'s retail symbol map and `symbolize.py`. Then 80s retail,
+   whose code matches GH2 retail with addresses masked.
+6. **Content from GH1 and 80s** as data in GH2's packaging: menus, venues,
+   characters, songs, guitars (`notes/content-platform.md`). GH1's note
+   engine selectable, for feature completeness; list how its rules differ
+   (hit window, HOPOs, star power, sustains) before choosing how.
+7. **Visual upgrades, all modern-only:** full 3D crowd, crowd variety,
+   frame interpolation, sharper impostor cards, 360 assets.
+8. **Input and platforms:** HID guitar and calibration, measured latency,
+   Linux and Windows builds.
+
+## Open bugs, 2026-09-24
+
+Numbered for reference. Each says what is measured and what is not.
+
+1. **EE invocation stack space exhausted: fixed, 56eadd9.** Two paths
+   took a 16 KB stack per level out of a 64-stack pool: queued interrupts
+   nesting on one still running (a vblank burst after any stall, e.g. a
+   state save), and `invokeCurrentSequence` giving every synth reply in a
+   batch its own depth (up to 256). A loaded state also let the pool hand
+   out restored stacks again. One binary, `GHPC_INVOC_NEST=1` the control:
+   120 Hz boot with audio, 53 and 41 stacks against 1 and 1; a save from
+   `venue_big_native`, control dies at depth 63, fix holds 40s at 120 and 60.
+   `[ghpc/stack]` logs every reservation with what it nested on.
+2. **Partial frames under load.** `scene::vblank` publishes whatever is
+   drawn once the guest skips EndDrawing for 8 vblanks, which a burst of
+   late vblanks crosses mid-frame: 23 partial frames in 45s at 120 Hz, 16x,
+   arena, all cores loaded. A 250 ms wall-clock gap removed all of them
+   under the same load. Reverted while chasing bug 1, which it did not
+   cause. Not yet shown to be the black flicker Noah saw while paused.
+3. **Highway covered by venue or crowd geometry**, hiding notes. Seen by
+   Noah, not reproduced. The `ClearZBuffer` lead is dead: a census at the
+   dispatch seam counted 0 calls in gameplay in all eight venue states.
+   Sixteen shots across the eight venues show the highway over everything,
+   a guitar neck correctly behind its edge in `big`. Needs the camera cut or
+   venue it happened in.
+4. **Star power breaks note drawing** after bug 3 appeared: no fill
+   textures and no sustains while SP is active. Seen by Noah, not
+   reproduced. `GHPC_DEBUG_KEYS=game_screen=pS` plus
+   `GHPC_PAD_DRIVE=game_screen=select` puts `venue_big_native` into star
+   power by beat 14 (pale blue gems, lightning). Not yet compared against
+   the software path: the emulated path reaches only beat 7 in 8 minutes.
+5. **Some systems run double speed at 120 Hz.** Camera wobble fixed
+   (e59f819): `CamShot::Shake` is a fixed-step spring with a per-call
+   random kick, now stepped at 60 Hz per shot and held between. Steps a
+   second from `venue_big_native`: 60.0 at 60 Hz, 119.9 at 120 with
+   `GHPC_SHAKE_STEP=0`, 60.1 with the fix. Held frames repeat the offset,
+   so shake moves at 60 Hz inside a 120 Hz picture. Other systems unnamed;
+   the next one needs Noah to say what else looked fast. Candidates are the
+   23 `RandomFloat` callers. `GuitarCharacter::Poll` rolls a per-poll
+   chance of a new idle `clip_group` (0x10b998, p in `$f20`) and would
+   double too, but it never rolled once in 45s of gameplay from
+   `venue_big_native`, so it is not what showed during a song.
+6. **16x AA in arena presented 29 fps** in one hidden run while the host
+   was loaded; 95-118 in others. GPU cost of the 2x2 supersample, unmeasured.
+7. **Crowd cards low-res, some missing necks.** NEXT.md step 3.
+8. **Faces blurry and dark.** NEXT.md step 4.
+9. **4:3 and 16:9 flipped five times on `endgame_screen`.** NEXT.md step 5.
+10. **crowd = fixed unverified.** No run reached Great, so no 0.70 was seen;
+    `[ghpc/crowd]` logs every call.
 
 ## Now
 

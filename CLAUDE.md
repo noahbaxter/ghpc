@@ -17,6 +17,19 @@ port stands is repeated here, because a second copy drifts: this file claimed
     ghpc/notes/decisions.md settled choices, so they are not re-litigated
     ghpc/notes/             topic notes, which supersede both on their subject
 
+## Sibling repos
+
+Three repos in `../` attack the same game. Know which one you are in.
+
+    ghpc/         this one. The first port, built fast with heavy machine
+                  help and little review. Proves what works; not the code to keep
+    ghrecomp/     the rebuild on PS2Recomp, cleaner, redoing what ghpc
+                  learned without its sprawl
+    gh2-decomp/   the decompilation, byte-matched C++. The interface contract
+                  for both recomps
+
+Findings here are worth carrying to `ghrecomp`; the code mostly is not.
+
 ## Target
 
 One native GH1+2+80s build with mod support and HID guitar controller input.
