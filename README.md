@@ -1,5 +1,11 @@
 # ghpc
 
+> [!IMPORTANT]
+> **Archived, not the project.** This was a vibe-coded test prototype, built out
+> of curiosity with next to no review, to learn what a port would take. What it
+> taught went into rebuilding everything from scratch, properly, as
+> **[GH Classic](https://github.com/noahbaxter/GHClassic)**.
+
 Native PC port of Guitar Hero 1, 2, and Rocks the 80s, by static recompilation
 of the PS2 binaries, with machine-translated output progressively replaced by
 source.
